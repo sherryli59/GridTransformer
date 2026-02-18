@@ -1,0 +1,446 @@
+"""PyTorch Lightning modules for binary pixels and VQ latent transformers."""
+
+from __future__ import annotations
+
+from typing import Any, Dict, Optional
+
+import torch
+import torch.nn.functional as F
+from torch.utils.data import DataLoader
+
+import pytorch_lightning as pl
+
+from ..data.lj_dataset import LJPixelsDataset
+from ..data.cifar_vq_dataset import CIFARVQLatentDataset
+from ..data.lj_cell_dataset import LJCellDataset
+from ..models.swin_pbc import BinarySwinPBC
+import numpy as np
+import math
+
+def bce_on_mask(logits: torch.Tensor, target: torch.Tensor, mask: torch.Tensor, pos_weight: float = 10.0) -> torch.Tensor:
+    """Binary cross entropy computed only over masked spatial locations."""
+    mask_bool = mask > 0.5
+    if mask_bool.sum() == 0:
+        return torch.tensor(0.0, device=logits.device, requires_grad=True)
+    logits_m = logits[mask_bool.expand_as(logits)]
+    target_m = target[mask_bool.expand_as(target)]
+    weight = torch.tensor(pos_weight, device=logits.device)
+    return F.binary_cross_entropy_with_logits(logits_m, target_m, pos_weight=weight)
+
+
+def mse_on_mask(pred: torch.Tensor, target: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    """Mean squared error restricted to masked spatial locations."""
+    mask_bool = mask > 0.5
+    if mask_bool.sum() == 0:
+        return torch.tensor(0.0, device=pred.device, requires_grad=True)
+    mask_bool = mask_bool.expand(-1, pred.size(1), -1, -1)
+    pred_sel = torch.masked_select(pred, mask_bool)
+    target_sel = torch.masked_select(target, mask_bool)
+    return F.mse_loss(pred_sel, target_sel)
+
+
+def ce_on_mask(logits: torch.Tensor, target_idx: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    """Cross-entropy over masked positions for categorical logits."""
+    if target_idx.dtype != torch.long:
+        target_idx = target_idx.long()
+    mask_bool = mask.squeeze(1) > 0.5
+    if mask_bool.sum() == 0:
+        return torch.tensor(0.0, device=logits.device, requires_grad=True)
+    logits_flat = logits.permute(0, 2, 3, 1).reshape(-1, logits.size(1))
+    target_flat = target_idx.reshape(-1)
+    mask_flat = mask_bool.reshape(-1)
+    logits_sel = logits_flat[mask_flat]
+    target_sel = target_flat[mask_flat]
+    return F.cross_entropy(logits_sel, target_sel)
+
+
+
+class VQLatentTransformerModule(pl.LightningModule):
+    def __init__(self, model_kwargs: Optional[Dict[str, Any]] = None,
+        lr: float = 2e-4,
+        weight_decay: float = 0.01,
+        mask_pos_weight: float = 10.0,
+        output_type: str = "binary",
+        latent_shape: Optional[Any] = None,
+        latent_downsample: float = 1.0,
+        cheat_linear: bool = False):
+        super().__init__()
+        self.save_hyperparameters(logger=True)
+        self.mask_pos_weight = mask_pos_weight
+        self.lr = lr
+        self.weight_decay = weight_decay
+        self.output_type = output_type
+        self.latent_downsample = latent_downsample
+        self.latent_shape = latent_shape
+        # unpack shapes
+        assert latent_shape is not None, "Need latent_shape (D,Hc,Wc)"
+        D, Hc, Wc = latent_shape
+        self.D, self.Hc, self.Wc = D, Hc, Wc
+        self.K = model_kwargs["out_ch"]  # codebook size
+        self.token_emb = torch.nn.Embedding(self.K + 1, self.D)
+        self.mask_token = torch.nn.Parameter(torch.zeros(self.D))  # learned [D]
+        self.logit_scale = torch.nn.Parameter(torch.tensor(10.0))   # optional sharpening for logits
+        self.cheat_linear = cheat_linear
+        model_kwargs = model_kwargs or {}
+        model_kwargs["in_ch"] = self.D
+        if not self.cheat_linear:
+            # your normal backbone
+            self.model = BinarySwinPBC(**model_kwargs)
+        else:
+              # ---- Token-ID path (cheat version) ----
+            # light 1x1 projection + tiny context mixer
+            self.input_proj = torch.nn.Conv2d(self.D, self.D, kernel_size=1)
+
+            def conv3x3(cin, cout, dilation=1):
+                pad = dilation
+                return torch.nn.Conv2d(cin, cout, kernel_size=3, padding=pad, dilation=dilation)
+
+            self.context = torch.nn.Sequential(
+                conv3x3(self.D, self.D, dilation=1), torch.nn.GELU(),
+                conv3x3(self.D, self.D, dilation=2), torch.nn.GELU(),
+                conv3x3(self.D, self.D, dilation=3), torch.nn.GELU(),
+            )
+
+            self.cheat_head  = torch.nn.Conv2d(self.D, self.K, kernel_size=1, bias=True)
+            self.logit_scale = torch.nn.Parameter(torch.tensor(5.0))
+        self.register_buffer("E_weight", torch.empty(0), persistent=False)  # placeholder
+
+    def on_fit_start(self) -> None:
+        dm = self.trainer.datamodule
+        E = getattr(dm, "codebook_weight", None)
+        if E is None:
+            raise RuntimeError("DataModule has no codebook_weight")
+        # move to module device and save as buffer
+        self.E_weight = E.to(self.device)  # [K, D]
+        # (optional safety) check head size matches K
+        if hasattr(self, "num_classes"):
+            assert self.num_classes == self.E_weight.shape[0], "K mismatch vs head"
+
+    def forward(self, input_idx: torch.Tensor):
+        # input_idx: [B, Hc, Wc], Long in [0..K] (K = [MASK])
+        B, H, W = input_idx.shape
+        assert H == self.Hc and W == self.Wc, f"got {(H,W)}, expected {(self.Hc,self.Wc)}"
+
+        # (1) embed tokens
+        x = self.token_emb(input_idx)    # [B,H,W,D]
+        x = x.permute(0,3,1,2).contiguous()  # [B,D,H,W]
+
+        # (2) pass through model
+        if self.cheat_linear:
+            # 1×1 conv only
+            h = self.input_proj(x)          # [B,D,H,W]
+            h = self.context(h) + h         # residual context
+            logits = self.logit_scale * self.cheat_head(h)   # [B,K,H,W]
+            return logits
+
+        else:
+            # normal Swin backbone
+            x_cat = x                        # [B,D,H,W]
+            logits = self.model(x_cat)       # [B,K,H,W]
+            return logits
+
+
+    def training_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
+        preds = self.forward(batch["input_idx"])
+        if self.output_type == "binary":
+            loss = bce_on_mask(preds, batch["target_idx"], batch["mask"], pos_weight=self.mask_pos_weight)
+        elif self.output_type == "latent":
+            loss = mse_on_mask(preds, batch["target_idx"], batch["mask"])
+        elif self.output_type == "latent_logits":
+            loss = ce_on_mask(preds, batch["target_idx"], batch["mask"])
+        else:
+            raise ValueError(f"Unknown output_type '{self.output_type}'")
+        self.log(
+            "train/loss",
+            loss,
+            prog_bar=True,
+            on_step=True,
+            on_epoch=True,
+            batch_size=batch["input_idx"].size(0),
+        )
+        with torch.no_grad():
+            # Shapes and basics
+            K = preds.size(1)
+            B, H, W = batch["target_idx"].shape
+            mask_bool = (batch["mask"] > 0.5).squeeze(1)            # [B,H,W] boolean
+            self.log("train/debug_K", float(K), on_step=True)
+            self.log("train/debug_mask_frac", mask_bool.float().mean(), on_step=True)
+
+            # Visible sites sanity (for IDs pipeline, visible input == target)
+            vis_bool = ~mask_bool                                   # [B,H,W]
+            vis_eq = (batch["input_idx"][vis_bool] == batch["target_idx"][vis_bool])
+            if vis_eq.numel() > 0:
+                self.log("train/debug_visible_match_rate", vis_eq.float().mean(), on_step=True)
+
+            # Neighborhood visibility around masked positions (3x3)
+            vis_float = vis_bool.float().unsqueeze(1)               # [B,1,H,W]
+            vis_neighbors = F.avg_pool2d(vis_float, kernel_size=3, stride=1, padding=1) * 9.0  # [B,1,H,W]
+            if mask_bool.any():
+                self.log("train/debug_mean_vis_neighbors_masked",
+                        vis_neighbors.squeeze(1)[mask_bool].mean(), on_step=True)
+
+            # Softmax on logits
+            prob = F.softmax(preds, dim=1)                          # [B,K,H,W]
+
+            # Gather masked positions
+            if mask_bool.any():
+                # entropy over masked
+                masked_prob = prob.permute(0,2,3,1)[mask_bool]      # [Nm, K]
+                eps = 1e-12
+                ent = -(masked_prob * (masked_prob.clamp_min(eps)).log()).sum(dim=1)  # [Nm]
+                ent_norm = ent / math.log(K)
+                self.log("train/debug_mask_entropy", ent.mean(), on_step=True)
+                self.log("train/debug_mask_entropy_norm", ent_norm.mean(), on_step=True)
+
+                # confidence and accuracy over masked
+                top1p = masked_prob.max(dim=1).values.mean()
+                pred_idx = masked_prob.argmax(dim=1)                # [Nm]
+                target_masked = batch["target_idx"][mask_bool]      # [Nm]
+                acc_masked = (pred_idx == target_masked).float().mean()
+
+                self.log("train/debug_mask_top1p", top1p, on_step=True)
+                self.log("train/debug_mask_acc", acc_masked, on_step=True)
+
+            # Also log shapes (as scalars to avoid TB text clutter)
+            self.log("train/debug_Hc", float(H), on_step=True)
+            self.log("train/debug_Wc", float(W), on_step=True)
+            self.log("train/debug_batch", float(B), on_step=True)
+
+        if batch_idx == 0:
+            n_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
+            self.log("train/debug_n_params", float(n_params), on_step=True)
+        return loss
+
+    def on_after_backward(self):
+        hot = []
+        for name, p in self.named_parameters():
+            if p.grad is not None and p.requires_grad:
+                g = p.grad.detach().norm().item()
+                hot.append((g, name))
+        hot.sort(reverse=True)
+        for g, name in hot[:8]:
+            self.log(f"grad_top/{name}", g, on_step=True)
+        self.log("train/debug_grad_norm", sum(g for g,_ in hot), on_step=True)
+
+    def configure_optimizers(self) -> torch.optim.Optimizer:
+        return torch.optim.AdamW(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
+
+
+class LJPixelsDataModule(pl.LightningDataModule):
+    """LightningDataModule that provides training batches for the LJ pixel dataset."""
+
+    def __init__(
+        self,
+        data_dir: str,
+        batch_size: int = 8,
+        pixel_size: float = 0.25,
+        mask_ratio: float = 0.6,
+        mask_ratio_max: Optional[float] = None,
+        seed: int = 0,
+        num_workers: int = 0,
+        pin_memory: bool = True,
+    ) -> None:
+        super().__init__()
+        self.data_dir = data_dir
+        self.batch_size = batch_size
+        self.pixel_size = pixel_size
+        self.mask_ratio = mask_ratio
+        self.mask_ratio_max = mask_ratio_max
+        self.seed = seed
+        self.num_workers = num_workers
+        self.pin_memory = pin_memory
+        self._train_ds: Optional[LJPixelsDataset] = None
+
+    def setup(self, stage: Optional[str] = None) -> None:
+        if stage in (None, "fit") and self._train_ds is None:
+            mask_ratio = self.mask_ratio
+            if self.mask_ratio_max is not None:
+                mask_ratio = (self.mask_ratio, self.mask_ratio_max)
+            self._train_ds = LJPixelsDataset(
+                self.data_dir,
+                pixel_size=self.pixel_size,
+                mask_ratio=mask_ratio,
+                seed=self.seed,
+            )
+
+    def train_dataloader(self) -> DataLoader:
+        if self._train_ds is None:
+            self.setup("fit")
+        assert self._train_ds is not None
+        return DataLoader(
+            self._train_ds,
+            batch_size=self.batch_size,
+            shuffle=True,
+            num_workers=self.num_workers,
+            pin_memory=self.pin_memory,
+        )
+
+
+class LJCellDataModule(pl.LightningDataModule):
+    """LightningDataModule for canonical Hilbert-sorted LJ cell-token sequences."""
+
+    def __init__(
+        self,
+        data_path: str = "/mnt/ssd/mcmc/lj_N16_T1.h5",
+        resolution: int = 64,
+        batch_size: int = 128,
+        seed: int = 0,
+        num_workers: int = 0,
+        pin_memory: bool = True,
+        train_limit: Optional[int] = None,
+    ) -> None:
+        super().__init__()
+        _ = seed  # reserved for future stochastic augmentation
+        self.data_path = data_path
+        self.resolution = int(resolution)
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+        self.pin_memory = pin_memory
+        self.train_limit = train_limit
+        self._train_ds: Optional[LJCellDataset] = None
+
+    def setup(self, stage: Optional[str] = None) -> None:
+        if stage in (None, "fit") and self._train_ds is None:
+            self._train_ds = LJCellDataset(
+                h5_path=self.data_path,
+                resolution=self.resolution,
+                limit=self.train_limit,
+            )
+
+    @property
+    def vocab_size(self) -> Optional[int]:
+        if self._train_ds is None:
+            return None
+        return self._train_ds.vocab_size
+
+    @property
+    def grid_size(self) -> Optional[int]:
+        if self._train_ds is None:
+            return None
+        return self._train_ds.resolution
+
+    @property
+    def sequence_length(self) -> Optional[int]:
+        if self._train_ds is None:
+            return None
+        return self._train_ds.num_particles
+
+    @property
+    def sos_id(self) -> Optional[int]:
+        if self._train_ds is None:
+            return None
+        return self._train_ds.sos_id
+
+    def train_dataloader(self) -> DataLoader:
+        if self._train_ds is None:
+            self.setup("fit")
+        assert self._train_ds is not None
+        return DataLoader(
+            self._train_ds,
+            batch_size=self.batch_size,
+            shuffle=True,
+            num_workers=self.num_workers,
+            pin_memory=self.pin_memory,
+        )
+
+
+class CIFARVQDataModule(pl.LightningDataModule):
+    """Lightning DataModule that serves VQ-tokenised CIFAR-10 batches."""
+
+    def __init__(
+        self,
+        data_root: str,
+        vq_model: str,
+        batch_size: int = 128,
+        mask_ratio: float = 0.9,
+        mask_ratio_max: Optional[float] = None,
+        seed: int = 0,
+        num_workers: int = 4,
+        pin_memory: bool = True,
+        train_limit: Optional[int] = None,
+        vq_subfolder: Optional[str] = None,
+        vq_dtype: Optional[str] = None,
+        vq_device: str = "cpu",
+        cache_latents: bool = False,
+        tmp_dir: Optional[str] = None,
+        use_hilbert: bool = True,
+    ) -> None:
+        super().__init__()
+        self.data_root = data_root
+        self.batch_size = batch_size
+        self.mask_ratio = mask_ratio
+        self.mask_ratio_max = mask_ratio_max
+        self.seed = seed
+        self.num_workers = num_workers
+        self.pin_memory = pin_memory
+        self.train_limit = train_limit
+        self.vq_model = vq_model
+        self.vq_subfolder = vq_subfolder
+        self.vq_dtype = vq_dtype
+        self.vq_device = vq_device
+        self.cache_latents = cache_latents
+        self.tmp_dir = tmp_dir
+        self.use_hilbert = use_hilbert
+        self._train_ds: Optional[CIFARVQLatentDataset] = None
+
+    def setup(self, stage: Optional[str] = None) -> None:
+        if stage in (None, "fit") and self._train_ds is None:
+            self._train_ds = CIFARVQLatentDataset(
+                data_root=self.data_root,
+                vq_model=self.vq_model,
+                train=True,
+                limit=self.train_limit,
+                mask_ratio=self.mask_ratio,
+                mask_ratio_max=self.mask_ratio_max,
+                seed=self.seed,
+                vq_subfolder=self.vq_subfolder,
+                vq_dtype=self.vq_dtype,
+                vq_device=self.vq_device,
+                cache_latents=self.cache_latents,
+                tmp_dir=self.tmp_dir,
+                use_hilbert=self.use_hilbert,
+            )
+
+    @property
+    def codebook_weight(self) -> Optional[torch.Tensor]:
+        if self._train_ds is None:
+            return None
+        return self._train_ds._codebook_weight  # [K, D] on CPU
+    
+    @property
+    def latent_shape(self) -> Optional[tuple[int, int, int]]:
+        if self._train_ds is None:
+            return None
+        return self._train_ds.latent_shape
+
+    @property
+    def input_channels(self) -> Optional[int]:
+        if self._train_ds is None:
+            return None
+        return self._train_ds.input_channels
+
+    @property
+    def latent_downsample(self) -> Optional[float]:
+        if self._train_ds is None:
+            return None
+        return self._train_ds.latent_downsample
+
+    @property
+    def codebook_size(self) -> Optional[int]:
+        if self._train_ds is None:
+            return None
+        return self._train_ds.codebook_size
+
+    def train_dataloader(self) -> DataLoader:
+        if self._train_ds is None:
+            self.setup("fit")
+        assert self._train_ds is not None
+        num_workers = 0 if str(self.vq_device).startswith("cuda") else self.num_workers
+        return DataLoader(
+            self._train_ds,
+            batch_size=self.batch_size,
+            shuffle=True,
+            num_workers=num_workers,
+            pin_memory=True,
+            persistent_workers=False,   # has no effect when num_workers=0
+        )

@@ -1,4 +1,5 @@
 import argparse
+import glob
 import os
 from typing import Optional
 
@@ -11,8 +12,13 @@ from grid_transformer.training.lightning_module import (
     VQLatentTransformerModule,
     CIFARVQDataModule,
     LJCellDataModule,
+    LJAbsoluteDataModule,
+    LJTransferableDataModule,
 )
-from grid_transformer.training.ar import GraphormerAR
+from grid_transformer.models.ar_registry import AR_ARCH_CHOICES, resolve_ar_arch
+from grid_transformer.models.transformer import GraphormerAR as GraphormerARStd
+from grid_transformer.models.transformer_ida import GraphormerAR as GraphormerARIDA
+from grid_transformer.models.vanilla_transformer import VanillaTransformerAR
 
 
 def parse_args() -> argparse.Namespace:
@@ -20,13 +26,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data_dir", type=str, required=True, help="Training data root directory/archive or LJ HDF5 file path.")
     parser.add_argument(
         "--dataset",
-        choices=("lj", "cifar_vq", "lj_cell"),
+        choices=("lj", "cifar_vq", "lj_cell", "lj_transferable", "lj_abs"),
         default="cifar_vq",
-        help="Dataset loader to use (lj=NPZ coords, cifar_vq=VQ-tokenised CIFAR-10, lj_cell=Hilbert-cell LJ tokens).",
+        help=(
+            "Dataset loader to use "
+            "(lj=NPZ coords, cifar_vq=VQ-tokenised CIFAR-10, "
+            "lj_cell=Hilbert-cell LJ tokens, lj_transferable=ordered local relative LJ tokens, "
+            "lj_abs=absolute x/y coordinate bins per particle)."
+        ),
     )
     parser.add_argument("--epochs", type=int, default=10, help="Number of training epochs.")
-    parser.add_argument("--batch_size", type=int, default=64, help="Batch size for training.")
-    parser.add_argument("--lr", type=float, default=2e-4, help="Learning rate for AdamW.")
+    parser.add_argument("--batch_size", type=int, default=512, help="Batch size for training.")
+    parser.add_argument("--lr", type=float, default=5e-4, help="Learning rate for AdamW.")
     parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay for AdamW.")
     parser.add_argument("--grad_clip", type=float, default=1.0, help="Gradient clipping value.")
     parser.add_argument("--pixel_size", type=float, default=0.05, help="Pixel size for rasterization.")
@@ -70,6 +81,76 @@ def parse_args() -> argparse.Namespace:
         help="Grid side length G for lj_cell tokenization (vocabulary size is G^2).",
     )
     parser.add_argument(
+        "--lj_transfer_periodic",
+        dest="lj_transfer_periodic",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Use periodic geometry for lj_transferable. Disable for COM-centered nonperiodic data.",
+    )
+    parser.add_argument(
+        "--lj_transfer_hilbert_resolution",
+        type=int,
+        default=128,
+        help="Hilbert sorting resolution for lj_transferable (used when --lj_transfer_ordering=hilbert).",
+    )
+    parser.add_argument(
+        "--lj_transfer_ordering",
+        type=str,
+        choices=("hilbert", "spectral"),
+        default="hilbert",
+        help="Particle ordering used before relative-delta tokenization.",
+    )
+    parser.add_argument(
+        "--lj_transfer_spectral_sigma",
+        type=float,
+        default=1.0,
+        help="RBF width used by spectral ordering (used when --lj_transfer_ordering=spectral).",
+    )
+    parser.add_argument(
+        "--lj_transfer_window",
+        type=float,
+        default=3.0,
+        help="Local displacement window W for lj_transferable tokenization in physical units.",
+    )
+    parser.add_argument(
+        "--lj_transfer_bins",
+        type=int,
+        default=64,
+        help="Number of bins per axis for lj_transferable displacement tokenization.",
+    )
+    parser.add_argument(
+        "--lj_transfer_no_long_jump",
+        action="store_true",
+        help="Disable dedicated long-jump token and clamp out-of-window displacements instead.",
+    )
+    parser.add_argument(
+        "--lj_transfer_disable_random_shift",
+        action="store_true",
+        help="Disable random global shift augmentation for transferable LJ tokenization.",
+    )
+    parser.add_argument(
+        "--lj_transfer_use_data_aug",
+        action="store_true",
+        help="Apply random right-angle rotations during on-the-fly lj_transferable training.",
+    )
+    parser.add_argument(
+        "--lj_transfer_preprocessed_path",
+        type=str,
+        default=None,
+        help="Optional path to a preprocessed lj_transferable .pt cache file.",
+    )
+    parser.add_argument(
+        "--lj_abs_bins",
+        type=int,
+        default=512,
+        help="Number of absolute coordinate bins per axis for dataset=lj_abs.",
+    )
+    parser.add_argument(
+        "--lj_abs_disable_random_shift",
+        action="store_true",
+        help="Disable random global torus shift augmentation for dataset=lj_abs.",
+    )
+    parser.add_argument(
         "--vq_model",
         type=str,
         default=None,
@@ -89,8 +170,93 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ar_torus", action="store_true", help="Enable torus-aware minimum-image edge bias in AR attention.")
     parser.add_argument("--ar_no_edge_bias", action="store_true", help="Disable geometry-driven edge bias in AR attention.")
     parser.add_argument("--ar_no_dir_bias", action="store_true", help="Disable directional component in AR edge bias.")
+    parser.add_argument(
+        "--ar_arch",
+        type=str,
+        choices=AR_ARCH_CHOICES,
+        default="auto",
+        help=(
+            "AR architecture selector: "
+            "ida=transformer_ida.py, standard=transformer.py, vanilla=notebook-style transformer. "
+            "When left as auto, legacy --use_ida decides between ida/standard."
+        ),
+    )
+    parser.add_argument(
+        "--ar_use_ida_pre",
+        dest="ar_use_ida_pre",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Enable optional IDA pre-layer for transformer.py AR model (ignored when --use_ida is enabled).",
+    )
+    parser.add_argument(
+        "--ar_ida_spatial_dim",
+        type=int,
+        default=2,
+        help="Spatial dimension for transformer.py IDA pre-layer (typically 2 for LJ).",
+    )
     parser.add_argument("--ar_dist_bins", type=int, default=32, help="Number of distance bins used by AR edge bias.")
+    parser.add_argument(
+        "--ar_max_dist",
+        type=float,
+        default=20.0,
+        help="Distance saturation point for logarithmic edge-bias bucketing.",
+    )
+    parser.add_argument(
+        "--use_rbf_bias",
+        dest="use_rbf_bias",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Use continuous RBF edge bias in transformer.py instead of discrete distance bins.",
+    )
+    parser.add_argument(
+        "--use_deep_ida",
+        dest="use_deep_ida",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Use deep non-monotonic continuous distance bias in transformer.py.",
+    )
+    parser.add_argument(
+        "--ar_disable_pos_emb",
+        action="store_true",
+        help="Deprecated alias; prefer default (no positional embeddings).",
+    )
+    parser.add_argument(
+        "--ar_use_pos_emb",
+        action="store_true",
+        help="Enable absolute sequence-position embeddings (disabled by default).",
+    )
+    parser.add_argument(
+        "--ar_use_rope",
+        action="store_true",
+        help="Deprecated; RoPE is disabled for this transferable setup.",
+    )
+    parser.add_argument(
+        "--ar_rope_max_period",
+        type=float,
+        default=10000.0,
+        help="RoPE base period parameter (larger means slower rotation with position).",
+    )
     parser.add_argument("--ar_dropout", type=float, default=0.1, help="Dropout used by the AR transformer.")
+    parser.add_argument(
+        "--ar_permute_train",
+        dest="ar_permute_train",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="For --ar_arch vanilla: randomly permute token groups after SOS during training only.",
+    )
+    parser.add_argument(
+        "--ar_permute_group_size",
+        type=int,
+        default=1,
+        help="For --ar_arch vanilla: number of consecutive tokens kept together when permuting.",
+    )
+    parser.add_argument(
+        "--use_ida",
+        dest="use_ida",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Use IDA AR model from transformer_ida.py (default: True). Disable to use transformer.py.",
+    )
     parser.add_argument(
         "--matmul_precision",
         type=str,
@@ -153,6 +319,65 @@ def build_data_module(args: argparse.Namespace):
             "vocab_size": int(vocab_size),
             "grid_size": int(grid_size),
         }
+    elif dataset == "lj_transferable":
+        data_path = args.data_dir
+        if os.path.isdir(data_path):
+            h5_files = sorted(glob.glob(os.path.join(data_path, "*.h5")))
+            if not h5_files:
+                raise FileNotFoundError(f"No .h5 files found in directory: {data_path}")
+            data_path = h5_files
+        data_module = LJTransferableDataModule(
+            data_path=data_path,
+            periodic=bool(args.lj_transfer_periodic),
+            hilbert_resolution=args.lj_transfer_hilbert_resolution,
+            ordering=args.lj_transfer_ordering,
+            spectral_sigma=args.lj_transfer_spectral_sigma,
+            local_window=args.lj_transfer_window,
+            local_bins=args.lj_transfer_bins,
+            use_long_jump_token=(not args.lj_transfer_no_long_jump),
+            random_grid_shift=(not args.lj_transfer_disable_random_shift),
+            use_data_aug=bool(args.lj_transfer_use_data_aug),
+            batch_size=args.batch_size,
+            seed=args.seed,
+            num_workers=args.num_workers,
+            train_limit=args.train_limit,
+            preprocessed_path=args.lj_transfer_preprocessed_path,
+        )
+        data_module.setup("fit")
+        vocab_size = data_module.vocab_size
+        if vocab_size is None:
+            raise RuntimeError("Failed to determine lj_transferable vocabulary size.")
+        model_info = {
+            "kind": "lj_transferable_ar",
+            "vocab_size": int(vocab_size),
+            "coord_dim": int(data_module.coord_dim or 2),
+        }
+    elif dataset == "lj_abs":
+        data_path = args.data_dir
+        if os.path.isdir(data_path):
+            h5_files = sorted(glob.glob(os.path.join(data_path, "*.h5")))
+            if not h5_files:
+                raise FileNotFoundError(f"No .h5 files found in directory: {data_path}")
+            data_path = h5_files
+        data_module = LJAbsoluteDataModule(
+            data_path=data_path,
+            bins=args.lj_abs_bins,
+            random_grid_shift=(not args.lj_abs_disable_random_shift),
+            batch_size=args.batch_size,
+            seed=args.seed,
+            num_workers=args.num_workers,
+            train_limit=args.train_limit,
+        )
+        data_module.setup("fit")
+        vocab_size = data_module.vocab_size
+        num_particles = data_module.num_particles
+        if vocab_size is None or num_particles is None:
+            raise RuntimeError("Failed to determine lj_abs vocabulary/particle count.")
+        model_info = {
+            "kind": "lj_abs_ar",
+            "vocab_size": int(vocab_size),
+            "num_particles": int(num_particles),
+        }
     else:
         data_module = LJPixelsDataModule(
             data_dir=args.data_dir,
@@ -178,6 +403,10 @@ def build_data_module(args: argparse.Namespace):
 
 def main() -> None:
     args = parse_args()
+    if args.use_rbf_bias and args.use_deep_ida:
+        raise ValueError("--use_rbf_bias and --use_deep_ida are mutually exclusive.")
+    if args.ar_permute_group_size <= 0:
+        raise ValueError("--ar_permute_group_size must be positive.")
 
     pl.seed_everything(args.seed, workers=True)
     os.makedirs(args.ckpt_dir, exist_ok=True)
@@ -185,37 +414,121 @@ def main() -> None:
 
     data_module, model_info = build_data_module(args)
 
-    if model_info["kind"] in ("cifar_ar", "lj_cell_ar"):
+    if model_info["kind"] in ("cifar_ar", "lj_cell_ar", "lj_transferable_ar", "lj_abs_ar"):
+        base_use_pos_emb = bool(args.ar_use_pos_emb) and (not args.ar_disable_pos_emb)
         if model_info["kind"] == "cifar_ar":
             latent_shape = model_info["latent_shape"]
             codebook_size = int(model_info["codebook_size"])
             d_model = int(latent_shape[0])
             id_coord_mode = None
             cell_grid_size = None
+            coord_dequant_width = 0.0
             torus = args.ar_torus
+            use_density_cond = False
+            use_pos_emb = base_use_pos_emb
+            use_rope = False
+        elif model_info["kind"] == "lj_transferable_ar":
+            codebook_size = int(model_info["vocab_size"])
+            d_model = int(args.dim)
+            id_coord_mode = None
+            cell_grid_size = None
+            coord_dequant_width = (2.0 * float(args.lj_transfer_window)) / float(max(1, int(args.lj_transfer_bins)))
+            torus = bool(args.lj_transfer_periodic)
+            use_density_cond = False
+            use_pos_emb = False
+            use_rope = False
+        elif model_info["kind"] == "lj_abs_ar":
+            codebook_size = int(model_info["vocab_size"])
+            d_model = int(args.dim)
+            id_coord_mode = None
+            cell_grid_size = None
+            coord_dequant_width = 0.0
+            torus = False
+            use_density_cond = False
+            use_pos_emb = True
+            use_rope = False
         else:
             codebook_size = int(model_info["vocab_size"])
             d_model = int(args.dim)
             id_coord_mode = "hilbert"
             cell_grid_size = int(model_info["grid_size"])
+            coord_dequant_width = 0.0
             torus = True
-        lit_module = GraphormerAR(
-            K=codebook_size,
-            d_model=d_model,
-            n_layer=args.depth,
-            n_head=args.heads,
-            dropout=args.ar_dropout,
-            lr=args.lr,
-            weight_decay=args.weight_decay,
-            sos_id=codebook_size,
-            input_vocab_size=codebook_size + 1,
-            use_edge_bias=(not args.ar_no_edge_bias),
-            torus=torus,
-            use_dir_bias=(not args.ar_no_dir_bias),
-            dist_bins=args.ar_dist_bins,
-            id_coord_mode=id_coord_mode,
-            cell_grid_size=cell_grid_size,
-        )
+            use_density_cond = False
+            use_pos_emb = base_use_pos_emb
+            use_rope = False
+        ar_arch = resolve_ar_arch(args.ar_arch, use_ida=bool(args.use_ida))
+        if ar_arch == "ida":
+            spatial_dim = int(model_info.get("coord_dim", args.ar_ida_spatial_dim))
+            lit_module = GraphormerARIDA(
+                K=codebook_size,
+                d_model=d_model,
+                n_layer=args.depth,
+                n_head=args.heads,
+                dropout=args.ar_dropout,
+                lr=args.lr,
+                weight_decay=args.weight_decay,
+                sos_id=codebook_size,
+                input_vocab_size=codebook_size + 1,
+                use_ida=(not args.ar_no_edge_bias),
+                spatial_dim=spatial_dim,
+                torus=torus,
+                coord_dequantize_train=True,
+                coord_dequant_width=float(coord_dequant_width),
+                id_coord_mode=id_coord_mode,
+                cell_grid_size=cell_grid_size,
+                use_pos_emb=use_pos_emb,
+                use_density_cond=use_density_cond,
+                use_rope=use_rope,
+                rope_max_period=args.ar_rope_max_period,
+            )
+        elif ar_arch == "standard":
+            lit_module = GraphormerARStd(
+                K=codebook_size,
+                d_model=d_model,
+                n_layer=args.depth,
+                n_head=args.heads,
+                dropout=args.ar_dropout,
+                lr=args.lr,
+                weight_decay=args.weight_decay,
+                sos_id=codebook_size,
+                input_vocab_size=codebook_size + 1,
+                use_edge_bias=(not args.ar_no_edge_bias),
+                use_ida_pre=bool(args.ar_use_ida_pre),
+                ida_spatial_dim=int(model_info.get("coord_dim", args.ar_ida_spatial_dim)),
+                torus=torus,
+                use_dir_bias=(not args.ar_no_dir_bias),
+                dist_bins=args.ar_dist_bins,
+                edge_max_dist=args.ar_max_dist,
+                use_rbf_bias=bool(args.use_rbf_bias),
+                use_deep_ida=bool(args.use_deep_ida),
+                coord_dequantize_train=True,
+                coord_dequant_width=float(coord_dequant_width),
+                id_coord_mode=id_coord_mode,
+                cell_grid_size=cell_grid_size,
+                use_pos_emb=use_pos_emb,
+                use_density_cond=use_density_cond,
+                use_rope=use_rope,
+                rope_max_period=args.ar_rope_max_period,
+            )
+        elif ar_arch == "vanilla":
+            lit_module = VanillaTransformerAR(
+                K=codebook_size,
+                d_model=d_model,
+                n_layer=args.depth,
+                n_head=args.heads,
+                dropout=args.ar_dropout,
+                lr=args.lr,
+                weight_decay=args.weight_decay,
+                sos_id=codebook_size,
+                input_vocab_size=codebook_size + 1,
+                use_pos_emb=True,
+                permute_train=bool(args.ar_permute_train),
+                permute_group_size=int(args.ar_permute_group_size),
+            )
+        else:
+            raise ValueError(f"Unsupported AR architecture '{ar_arch}'.")
+        lit_module.hparams["ar_arch"] = ar_arch
     else:
         model_kwargs = {
             "in_ch": model_info["input_channels"],

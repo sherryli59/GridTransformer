@@ -8,7 +8,7 @@ import torch
 from PIL import Image
 
 from grid_transformer.data.cifar_vq_dataset import get_hilbert_indices
-from grid_transformer.training.ar import GraphormerAR
+from grid_transformer.models.ar_registry import AR_ARCH_CHOICES, load_ar_checkpoint
 from grid_transformer.training.lightning_module import VQLatentTransformerModule
 
 
@@ -53,19 +53,20 @@ def _infer_latent_shape_from_vq(vq_model, image_size: int = 32) -> Tuple[int, in
     return int(z_q.shape[1]), int(z_q.shape[2]), int(z_q.shape[3])
 
 
-def _load_lightning_checkpoint(path: str, device: torch.device):
+def _load_lightning_checkpoint(path: str, device: torch.device, *, ar_arch: str, use_ida: bool):
     try:
-        model = GraphormerAR.load_from_checkpoint(path, map_location=device)
+        model, resolved_arch = load_ar_checkpoint(path, device, ar_arch=ar_arch, use_ida=use_ida)
         model.to(device).eval()
-        return model, "graphormer_ar"
+        return model, "graphormer_ar", resolved_arch
     except Exception as ar_exc:
         try:
             model = VQLatentTransformerModule.load_from_checkpoint(path, map_location=device)
             model.to(device).eval()
-            return model, "vq_latent"
+            return model, "vq_latent", None
         except Exception as vq_exc:
             raise RuntimeError(
-                f"Failed to load checkpoint '{path}' as GraphormerAR or VQLatentTransformerModule."
+                f"Failed to load checkpoint '{path}' as AR or VQ module. "
+                f"AR loading was attempted with ar_arch={ar_arch!r} and use_ida={use_ida!r}."
             ) from vq_exc
 
 
@@ -310,7 +311,7 @@ def iterative_token_ids_sample(
 
 @torch.no_grad()
 def autoregressive_token_sample(
-    lit_module: GraphormerAR,
+    lit_module: torch.nn.Module,
     Hc: int,
     Wc: int,
     *,
@@ -403,13 +404,32 @@ def main():
     ap.add_argument("--temperature", type=float, default=1.0)
     ap.add_argument("--top_k", type=int, default=None, help="Optional top-k truncation for AR sampling.")
     ap.add_argument("--image_size", type=int, default=32, help="Image size used to infer latent grid from VQ model for AR checkpoints.")
+    ap.add_argument(
+        "--ar_arch",
+        type=str,
+        choices=AR_ARCH_CHOICES,
+        default="auto",
+        help="AR checkpoint architecture: auto/standard/ida/vanilla. Auto infers from checkpoint metadata.",
+    )
+    ap.add_argument(
+        "--use_ida",
+        dest="use_ida",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Legacy alias used only when --ar_arch=auto. True=>ida, False=>standard.",
+    )
     args = ap.parse_args()
 
     W = int(np.floor(args.Lx / args.pixel_size))
     H = int(np.floor(args.Ly / args.pixel_size))
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    lit_module, model_kind = _load_lightning_checkpoint(args.ckpt, device)
+    lit_module, model_kind, _ = _load_lightning_checkpoint(
+        args.ckpt,
+        device,
+        ar_arch=str(args.ar_arch),
+        use_ida=bool(args.use_ida),
+    )
     model = lit_module.model if model_kind == "vq_latent" else lit_module
     model.eval()
 

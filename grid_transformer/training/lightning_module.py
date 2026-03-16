@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+import glob
+import os
+from typing import Any, Dict, Optional, Sequence
 
 import torch
 import torch.nn.functional as F
@@ -13,6 +15,12 @@ import pytorch_lightning as pl
 from ..data.lj_dataset import LJPixelsDataset
 from ..data.cifar_vq_dataset import CIFARVQLatentDataset
 from ..data.lj_cell_dataset import LJCellDataset
+from ..data.lj_abs_dataset import LJAbsoluteDataset
+from ..data.lj_transferable import (
+    BucketedBatchSampler,
+    LJTransferableCachedDataset,
+    LJTransferableDataset,
+)
 from ..models.swin_pbc import BinarySwinPBC
 import numpy as np
 import math
@@ -324,6 +332,240 @@ class LJCellDataModule(pl.LightningDataModule):
         if self._train_ds is None:
             return None
         return self._train_ds.num_particles
+
+    @property
+    def sos_id(self) -> Optional[int]:
+        if self._train_ds is None:
+            return None
+        return self._train_ds.sos_id
+
+    def train_dataloader(self) -> DataLoader:
+        if self._train_ds is None:
+            self.setup("fit")
+        assert self._train_ds is not None
+        return DataLoader(
+            self._train_ds,
+            batch_size=self.batch_size,
+            shuffle=True,
+            num_workers=self.num_workers,
+            pin_memory=self.pin_memory,
+        )
+
+
+class LJTransferableDataModule(pl.LightningDataModule):
+    """DataModule for relative-displacement LJ token sequences with configurable ordering."""
+
+    def __init__(
+        self,
+        data_path: str | Sequence[str] = "/mnt/ssd/mcmc/lj_N16_T1.h5",
+        periodic: bool = True,
+        hilbert_resolution: int = 128,
+        ordering: str = "hilbert",
+        spectral_sigma: float = 1.0,
+        local_window: float = 3.0,
+        local_bins: int = 64,
+        use_long_jump_token: bool = True,
+        random_grid_shift: bool = True,
+        use_data_aug: bool = False,
+        batch_size: int = 128,
+        seed: int = 0,
+        num_workers: int = 0,
+        pin_memory: bool = True,
+        train_limit: Optional[int] = None,
+        drop_last: bool = False,
+        preprocessed_path: Optional[str] = None,
+    ) -> None:
+        super().__init__()
+        self.data_path = data_path
+        self.periodic = bool(periodic)
+        self.hilbert_resolution = int(hilbert_resolution)
+        self.ordering = str(ordering).strip().lower()
+        if self.ordering not in ("hilbert", "spectral"):
+            raise ValueError(f"ordering must be 'hilbert' or 'spectral', got {ordering!r}")
+        self.spectral_sigma = float(spectral_sigma)
+        if self.spectral_sigma <= 0.0:
+            raise ValueError(f"spectral_sigma must be > 0, got {self.spectral_sigma}")
+        self.local_window = float(local_window)
+        self.local_bins = int(local_bins)
+        self.use_long_jump_token = bool(use_long_jump_token)
+        self.random_grid_shift = bool(random_grid_shift)
+        self.use_data_aug = bool(use_data_aug)
+        self.batch_size = batch_size
+        self.seed = int(seed)
+        self.num_workers = num_workers
+        self.pin_memory = pin_memory
+        self.train_limit = train_limit
+        self.drop_last = bool(drop_last)
+        self.preprocessed_path = preprocessed_path
+        if self.preprocessed_path is not None and self.random_grid_shift:
+            raise ValueError(
+                "preprocessed_path is set, but random_grid_shift=True. "
+                "Cached datasets have fixed ordering/shift; disable random shift for cached training."
+            )
+        if self.preprocessed_path is not None and self.use_data_aug:
+            raise ValueError(
+                "preprocessed_path is set, but use_data_aug=True. "
+                "Right-angle rotation augmentation requires on-the-fly lj_transferable tokenization."
+            )
+        if (not self.periodic) and self.random_grid_shift:
+            raise ValueError(
+                "random_grid_shift=True is unsupported for nonperiodic lj_transferable training."
+            )
+        self._train_ds: Optional[LJTransferableDataset | LJTransferableCachedDataset] = None
+
+    def setup(self, stage: Optional[str] = None) -> None:
+        if stage in (None, "fit") and self._train_ds is None:
+            if self.preprocessed_path is not None:
+                self._train_ds = LJTransferableCachedDataset(
+                    cache_path=self.preprocessed_path,
+                    limit=self.train_limit,
+                )
+                cached_periodic = bool(getattr(self._train_ds, "periodic", True))
+                if cached_periodic != self.periodic:
+                    raise ValueError(
+                        "Cached lj_transferable periodic setting does not match the datamodule: "
+                        f"cache periodic={cached_periodic}, requested periodic={self.periodic}."
+                    )
+                return
+            data_paths: str | Sequence[str]
+            data_paths = self.data_path
+            if isinstance(data_paths, str) and os.path.isdir(data_paths):
+                h5_files = sorted(glob.glob(os.path.join(data_paths, "*.h5")))
+                if not h5_files:
+                    raise FileNotFoundError(f"No .h5 files found in directory: {data_paths}")
+                data_paths = h5_files
+            self._train_ds = LJTransferableDataset(
+                file_paths=data_paths,
+                periodic=self.periodic,
+                hilbert_resolution=self.hilbert_resolution,
+                ordering=self.ordering,
+                spectral_sigma=self.spectral_sigma,
+                local_window=self.local_window,
+                local_bins=self.local_bins,
+                use_long_jump_token=self.use_long_jump_token,
+                random_grid_shift=self.random_grid_shift,
+                use_data_aug=self.use_data_aug,
+                limit=self.train_limit,
+                seed=self.seed,
+            )
+
+    @property
+    def vocab_size(self) -> Optional[int]:
+        if self._train_ds is None:
+            return None
+        return self._train_ds.vocab_size
+
+    @property
+    def sequence_length(self) -> Optional[int]:
+        if self._train_ds is None:
+            return None
+        uniq = np.unique(self._train_ds.sample_lengths)
+        if uniq.size == 1:
+            return int(uniq[0])
+        return None
+
+    @property
+    def sos_id(self) -> Optional[int]:
+        if self._train_ds is None:
+            return None
+        return self._train_ds.sos_id
+
+    @property
+    def density(self) -> Optional[float]:
+        if self._train_ds is None:
+            return None
+        return None
+
+    @property
+    def coord_dim(self) -> Optional[int]:
+        if self._train_ds is None:
+            return None
+        return int(getattr(self._train_ds, "coord_dim", 2))
+
+    def train_dataloader(self) -> DataLoader:
+        if self._train_ds is None:
+            self.setup("fit")
+        assert self._train_ds is not None
+        batch_sampler = BucketedBatchSampler(
+            sample_lengths=self._train_ds.sample_lengths,
+            batch_size=self.batch_size,
+            shuffle=True,
+            drop_last=self.drop_last,
+            seed=self.seed,
+        )
+        return DataLoader(
+            self._train_ds,
+            batch_sampler=batch_sampler,
+            num_workers=self.num_workers,
+            pin_memory=self.pin_memory,
+        )
+
+
+class LJAbsoluteDataModule(pl.LightningDataModule):
+    """DataModule for absolute-coordinate LJ token sequences."""
+
+    def __init__(
+        self,
+        data_path: str | Sequence[str] = "/mnt/ssd/mcmc/lj_N16_T1.h5",
+        bins: int = 512,
+        random_grid_shift: bool = False,
+        batch_size: int = 128,
+        seed: int = 0,
+        num_workers: int = 0,
+        pin_memory: bool = True,
+        train_limit: Optional[int] = None,
+    ) -> None:
+        super().__init__()
+        self.data_path = data_path
+        self.bins = int(bins)
+        self.random_grid_shift = bool(random_grid_shift)
+        self.batch_size = batch_size
+        self.seed = int(seed)
+        self.num_workers = num_workers
+        self.pin_memory = pin_memory
+        self.train_limit = train_limit
+        self._train_ds: Optional[LJAbsoluteDataset] = None
+
+    def setup(self, stage: Optional[str] = None) -> None:
+        if stage in (None, "fit") and self._train_ds is None:
+            data_paths: str | Sequence[str]
+            data_paths = self.data_path
+            if isinstance(data_paths, str) and os.path.isdir(data_paths):
+                h5_files = sorted(glob.glob(os.path.join(data_paths, "*.h5")))
+                if not h5_files:
+                    raise FileNotFoundError(f"No .h5 files found in directory: {data_paths}")
+                data_paths = h5_files
+            self._train_ds = LJAbsoluteDataset(
+                file_paths=data_paths,
+                bins=self.bins,
+                random_grid_shift=self.random_grid_shift,
+                limit=self.train_limit,
+                seed=self.seed,
+            )
+
+    @property
+    def vocab_size(self) -> Optional[int]:
+        if self._train_ds is None:
+            return None
+        return self._train_ds.vocab_size
+
+    @property
+    def sequence_length(self) -> Optional[int]:
+        if self._train_ds is None:
+            return None
+        uniq = np.unique(self._train_ds.sample_lengths)
+        if uniq.size != 1:
+            return None
+        return int(uniq[0]) * 2
+
+    @property
+    def num_particles(self) -> Optional[int]:
+        if self._train_ds is None:
+            return None
+        uniq = np.unique(self._train_ds.sample_lengths)
+        if uniq.size != 1:
+            return None
+        return int(uniq[0])
 
     @property
     def sos_id(self) -> Optional[int]:

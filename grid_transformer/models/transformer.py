@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from functools import lru_cache
+import math
 from typing import Optional
 
 import pytorch_lightning as pl
@@ -8,120 +8,29 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
-def wrap_min_image(dr: torch.Tensor, box_size: torch.Tensor) -> torch.Tensor:
-    """Apply minimum-image wrapping along each coordinate axis."""
-    box_size = torch.as_tensor(box_size, device=dr.device, dtype=dr.dtype)
-    if box_size.ndim == 1:
-        box_size = box_size.view(*([1] * (dr.ndim - 1)), box_size.shape[0])
-    elif box_size.ndim == 2:
-        box_size = box_size.view(box_size.shape[0], *([1] * (dr.ndim - 2)), box_size.shape[1])
-    else:
-        raise ValueError(f"box_size must be rank 1 or 2, got rank {box_size.ndim}")
-    return dr - box_size * torch.round(dr / box_size.clamp_min(1e-8))
-
-
-def _is_power_of_two(v: int) -> bool:
-    return v > 0 and (v & (v - 1)) == 0
-
-
-def _hilbert_d2xy(order_n: int, d: int) -> tuple[int, int]:
-    """Distance-to-2D Hilbert coordinate for square side length `order_n`."""
-    x = 0
-    y = 0
-    t = int(d)
-    s = 1
-    while s < order_n:
-        rx = (t // 2) & 1
-        ry = (t ^ rx) & 1
-        if ry == 0:
-            if rx == 1:
-                x = s - 1 - x
-                y = s - 1 - y
-            x, y = y, x
-        x += s * rx
-        y += s * ry
-        t //= 4
-        s <<= 1
-    return x, y
-
-
-@lru_cache(maxsize=16)
-def _hilbert_id_to_xy_lut(side: int) -> torch.Tensor:
-    if not _is_power_of_two(side):
-        raise ValueError(f"Hilbert mapping requires power-of-two side length, got {side}")
-    lut = torch.empty((side * side, 2), dtype=torch.float32)
-    for d in range(side * side):
-        x, y = _hilbert_d2xy(side, d)
-        lut[d, 0] = float(x)
-        lut[d, 1] = float(y)
-    return lut
-
-
-def id_to_center_xyz(
-    token_ids: torch.LongTensor,
-    *,
-    grid_size: int,
-    box_size: Optional[torch.Tensor] = None,
-    mapping: str = "hilbert",
-    sos_id: Optional[int] = None,
-) -> torch.Tensor:
-    """
-    Convert discrete token IDs to physical 2D cell-center coordinates.
-
-    token_ids: [B, T], values in [0, K-1] (optionally includes SOS token).
-    returns:   [B, T, 2] where coords are in the same physical units as box_size.
-    """
-    if token_ids.ndim != 2:
-        raise ValueError(f"token_ids must be [B,T], got {tuple(token_ids.shape)}")
-    if grid_size <= 0:
-        raise ValueError(f"grid_size must be positive, got {grid_size}")
-
-    K = int(grid_size * grid_size)
-    ids = token_ids.long()
-    invalid = (ids < 0) | (ids >= K)
-    if sos_id is not None:
-        invalid = invalid | (ids == int(sos_id))
-    ids_safe = ids.clamp(min=0, max=K - 1)
-
-    if mapping == "hilbert":
-        lut = _hilbert_id_to_xy_lut(int(grid_size)).to(device=ids.device)
-        xy = lut[ids_safe]  # [B,T,2], columns=(ix, iy)
-    elif mapping == "raster":
-        ix = (ids_safe % int(grid_size)).to(dtype=torch.float32)
-        iy = torch.div(ids_safe, int(grid_size), rounding_mode="floor").to(dtype=torch.float32)
-        xy = torch.stack([ix, iy], dim=-1)
-    else:
-        raise ValueError(f"Unsupported id->coord mapping '{mapping}'")
-
-    if box_size is None:
-        bs = torch.tensor([float(grid_size), float(grid_size)], device=ids.device, dtype=xy.dtype).view(1, 1, 2)
-    else:
-        bs = torch.as_tensor(box_size, device=ids.device, dtype=xy.dtype)
-        if bs.ndim == 1:
-            if bs.numel() != 2:
-                raise ValueError(f"box_size must have 2 entries, got shape {tuple(bs.shape)}")
-            bs = bs.view(1, 1, 2)
-        elif bs.ndim == 2:
-            if bs.shape[1] != 2:
-                raise ValueError(f"box_size must be [B,2], got shape {tuple(bs.shape)}")
-            bs = bs[:, None, :]
-        else:
-            raise ValueError(f"box_size must be rank 1 or 2, got rank {bs.ndim}")
-
-    centers = (xy + 0.5) * (bs / float(grid_size))
-    centers = centers.masked_fill(invalid.unsqueeze(-1), 0.0)
-    return centers
+from .deep_ida import DeepIDABias
+from .ida import PeriodicIDA
+from .rbf_edge_bias import RBFEdgeBias
+from ..utils.spatial import id_to_center_xyz, wrap_min_image
 
 
 class EdgeBias(nn.Module):
     """Turn pairwise distances into additive attention bias."""
 
-    def __init__(self, n_head: int, n_bins: int = 32, d_dir: int = 16, use_dir: bool = True):
+    def __init__(
+        self,
+        n_head: int,
+        n_bins: int = 32,
+        d_dir: int = 16,
+        use_dir: bool = True,
+        max_dist: float = 4.0,
+    ):
         super().__init__()
         self.n_head = n_head
         self.n_bins = n_bins
         self.use_dir = use_dir
+        self.max_dist = max(float(max_dist), 1e-8)
+        self.max_log_dist = float(math.log1p(self.max_dist))
         self.bin_embed = nn.Embedding(n_bins, n_head)
         if use_dir:
             self.dir_mlp = nn.Sequential(
@@ -130,10 +39,12 @@ class EdgeBias(nn.Module):
                 nn.Linear(d_dir, n_head),
             )
 
-    @staticmethod
-    def _bin_dist(d: torch.Tensor, n_bins: int) -> torch.LongTensor:
-        d = d.clamp(min=0.0, max=1.0)
-        return (d * (n_bins - 1)).long().clamp(0, n_bins - 1)
+    def _bin_dist(self, d: torch.Tensor) -> torch.LongTensor:
+        if self.max_log_dist <= 0.0:
+            return torch.zeros_like(d, dtype=torch.long)
+        log_d = torch.log1p(d.clamp_min(0.0))
+        bins = (log_d / self.max_log_dist) * (self.n_bins - 1)
+        return bins.long().clamp(0, self.n_bins - 1)
 
     def forward(
         self,
@@ -177,19 +88,7 @@ class EdgeBias(nn.Module):
 
         dist = torch.linalg.norm(diff, dim=-1)  # [B,T,T]
 
-        if torus:
-            bs = torch.as_tensor(box_size, device=coords3.device, dtype=coords3.dtype)
-            if bs.ndim == 1:
-                scale = torch.linalg.norm(bs).clamp_min(1e-6)
-                dnorm = dist / scale
-            else:
-                scale = torch.linalg.norm(bs, dim=-1).clamp_min(1e-6)
-                dnorm = dist / scale[:, None, None]
-        else:
-            scale = dist.detach().amax(dim=(1, 2), keepdim=True).clamp_min(1e-6)
-            dnorm = dist / scale
-
-        bins = self._bin_dist(dnorm, self.n_bins)  # [B,T,T]
+        bins = self._bin_dist(dist)  # [B,T,T]
         bias_dist = self.bin_embed(bins).permute(0, 3, 1, 2).contiguous()  # [B,nH,T,T]
 
         if self.use_dir:
@@ -204,12 +103,14 @@ class EdgeBias(nn.Module):
 
 
 class CausalSelfAttnWithBias(nn.Module):
-    def __init__(self, d_model: int, n_head: int, dropout: float):
+    def __init__(self, d_model: int, n_head: int, dropout: float, use_rope: bool = False, rope_max_period: float = 10000.0):
         super().__init__()
         if d_model % n_head != 0:
             raise ValueError(f"d_model={d_model} must be divisible by n_head={n_head}")
         self.n_head = n_head
         self.d_head = d_model // n_head
+        _ = use_rope
+        _ = rope_max_period
         self.qkv = nn.Linear(d_model, 3 * d_model)
         self.proj = nn.Linear(d_model, d_model)
         self.attn_drop = nn.Dropout(dropout)
@@ -251,11 +152,24 @@ class GraphormerAR(pl.LightningModule):
         sos_id: Optional[int] = None,
         input_vocab_size: Optional[int] = None,
         use_edge_bias: bool = True,
+        use_ida_pre: bool = False,
+        ida_spatial_dim: int = 2,
         torus: bool = False,
         use_dir_bias: bool = True,
         dist_bins: int = 32,
+        edge_max_dist: float = 4.0,
+        use_rbf_bias: bool = False,
+        use_deep_ida: bool = False,
+        rbf_n_centers: int = 64,
+        rbf_hidden_dim: int = 64,
+        coord_dequantize_train: bool = True,
+        coord_dequant_width: float = 0.0,
         id_coord_mode: Optional[str] = None,
         cell_grid_size: Optional[int] = None,
+        use_pos_emb: bool = False,
+        use_density_cond: bool = False,
+        use_rope: bool = False,
+        rope_max_period: float = 10000.0,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -267,11 +181,47 @@ class GraphormerAR(pl.LightningModule):
 
         in_vocab = int(input_vocab_size) if input_vocab_size is not None else int(K)
         self.tok_emb = nn.Embedding(in_vocab, d_model)
-        self.pos_emb = nn.Embedding(4096, d_model)
+        self.use_pos_emb = bool(use_pos_emb)
+        self.use_density_cond = bool(use_density_cond)
+        self.pos_emb = nn.Embedding(4096, d_model) if self.use_pos_emb else None
+        self.density_emb = nn.Linear(1, d_model) if self.use_density_cond else None
 
         self.use_edge_bias = bool(use_edge_bias)
+        self.use_ida_pre = bool(use_ida_pre)
         self.torus = bool(torus)
-        self.edge_bias = EdgeBias(n_head=n_head, n_bins=dist_bins, use_dir=use_dir_bias)
+        self.use_rbf_bias = bool(use_rbf_bias)
+        self.use_deep_ida = bool(use_deep_ida)
+        if self.use_rbf_bias and self.use_deep_ida:
+            raise ValueError("use_rbf_bias and use_deep_ida cannot both be enabled.")
+
+        if self.use_deep_ida:
+            self.edge_bias = DeepIDABias(n_head=n_head)
+        elif self.use_rbf_bias:
+            self.edge_bias = RBFEdgeBias(
+                n_head=n_head,
+                n_rbf_centers=int(rbf_n_centers),
+                max_dist=edge_max_dist,
+                hidden_dim=int(rbf_hidden_dim),
+            )
+        else:
+            self.edge_bias = EdgeBias(
+                n_head=n_head,
+                n_bins=dist_bins,
+                use_dir=use_dir_bias,
+                max_dist=edge_max_dist,
+            )
+
+        self.coord_dequantize_train = bool(coord_dequantize_train)
+        self.coord_dequant_width = max(float(coord_dequant_width), 0.0)
+        if self.use_ida_pre:
+            self.ida_pre = PeriodicIDA(
+                d_model=d_model,
+                num_heads=n_head,
+                spatial_dim=int(ida_spatial_dim),
+                bias=False,
+            )
+        else:
+            self.ida_pre = None
         self.id_coord_mode = id_coord_mode
         self.cell_grid_size = int(cell_grid_size) if cell_grid_size is not None else None
 
@@ -280,7 +230,13 @@ class GraphormerAR(pl.LightningModule):
                 nn.ModuleDict(
                     {
                         "ln1": nn.LayerNorm(d_model),
-                        "attn": CausalSelfAttnWithBias(d_model, n_head, dropout),
+                        "attn": CausalSelfAttnWithBias(
+                            d_model,
+                            n_head,
+                            dropout,
+                            use_rope=use_rope,
+                            rope_max_period=rope_max_period,
+                        ),
                         "ln2": nn.LayerNorm(d_model),
                         "mlp": nn.Sequential(
                             nn.Linear(d_model, int(mlp_ratio * d_model)),
@@ -321,6 +277,56 @@ class GraphormerAR(pl.LightningModule):
         sos = torch.full((seq.size(0), 1), int(self.sos_id), dtype=seq.dtype, device=seq.device)
         return torch.cat([sos, seq[:, :-1]], dim=1)
 
+    def _box_like_coords(self, coords: torch.Tensor, box_size: Optional[torch.Tensor]) -> Optional[torch.Tensor]:
+        if box_size is None:
+            return None
+        bs = torch.as_tensor(box_size, device=coords.device, dtype=coords.dtype)
+        if bs.ndim == 1:
+            bs = bs.view(1, -1)
+        if bs.ndim != 2:
+            raise ValueError(f"box_size must be rank-1 or rank-2, got shape {tuple(bs.shape)}")
+        if bs.shape[0] == 1 and coords.shape[0] > 1:
+            bs = bs.expand(coords.shape[0], -1)
+        if bs.shape[0] != coords.shape[0]:
+            raise ValueError(f"box_size batch mismatch: coords B={coords.shape[0]}, box B={bs.shape[0]}")
+
+        c = coords.shape[-1]
+        if bs.shape[1] == c:
+            return bs
+        if bs.shape[1] > c:
+            return bs[:, :c]
+        pad = torch.ones(bs.shape[0], c - bs.shape[1], device=bs.device, dtype=bs.dtype)
+        return torch.cat([bs, pad], dim=1)
+
+    def _apply_training_coord_dequantization(
+        self,
+        coords: Optional[torch.Tensor],
+        box_size: Optional[torch.Tensor],
+    ) -> Optional[torch.Tensor]:
+        if coords is None or (not self.training) or (not self.coord_dequantize_train):
+            return coords
+
+        box_for_coords = self._box_like_coords(coords, box_size)
+        noise_width: Optional[torch.Tensor] = None
+
+        if box_for_coords is not None and self.cell_grid_size is not None and self.cell_grid_size > 0:
+            noise_width = (box_for_coords / float(self.cell_grid_size)).unsqueeze(1)  # [B,1,C]
+        elif self.coord_dequant_width > 0.0:
+            noise_width = torch.full(
+                (1, 1, coords.shape[-1]),
+                fill_value=float(self.coord_dequant_width),
+                device=coords.device,
+                dtype=coords.dtype,
+            )
+
+        if noise_width is None:
+            return coords
+
+        noisy_coords = coords + (torch.rand_like(coords) - 0.5) * noise_width
+        if box_for_coords is not None:
+            noisy_coords = torch.remainder(noisy_coords, box_for_coords.unsqueeze(1))
+        return noisy_coords
+
     def _causal_bias(
         self,
         B: int,
@@ -342,14 +348,37 @@ class GraphormerAR(pl.LightningModule):
         *,
         coords: Optional[torch.Tensor] = None,
         box_size: Optional[torch.Tensor] = None,
+        density: Optional[torch.Tensor] = None,
         pad_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         B, T = seq_in.shape
-        if T > self.pos_emb.num_embeddings:
-            raise ValueError(f"Sequence length {T} exceeds max position embeddings {self.pos_emb.num_embeddings}")
+        if self.use_pos_emb:
+            assert self.pos_emb is not None
+            if T > self.pos_emb.num_embeddings:
+                raise ValueError(f"Sequence length {T} exceeds max position embeddings {self.pos_emb.num_embeddings}")
+            pos = torch.arange(T, device=seq_in.device)
+            x = self.tok_emb(seq_in) + self.pos_emb(pos)[None, :, :]
+        else:
+            x = self.tok_emb(seq_in)
 
-        pos = torch.arange(T, device=seq_in.device)
-        x = self.tok_emb(seq_in) + self.pos_emb(pos)[None, :, :]
+        if self.use_density_cond:
+            if density is None:
+                raise ValueError("density must be provided when use_density_cond=True")
+            assert self.density_emb is not None
+            dens = torch.as_tensor(density, device=seq_in.device, dtype=x.dtype)
+            if dens.ndim == 0:
+                dens = dens.view(1, 1)
+            elif dens.ndim == 1:
+                dens = dens[:, None]
+            elif dens.ndim == 2 and dens.shape[1] == 1:
+                pass
+            else:
+                raise ValueError(f"density must be scalar, [B], or [B,1], got shape {tuple(dens.shape)}")
+            if dens.shape[0] == 1 and B > 1:
+                dens = dens.expand(B, 1)
+            if dens.shape[0] != B:
+                raise ValueError(f"density batch size mismatch: expected {B}, got {dens.shape[0]}")
+            x = x + self.density_emb(dens)[:, None, :]
 
         if coords is None and self.id_coord_mode is not None:
             if self.cell_grid_size is None:
@@ -360,6 +389,20 @@ class GraphormerAR(pl.LightningModule):
                 box_size=box_size,
                 mapping=self.id_coord_mode,
                 sos_id=self.sos_id,
+            )
+
+        if self.use_ida_pre and self.ida_pre is not None and coords is not None:
+            if coords.shape[-1] != self.ida_pre.spatial_dim:
+                raise ValueError(
+                    f"coords last dim ({coords.shape[-1]}) must match ida_spatial_dim ({self.ida_pre.spatial_dim})"
+                )
+            causal_mask_bool = torch.tril(torch.ones(T, T, device=x.device, dtype=torch.bool))
+            x = self.ida_pre(
+                x=x,
+                coords=coords,
+                causal_mask=causal_mask_bool,
+                box_size=box_size,
+                torus=self.torus,
             )
 
         bias = self._causal_bias(B, T, coords, box_size, x.device, x.dtype)
@@ -376,6 +419,7 @@ class GraphormerAR(pl.LightningModule):
         *,
         coords: Optional[torch.Tensor] = None,
         box_size: Optional[torch.Tensor] = None,
+        density: Optional[torch.Tensor] = None,
         pad_mask: Optional[torch.Tensor] = None,
         seq_in: Optional[torch.LongTensor] = None,
         logits: Optional[torch.Tensor] = None,
@@ -383,7 +427,7 @@ class GraphormerAR(pl.LightningModule):
         if seq_in is None:
             seq_in = self._shift_with_sos(seq)
         if logits is None:
-            logits = self.forward(seq_in, coords=coords, box_size=box_size, pad_mask=pad_mask)
+            logits = self.forward(seq_in, coords=coords, box_size=box_size, density=density, pad_mask=pad_mask)
         logp = F.log_softmax(logits, dim=-1)
         tok_logp = logp.gather(-1, seq.unsqueeze(-1)).squeeze(-1)
         if pad_mask is not None:
@@ -410,11 +454,16 @@ class GraphormerAR(pl.LightningModule):
         if box_size is not None:
             box_size = box_size.to(self.device)
 
+        density = batch.get("density")
+        if density is not None:
+            density = density.to(self.device)
+
         pad = batch.get("pad_mask")
         if pad is not None:
             pad = pad.bool()
 
-        logits = self.forward(seq_in, coords=coords, box_size=box_size, pad_mask=pad)
+        coords = self._apply_training_coord_dequantization(coords, box_size)
+        logits = self.forward(seq_in, coords=coords, box_size=box_size, density=density, pad_mask=pad)
         tok_nll = F.cross_entropy(
             logits.reshape(-1, self.K),
             seq.reshape(-1),

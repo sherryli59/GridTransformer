@@ -365,6 +365,7 @@ class LJTransferableDataModule(pl.LightningDataModule):
         local_window: float = 3.0,
         local_bins: int = 64,
         use_long_jump_token: bool = True,
+        factorized: bool = False,
         random_grid_shift: bool = True,
         use_data_aug: bool = False,
         batch_size: int = 128,
@@ -388,6 +389,7 @@ class LJTransferableDataModule(pl.LightningDataModule):
         self.local_window = float(local_window)
         self.local_bins = int(local_bins)
         self.use_long_jump_token = bool(use_long_jump_token)
+        self.factorized = bool(factorized)
         self.random_grid_shift = bool(random_grid_shift)
         self.use_data_aug = bool(use_data_aug)
         self.batch_size = batch_size
@@ -426,6 +428,12 @@ class LJTransferableDataModule(pl.LightningDataModule):
                         "Cached lj_transferable periodic setting does not match the datamodule: "
                         f"cache periodic={cached_periodic}, requested periodic={self.periodic}."
                     )
+                cached_factorized = bool(getattr(self._train_ds, "factorized", False))
+                if cached_factorized != self.factorized:
+                    raise ValueError(
+                        "Cached lj_transferable factorized setting does not match the datamodule: "
+                        f"cache factorized={cached_factorized}, requested factorized={self.factorized}."
+                    )
                 return
             data_paths: str | Sequence[str]
             data_paths = self.data_path
@@ -443,6 +451,7 @@ class LJTransferableDataModule(pl.LightningDataModule):
                 local_window=self.local_window,
                 local_bins=self.local_bins,
                 use_long_jump_token=self.use_long_jump_token,
+                factorized=self.factorized,
                 random_grid_shift=self.random_grid_shift,
                 use_data_aug=self.use_data_aug,
                 limit=self.train_limit,
@@ -459,9 +468,18 @@ class LJTransferableDataModule(pl.LightningDataModule):
     def sequence_length(self) -> Optional[int]:
         if self._train_ds is None:
             return None
+        if isinstance(self._train_ds, LJTransferableCachedDataset):
+            uniq = np.unique(self._train_ds.sample_lengths)
+            if uniq.size == 1:
+                return int(uniq[0])
+            return None
         uniq = np.unique(self._train_ds.sample_lengths)
         if uniq.size == 1:
-            return int(uniq[0])
+            n_particles = int(uniq[0])
+            n_predict = max(0, n_particles - 1)
+            if bool(getattr(self._train_ds.tokenizer, "factorized", False)):
+                return int(n_predict * int(getattr(self._train_ds, "coord_dim", 2)))
+            return int(n_predict)
         return None
 
     @property

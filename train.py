@@ -124,6 +124,11 @@ def parse_args() -> argparse.Namespace:
         help="Disable dedicated long-jump token and clamp out-of-window displacements instead.",
     )
     parser.add_argument(
+        "--lj_transfer_factorized",
+        action="store_true",
+        help="Flatten each D-dimensional relative jump into D sequential scalar tokens.",
+    )
+    parser.add_argument(
         "--lj_transfer_disable_random_shift",
         action="store_true",
         help="Disable random global shift augmentation for transferable LJ tokenization.",
@@ -335,6 +340,7 @@ def build_data_module(args: argparse.Namespace):
             local_window=args.lj_transfer_window,
             local_bins=args.lj_transfer_bins,
             use_long_jump_token=(not args.lj_transfer_no_long_jump),
+            factorized=bool(args.lj_transfer_factorized),
             random_grid_shift=(not args.lj_transfer_disable_random_shift),
             use_data_aug=bool(args.lj_transfer_use_data_aug),
             batch_size=args.batch_size,
@@ -351,6 +357,7 @@ def build_data_module(args: argparse.Namespace):
             "kind": "lj_transferable_ar",
             "vocab_size": int(vocab_size),
             "coord_dim": int(data_module.coord_dim or 2),
+            "factorized": bool(args.lj_transfer_factorized),
         }
     elif dataset == "lj_abs":
         data_path = args.data_dir

@@ -237,8 +237,8 @@ def autoregressive_relative_delta_sample(
     density: Optional[float] = None,
     periodic: bool = True,
 ) -> dict[str, torch.Tensor]:
-    if n_particles <= 0:
-        raise ValueError(f"n_particles must be positive, got {n_particles}")
+    if n_particles <= 1:
+        raise ValueError(f"n_particles must be > 1, got {n_particles}")
     if nsamples <= 0:
         raise ValueError(f"nsamples must be positive, got {nsamples}")
 
@@ -280,18 +280,27 @@ def autoregressive_relative_delta_sample(
     density_tensor = torch.full((nsamples,), rho, dtype=torch.float32, device=device)
     box_size = torch.from_numpy(box_np).to(device=device, dtype=torch.float32).unsqueeze(0).expand(nsamples, -1)
 
-    seq_out = torch.empty((nsamples, n_particles), dtype=torch.long, device=device)
-    seq_in = torch.empty((nsamples, n_particles), dtype=torch.long, device=device)
+    n_predict_particles = n_particles - 1
+    factorized = bool(getattr(tokenizer, "factorized", False))
+    n_predict_tokens = n_predict_particles * coord_dim if factorized else n_predict_particles
+
+    seq_out = torch.empty((nsamples, n_predict_tokens), dtype=torch.long, device=device)
+    seq_in = torch.empty((nsamples, n_predict_tokens), dtype=torch.long, device=device)
     seq_in[:, 0] = sos_id
+
+    # Particle 0 is implicit during autoregressive generation and starts at the origin.
+    # The model predicts particle 1 relative to particle 0 first, then particle 2
+    # relative to particle 1, etc. COM=0 is enforced only after the full chain exists.
     x_base = torch.zeros((nsamples, n_particles, coord_dim), dtype=torch.float32, device=device)
-    deltas = torch.zeros((nsamples, n_particles, coord_dim), dtype=torch.float32, device=device)
-    prev = torch.zeros((nsamples, coord_dim), dtype=torch.float32, device=device)
+    deltas = torch.zeros((nsamples, n_predict_particles, coord_dim), dtype=torch.float32, device=device)
     logp_discrete = torch.zeros((nsamples,), dtype=torch.float32, device=device)
 
-    for t in range(n_particles):
-        coords_in = torch.zeros((nsamples, t + 1, coord_dim), dtype=torch.float32, device=device)
-        if t > 0:
-            coords_in[:, 1:, :] = x_base[:, :t, :]
+    for t in range(n_predict_tokens):
+        if factorized:
+            x_base_rep = torch.repeat_interleave(x_base, coord_dim, dim=1)
+            coords_in = x_base_rep[:, : t + 1, :].clone()
+        else:
+            coords_in = x_base[:, : t + 1, :].clone()
 
         logits = model(
             seq_in[:, : t + 1],
@@ -299,6 +308,7 @@ def autoregressive_relative_delta_sample(
             box_size=box_size,
             density=density_tensor,
         )[:, -1, :]
+        
         log_probs = _sampling_log_probs(logits, temperature=temperature, top_k=top_k)
         if sample_mode == "argmax":
             nxt = log_probs.argmax(dim=-1)
@@ -311,22 +321,39 @@ def autoregressive_relative_delta_sample(
         seq_out[:, t] = nxt
         logp_discrete += log_probs.gather(1, nxt.unsqueeze(1)).squeeze(1)
 
-        delta_t = tokenizer.decode(nxt).to(device=device, dtype=torch.float32)
-        cur = prev + delta_t
-        if periodic:
-            cur = torch.remainder(cur, box_size)
+        if factorized:
+            if t % coord_dim == coord_dim - 1:
+                particle_tokens = seq_out[:, t - coord_dim + 1 : t + 1]
+                delta_t = tokenizer.decode(particle_tokens).squeeze(1).to(device=device, dtype=torch.float32)
+                p_idx = (t // coord_dim) + 1
+                raw_pos = x_base[:, p_idx - 1, :] + delta_t
+                if periodic:
+                    raw_pos = raw_pos - box_size * torch.round(raw_pos / box_size.clamp_min(1e-8))
+                deltas[:, p_idx - 1, :] = delta_t
+                x_base[:, p_idx, :] = raw_pos
+        else:
+            delta_t = tokenizer.decode(nxt).to(device=device, dtype=torch.float32)
+            raw_pos = x_base[:, t, :] + delta_t
+            if periodic:
+                raw_pos = raw_pos - box_size * torch.round(raw_pos / box_size.clamp_min(1e-8))
+            deltas[:, t, :] = delta_t
+            x_base[:, t + 1, :] = raw_pos
 
-        deltas[:, t, :] = delta_t
-        x_base[:, t, :] = cur
-        prev = cur
-
-        if t + 1 < n_particles:
+        if t + 1 < n_predict_tokens:
             seq_in[:, t + 1] = nxt
+
+    # Recover the final absolute frame by shifting the whole chain so COM=0.
+    com = x_base.mean(dim=1, keepdim=True)
+    final_positions = x_base - com
+    
+    if periodic:
+        # Wrap final coordinates back into the primary simulation box [-L/2, L/2]
+        final_positions = torch.remainder(final_positions + box_size/2, box_size) - box_size/2
 
     return {
         "token_ids": seq_out,
-        "x_base": x_base,
-        "deltas": deltas,
+        "x_base": final_positions, # Returns fully formed (B, N, 3) geometry
+        "deltas": deltas,          # Returns (B, N-1, 3) relative jumps
         "logp_discrete": logp_discrete,
         "density": torch.tensor(rho, dtype=torch.float32, device=device),
     }
@@ -471,6 +498,11 @@ def parse_args() -> argparse.Namespace:
         help="Relative mode: disable dedicated long-jump token and clamp displacements.",
     )
     ap.add_argument(
+        "--factorized",
+        action="store_true",
+        help="Enable 1D sequential x,y,z tokenization.",
+    )
+    ap.add_argument(
         "--abs_bins",
         type=int,
         default=None,
@@ -610,6 +642,7 @@ def main() -> None:
         bins=int(args.relative_bins),
         dim=coord_dim,
         use_long_jump_token=(not args.relative_no_long_jump),
+        factorized=bool(args.factorized),
     )
 
     if args.mode == "abs":
@@ -708,6 +741,7 @@ def main() -> None:
         window=np.array(float(args.relative_window), dtype=np.float32),
         bins=np.array(int(args.relative_bins), dtype=np.int32),
         use_long_jump=np.array(int(not args.relative_no_long_jump), dtype=np.int32),
+        factorized=np.array(int(bool(args.factorized)), dtype=np.int32),
         periodic=np.array(int(periodic), dtype=np.int32),
         temperature=np.array(args.temperature, dtype=np.float32),
         sample_mode=np.array(args.sample_mode),
@@ -717,7 +751,7 @@ def main() -> None:
 
     print(
         f"Saved {args.save} (mode=relative, nsamples={args.nsamples}, N={target_n}, "
-        f"K={K}, bins={args.relative_bins}, window={args.relative_window}, periodic={periodic}, "
+        f"K={K}, bins={args.relative_bins}, window={args.relative_window}, factorized={bool(args.factorized)}, periodic={periodic}, "
         f"ar_arch={resolved_arch})"
     )
     print(f"Mean logp_discrete: {out['logp_discrete'].mean().item():.6f}")

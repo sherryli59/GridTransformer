@@ -13,7 +13,8 @@ SAMPLE_OUT="${SAMPLE_OUT:-${CKPT_DIR}/samples_lj13_nopbc.npz}"
 RUN_PREPROCESS="${RUN_PREPROCESS:-1}"
 RUN_TRAIN="${RUN_TRAIN:-1}"
 RUN_SAMPLE="${RUN_SAMPLE:-1}"
-TRAIN_DATA_AUG="${TRAIN_DATA_AUG:-0}"
+TRAIN_DATA_AUG="${TRAIN_DATA_AUG:-1}"
+FACTORIZED="${FACTORIZED:-0}"
 
 SEED="${SEED:-0}"
 ORDERING="${ORDERING:-hilbert}"
@@ -21,13 +22,13 @@ HILBERT_RESOLUTION="${HILBERT_RESOLUTION:-128}"
 WINDOW="${WINDOW:-3.0}"
 BINS="${BINS:-64}"
 
-EPOCHS="${EPOCHS:-20}"
+EPOCHS="${EPOCHS:-10}"
 BATCH_SIZE="${BATCH_SIZE:-256}"
-LR="${LR:-5e-4}"
+LR="${LR:-1e-3}"
 NUM_WORKERS="${NUM_WORKERS:-0}"
-MODEL_DIM="${MODEL_DIM:-256}"
+MODEL_DIM="${MODEL_DIM:-128}"
 MODEL_HEADS="${MODEL_HEADS:-4}"
-MODEL_DEPTH="${MODEL_DEPTH:-6}"
+MODEL_DEPTH="${MODEL_DEPTH:-3}"
 AR_ARCH="${AR_ARCH:-ida}"
 
 SAMPLE_NSAMPLES="${SAMPLE_NSAMPLES:-1024}"
@@ -91,15 +92,21 @@ fi
 
 if [[ "${RUN_PREPROCESS}" == "1" && "${TRAIN_DATA_AUG}" != "1" ]]; then
   echo "[preprocess] ${DATA_H5} -> ${CACHE_PATH}"
-  "${PYTHON_BIN}" "${ROOT_DIR}/scripts/preprocess_lj_transferable.py" \
-    --data_h5 "${DATA_H5}" \
-    --output "${CACHE_PATH}" \
-    --no-periodic \
-    --ordering "${ORDERING}" \
-    --hilbert_resolution "${HILBERT_RESOLUTION}" \
-    --window "${WINDOW}" \
-    --bins "${BINS}" \
+  PREPROCESS_ARGS=(
+    --data_h5 "${DATA_H5}"
+    --output "${CACHE_PATH}"
+    --no-periodic
+    --ordering "${ORDERING}"
+    --hilbert_resolution "${HILBERT_RESOLUTION}"
+    --window "${WINDOW}"
+    --bins "${BINS}"
     --seed "${SEED}"
+  )
+  if [[ "${FACTORIZED}" == "1" ]]; then
+    PREPROCESS_ARGS+=(--factorized)
+  fi
+  "${PYTHON_BIN}" "${ROOT_DIR}/scripts/preprocess_lj_transferable.py" \
+    "${PREPROCESS_ARGS[@]}"
 elif [[ "${RUN_PREPROCESS}" == "1" && "${TRAIN_DATA_AUG}" == "1" ]]; then
   echo "[preprocess] skipped because TRAIN_DATA_AUG=1 requires on-the-fly tokenization"
 fi
@@ -131,6 +138,9 @@ if [[ "${RUN_TRAIN}" == "1" ]]; then
   else
     TRAIN_ARGS+=(--lj_transfer_preprocessed_path "${CACHE_PATH}")
   fi
+  if [[ "${FACTORIZED}" == "1" ]]; then
+    TRAIN_ARGS+=(--lj_transfer_factorized)
+  fi
   "${PYTHON_BIN}" "${ROOT_DIR}/train.py" "${TRAIN_ARGS[@]}"
 fi
 
@@ -141,22 +151,28 @@ if [[ "${RUN_SAMPLE}" == "1" ]]; then
   fi
 
   echo "[sample] ckpt=${BEST_CKPT} out=${SAMPLE_OUT}"
-  "${PYTHON_BIN}" "${ROOT_DIR}/sample_lj.py" \
-    --mode relative \
-    --ckpt "${BEST_CKPT}" \
-    --Lx "${BOX_LENGTH}" \
-    --Ly "${BOX_LENGTH_Y}" \
-    --Lz "${BOX_LENGTH_Z}" \
-    --coord_dim "${DIM}" \
-    --num_particles "${NUM_PARTICLES}" \
-    --sample_mode "${SAMPLE_MODE}" \
-    --temperature "${TEMPERATURE}" \
-    --relative_window "${WINDOW}" \
-    --relative_bins "${BINS}" \
-    --nsamples "${SAMPLE_NSAMPLES}" \
-    --sample_batch_size "${SAMPLE_BATCH_SIZE}" \
-    --no-periodic \
-    --ar_arch "${AR_ARCH}" \
-    "${TOP_K_ARGS[@]}" \
+  SAMPLE_ARGS=(
+    --mode relative
+    --ckpt "${BEST_CKPT}"
+    --Lx "${BOX_LENGTH}"
+    --Ly "${BOX_LENGTH_Y}"
+    --Lz "${BOX_LENGTH_Z}"
+    --coord_dim "${DIM}"
+    --num_particles "${NUM_PARTICLES}"
+    --sample_mode "${SAMPLE_MODE}"
+    --temperature "${TEMPERATURE}"
+    --relative_window "${WINDOW}"
+    --relative_bins "${BINS}"
+    --nsamples "${SAMPLE_NSAMPLES}"
+    --sample_batch_size "${SAMPLE_BATCH_SIZE}"
+    --no-periodic
+    --ar_arch "${AR_ARCH}"
     --save "${SAMPLE_OUT}"
+  )
+  if [[ "${FACTORIZED}" == "1" ]]; then
+    SAMPLE_ARGS+=(--factorized)
+  fi
+  "${PYTHON_BIN}" "${ROOT_DIR}/sample_lj.py" \
+    "${SAMPLE_ARGS[@]}" \
+    "${TOP_K_ARGS[@]}"
 fi

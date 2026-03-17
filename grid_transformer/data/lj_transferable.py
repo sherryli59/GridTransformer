@@ -214,6 +214,7 @@ class RelativeDeltaTokenizer:
     dim: int = 2
     use_long_jump_token: bool = True
     long_jump_delta: Tuple[float, ...] = ()
+    factorized: bool = False
 
     def __post_init__(self) -> None:
         if int(self.dim) <= 0:
@@ -231,6 +232,8 @@ class RelativeDeltaTokenizer:
 
     @property
     def base_vocab_size(self) -> int:
+        if self.factorized:
+            return int(self.bins)
         return int(self.bins ** self.dim)
 
     @property
@@ -250,20 +253,26 @@ class RelativeDeltaTokenizer:
         b = int(self.bins)
         step = (2.0 * w) / float(b)
 
-        outside = np.any(np.abs(deltas) > w, axis=1)
         clipped = np.clip(deltas, -w, w)
         scaled = (clipped + w) / max(step, 1e-8)
         coords = np.floor(scaled).astype(np.int64)
         coords = np.clip(coords, 0, b - 1)
+
+        if self.factorized:
+            tokens = coords.flatten()
+            outside = (np.abs(deltas) > w).flatten()
+            if self.use_long_jump_token:
+                tokens[outside] = int(self.long_jump_id)
+            return tokens.astype(np.int64, copy=False), outside.astype(np.bool_, copy=False)
+
+        outside = np.any(np.abs(deltas) > w, axis=1)
         tokens = np.zeros((coords.shape[0],), dtype=np.int64)
         stride = 1
         for d in range(int(self.dim)):
             tokens += coords[:, d] * stride
             stride *= b
-
         if self.use_long_jump_token:
             tokens[outside] = int(self.long_jump_id)
-
         return tokens.astype(np.int64, copy=False), outside.astype(np.bool_, copy=False)
 
     def decode(self, token_ids: torch.LongTensor) -> torch.Tensor:
@@ -272,6 +281,30 @@ class RelativeDeltaTokenizer:
         b = int(self.bins)
         w = float(self.window)
         step = (2.0 * w) / float(b)
+
+        if self.factorized:
+            if token_ids.shape[-1] % int(self.dim) != 0:
+                raise ValueError(
+                    f"Factorized token_ids last dimension must be divisible by dim={self.dim}, "
+                    f"got shape {tuple(token_ids.shape)}"
+                )
+            flat = token_ids.reshape(-1).long()
+            long_mask = (
+                flat == int(self.long_jump_id)
+                if self.use_long_jump_token
+                else torch.zeros_like(flat, dtype=torch.bool)
+            )
+            if self.use_long_jump_token:
+                flat = flat.clamp(0, self.base_vocab_size - 1)
+
+            deltas_1d = -w + (flat.float() + 0.5) * step
+            if self.use_long_jump_token and long_mask.any():
+                deltas_1d[long_mask] = 0.0
+
+            shape = list(token_ids.shape)
+            shape[-1] = shape[-1] // int(self.dim)
+            shape.append(int(self.dim))
+            return deltas_1d.view(*shape)
 
         flat = token_ids.reshape(-1).long()
         long_mask = torch.zeros_like(flat, dtype=torch.bool)
@@ -303,7 +336,7 @@ class LJTransferableDataset(Dataset):
     Per-sample pipeline:
       1. Random global torus shift.
       2. Sort shifted particles (Hilbert or spectral/Fiedler ordering).
-      3. Minimum-image deltas between consecutive sorted positions.
+      3. Minimum-image deltas between consecutive sorted positions (N-1 deltas).
       4. Quantize each delta on a local [-W, +W]^D grid.
 
     Supports multiple H5 files with potentially different particle counts.
@@ -321,6 +354,7 @@ class LJTransferableDataset(Dataset):
         local_window: float = 3.0,
         local_bins: int = 64,
         use_long_jump_token: bool = True,
+        factorized: bool = False,
         random_grid_shift: bool = True,
         use_data_aug: bool = False,
         limit: Optional[int] = None,
@@ -344,9 +378,11 @@ class LJTransferableDataset(Dataset):
             bins=int(local_bins),
             dim=2,
             use_long_jump_token=bool(use_long_jump_token),
+            factorized=bool(factorized),
         )
         self.random_grid_shift = bool(random_grid_shift)
         self.use_data_aug = bool(use_data_aug)
+        self.factorized = bool(factorized)
         if (not self.periodic) and self.random_grid_shift:
             raise ValueError(
                 "random_grid_shift=True is only supported for periodic lj_transferable data. "
@@ -375,6 +411,7 @@ class LJTransferableDataset(Dataset):
                     bins=int(local_bins),
                     dim=int(dim),
                     use_long_jump_token=bool(use_long_jump_token),
+                    factorized=bool(factorized),
                 )
             elif int(dim) != int(self.coord_dim):
                 raise ValueError(
@@ -437,7 +474,6 @@ class LJTransferableDataset(Dataset):
         return np.clip(grid, 0, self.hilbert_resolution - 1)
 
     def _grid_coords_nonperiodic(self, coords: np.ndarray) -> np.ndarray:
-        # Anchor the ordering to COM=0 instead of the sample's minimum corner.
         extent = np.max(np.abs(coords), axis=0)
         extent = np.maximum(extent, 1e-8)
         shifted = (coords / (2.0 * extent[None, :])) + 0.5
@@ -450,11 +486,7 @@ class LJTransferableDataset(Dataset):
 
     def _hilbert_sort_nonperiodic(self, coords: np.ndarray) -> np.ndarray:
         grid = self._grid_coords_nonperiodic(coords)
-        order = np.argsort(self._space_filling_codes(grid), kind="stable")
-        # Make the origin/COM the start reference by starting at the closest particle to 0.
-        origin_idx = int(np.argmin(np.sum(coords * coords, axis=1)))
-        start_pos = int(np.where(order == origin_idx)[0][0])
-        return np.concatenate([order[start_pos:], order[:start_pos]], axis=0)
+        return np.argsort(self._space_filling_codes(grid), kind="stable")
 
     def _spectral_sort_periodic(self, coords: np.ndarray, box: np.ndarray) -> np.ndarray:
         coords_t = torch.from_numpy(coords).to(dtype=torch.float32).unsqueeze(0)
@@ -523,29 +555,40 @@ class LJTransferableDataset(Dataset):
                 order = self._spectral_sort_periodic(shifted, box=box)
             else:
                 order = self._spectral_sort_nonperiodic(shifted)
+                
         sorted_pos = shifted[order]
 
-        deltas = np.empty_like(sorted_pos, dtype=np.float32)
-        prev = np.zeros((int(self.coord_dim),), dtype=np.float32)
-        for i in range(sorted_pos.shape[0]):
-            raw = sorted_pos[i] - prev
-            deltas[i] = raw_delta(raw, box, periodic=self.periodic)
-            prev = sorted_pos[i]
+        # The first predicted token is always the displacement of sorted particle 1
+        # relative to sorted particle 0. Particle 0 itself is implicit.
+        n_predict = n_particles - 1
+        deltas = np.empty((n_predict, int(self.coord_dim)), dtype=np.float32)
+        for i in range(1, n_particles):
+            raw = sorted_pos[i] - sorted_pos[i-1]
+            deltas[i-1] = raw_delta(raw, box, periodic=self.periodic)
 
         token_ids_np, long_jump_mask_np = self.tokenizer.encode(deltas)
         token_ids = torch.from_numpy(token_ids_np).long()
 
-        sequence = torch.empty(n_particles + 1, dtype=torch.long)
+        seq_len = len(token_ids_np)
+        sequence = torch.empty(seq_len + 1, dtype=torch.long)
         sequence[0] = int(self.sos_id)
         sequence[1:] = token_ids
 
         input_idx = sequence[:-1].clone()
         target_idx = sequence[1:].clone()
 
-        # Prefix coordinates aligned to input_idx: [origin, p0, p1, ... p_{N-2}]
-        token_coords = np.zeros((n_particles, int(self.coord_dim)), dtype=np.float32)
-        if n_particles > 1:
-            token_coords[1:, :] = sorted_pos[:-1, :]
+        # Geometry context is expressed in the frame where sorted particle 0 sits at the
+        # origin. The final absolute location of particle 0 is recovered only after a
+        # full chain is generated and COM=0 is imposed.
+        if self.periodic:
+            shifted_coords = raw_delta(sorted_pos - sorted_pos[0], box, periodic=True)
+        else:
+            shifted_coords = sorted_pos - sorted_pos[0]
+
+        if self.tokenizer.factorized:
+            token_coords = np.repeat(shifted_coords[:-1], self.coord_dim, axis=0).astype(np.float32)
+        else:
+            token_coords = shifted_coords[:-1].astype(np.float32)
 
         density = float(n_particles / max(1e-8, float(np.prod(box, dtype=np.float64))))
 
@@ -558,7 +601,7 @@ class LJTransferableDataset(Dataset):
             "density": torch.tensor(density, dtype=torch.float32),
             "token_coords": torch.from_numpy(token_coords),
             "long_jump_mask": torch.from_numpy(long_jump_mask_np),
-            "sample_length": torch.tensor(n_particles, dtype=torch.long),
+            "sample_length": torch.tensor(seq_len, dtype=torch.long),
             "sos_id": torch.tensor(self.sos_id, dtype=torch.long),
             "vocab_size": torch.tensor(self.vocab_size, dtype=torch.long),
             "periodic": torch.tensor(self.periodic, dtype=torch.bool),
@@ -639,21 +682,22 @@ class LJTransferableCachedDataset(Dataset):
         self.metadata: dict[str, Any] = dict(payload.get("metadata", {}))
         self.periodic = bool(self.metadata.get("periodic", True))
         self.coord_dim = int(self.token_coords_all.shape[-1])
+        self.factorized = bool(self.metadata.get("factorized", False))
 
     def __len__(self) -> int:
         return int(self.sample_length_all.shape[0])
 
     def __getitem__(self, idx: int):
-        n_particles = int(self.sample_length_all[idx].item())
+        seq_len = int(self.sample_length_all[idx].item())
         return {
-            "sequence": self.sequence_all[idx, : n_particles + 1],
-            "input_idx": self.input_idx_all[idx, :n_particles],
-            "target_idx": self.target_idx_all[idx, :n_particles],
-            "seq": self.target_idx_all[idx, :n_particles],
+            "sequence": self.sequence_all[idx, : seq_len + 1],
+            "input_idx": self.input_idx_all[idx, :seq_len],
+            "target_idx": self.target_idx_all[idx, :seq_len],
+            "seq": self.target_idx_all[idx, :seq_len],
             "box_size": self.box_size_all[idx],
             "density": self.density_all[idx],
-            "token_coords": self.token_coords_all[idx, :n_particles, :],
-            "long_jump_mask": self.long_jump_mask_all[idx, :n_particles],
+            "token_coords": self.token_coords_all[idx, :seq_len, :],
+            "long_jump_mask": self.long_jump_mask_all[idx, :seq_len],
             "sample_length": self.sample_length_all[idx],
             "sos_id": torch.tensor(self.sos_id, dtype=torch.long),
             "vocab_size": torch.tensor(self.vocab_size, dtype=torch.long),
@@ -673,6 +717,7 @@ def build_lj_transferable_cache(
     local_window: float = 3.0,
     local_bins: int = 64,
     use_long_jump_token: bool = True,
+    factorized: bool = False,
     random_grid_shift: bool = False,
     limit: Optional[int] = None,
     seed: int = 0,
@@ -692,6 +737,7 @@ def build_lj_transferable_cache(
         local_window=float(local_window),
         local_bins=int(local_bins),
         use_long_jump_token=bool(use_long_jump_token),
+        factorized=bool(factorized),
         random_grid_shift=bool(random_grid_shift),
         limit=limit,
         seed=int(seed),
@@ -699,13 +745,17 @@ def build_lj_transferable_cache(
     n_samples = len(dataset)
     if n_samples <= 0:
         raise RuntimeError("No samples found for cache build.")
-    max_n = int(dataset.sample_lengths.max())
 
-    sequence = torch.empty((n_samples, max_n + 1), dtype=torch.long)
-    input_idx = torch.empty((n_samples, max_n), dtype=torch.long)
-    target_idx = torch.empty((n_samples, max_n), dtype=torch.long)
-    token_coords = torch.empty((n_samples, max_n, int(dataset.coord_dim)), dtype=torch.float32)
-    long_jump_mask = torch.empty((n_samples, max_n), dtype=torch.bool)
+    max_particles = int(dataset.sample_lengths.max())
+    max_seq_len = int(max(0, max_particles - 1))
+    if dataset.tokenizer.factorized:
+        max_seq_len *= int(dataset.coord_dim)
+
+    sequence = torch.empty((n_samples, max_seq_len + 1), dtype=torch.long)
+    input_idx = torch.empty((n_samples, max_seq_len), dtype=torch.long)
+    target_idx = torch.empty((n_samples, max_seq_len), dtype=torch.long)
+    token_coords = torch.empty((n_samples, max_seq_len, int(dataset.coord_dim)), dtype=torch.float32)
+    long_jump_mask = torch.empty((n_samples, max_seq_len), dtype=torch.bool)
     box_size = torch.empty((n_samples, int(dataset.coord_dim)), dtype=torch.float32)
     density = torch.empty((n_samples,), dtype=torch.float32)
     sample_length = torch.empty((n_samples,), dtype=torch.long)
@@ -738,10 +788,11 @@ def build_lj_transferable_cache(
         "local_bins": int(local_bins),
         "coord_dim": int(dataset.coord_dim),
         "use_long_jump_token": bool(use_long_jump_token),
+        "factorized": bool(factorized),
         "random_grid_shift": bool(random_grid_shift),
         "use_data_aug": False,
         "seed": int(seed),
-        "version": 3,
+        "version": 4,
     }
 
     payload = {
@@ -761,10 +812,12 @@ def build_lj_transferable_cache(
     return {
         "output_path": output_path,
         "n_samples": n_samples,
-        "max_particles": max_n,
+        "max_particles": max_particles,
+        "max_seq_len": max_seq_len,
         "vocab_size": int(dataset.vocab_size),
         "periodic": bool(periodic),
         "ordering": str(ordering),
+        "factorized": bool(factorized),
         "random_grid_shift": bool(random_grid_shift),
     }
 

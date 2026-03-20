@@ -9,6 +9,31 @@ import torch
 from torch.utils.data import Dataset
 
 
+def _is_power_of_two(v: int) -> bool:
+    return v > 0 and (v & (v - 1) == 0)
+
+
+def _hilbert_rot(side: int, x: int, y: int, rx: int, ry: int) -> tuple[int, int]:
+    if ry == 0:
+        if rx == 1:
+            x = side - 1 - x
+            y = side - 1 - y
+        x, y = y, x
+    return x, y
+
+
+def _hilbert_xy2d(side: int, x: int, y: int) -> int:
+    d = 0
+    s = side // 2
+    while s > 0:
+        rx = 1 if (x & s) else 0
+        ry = 1 if (y & s) else 0
+        d += s * s * ((3 * rx) ^ ry)
+        x, y = _hilbert_rot(s, x, y, rx, ry)
+        s //= 2
+    return d
+
+
 def _normalize_file_paths(
     file_paths: Optional[Sequence[str]] = None,
     *,
@@ -64,9 +89,8 @@ class LJAbsoluteDataset(Dataset):
     """
     LJ snapshots tokenized as absolute per-axis coordinate bins.
 
-    Each particle contributes two tokens: x-bin then y-bin.
-    The particle order is left intact so the model can learn with
-    particle-index permutations applied in the training step.
+    Each particle contributes two tokens: x-bin then y-bin. Particle order can
+    be left intact or replaced with a 2D Hilbert ordering before tokenization.
     """
 
     def __init__(
@@ -75,12 +99,22 @@ class LJAbsoluteDataset(Dataset):
         *,
         h5_path: Optional[str] = None,
         bins: int = 512,
+        ordering: str = "raw",
+        hilbert_resolution: int = 128,
         random_grid_shift: bool = False,
         limit: Optional[int] = None,
         seed: int = 0,
     ) -> None:
         self.file_paths = _normalize_file_paths(file_paths, h5_path=h5_path)
         self.tokenizer = AbsoluteCoordinateTokenizer(bins=int(bins))
+        self.ordering = str(ordering).strip().lower()
+        if self.ordering not in ("raw", "hilbert"):
+            raise ValueError(f"ordering must be 'raw' or 'hilbert', got {ordering!r}")
+        self.hilbert_resolution = int(hilbert_resolution)
+        if self.ordering == "hilbert" and not _is_power_of_two(self.hilbert_resolution):
+            raise ValueError(
+                f"hilbert_resolution must be a power of two, got {self.hilbert_resolution}"
+            )
         self.random_grid_shift = bool(random_grid_shift)
         self.rng = np.random.default_rng(int(seed))
 
@@ -147,6 +181,19 @@ class LJAbsoluteDataset(Dataset):
     def __len__(self) -> int:
         return int(self.sample_id_to_file_index.shape[0])
 
+    def _grid_coords_periodic(self, coords: np.ndarray, box: np.ndarray) -> np.ndarray:
+        wrapped = np.mod(coords, box[None, :])
+        scaled = (wrapped / np.maximum(box[None, :], 1e-8)) * float(self.hilbert_resolution)
+        grid = np.floor(scaled).astype(np.int64)
+        return np.clip(grid, 0, self.hilbert_resolution - 1)
+
+    def _hilbert_sort_periodic(self, coords: np.ndarray, box: np.ndarray) -> np.ndarray:
+        grid = self._grid_coords_periodic(coords, box)
+        codes = np.empty(grid.shape[0], dtype=np.int64)
+        for i in range(grid.shape[0]):
+            codes[i] = _hilbert_xy2d(self.hilbert_resolution, int(grid[i, 0]), int(grid[i, 1]))
+        return np.argsort(codes, kind="stable")
+
     def __getitem__(self, idx: int):
         file_idx = int(self.sample_id_to_file_index[idx])
         local_idx = int(self.sample_id_to_local_index[idx])
@@ -160,6 +207,9 @@ class LJAbsoluteDataset(Dataset):
             coords = np.mod(coords + shift[None, :], box[None, :])
         else:
             coords = np.mod(coords, box[None, :])
+
+        if self.ordering == "hilbert":
+            coords = coords[self._hilbert_sort_periodic(coords, box)]
 
         token_ids_np = self.tokenizer.encode(coords, box).reshape(-1)
         token_ids = torch.from_numpy(token_ids_np).long()

@@ -145,6 +145,12 @@ def parse_args() -> argparse.Namespace:
         help="Optional path to a preprocessed lj_transferable .pt cache file.",
     )
     parser.add_argument(
+        "--coord_dequant_width",
+        type=float,
+        default=0.0,
+        help="Optional training-time coordinate dequantization width. If 0, disable coordinate dequantization.",
+    )
+    parser.add_argument(
         "--lj_abs_bins",
         type=int,
         default=512,
@@ -154,6 +160,19 @@ def parse_args() -> argparse.Namespace:
         "--lj_abs_disable_random_shift",
         action="store_true",
         help="Disable random global torus shift augmentation for dataset=lj_abs.",
+    )
+    parser.add_argument(
+        "--lj_abs_ordering",
+        type=str,
+        choices=("raw", "hilbert"),
+        default="raw",
+        help="Particle ordering used before absolute-coordinate tokenization for dataset=lj_abs.",
+    )
+    parser.add_argument(
+        "--lj_abs_hilbert_resolution",
+        type=int,
+        default=128,
+        help="Hilbert grid resolution for dataset=lj_abs when --lj_abs_ordering=hilbert.",
     )
     parser.add_argument(
         "--vq_model",
@@ -269,6 +288,17 @@ def parse_args() -> argparse.Namespace:
         choices=("highest", "high", "medium"),
         help="torch.set_float32_matmul_precision setting (use high/medium for Tensor Cores).",
     )
+    parser.add_argument(
+        "--use_continuous_head",
+        action="store_true",
+        help="Use a continuous MDN output head for lj_transferable autoregressive training.",
+    )
+    parser.add_argument(
+        "--num_mixtures",
+        type=int,
+        default=32,
+        help="Number of Gaussian mixtures used by the continuous MDN head.",
+    )
     return parser.parse_args()
 
 
@@ -369,6 +399,8 @@ def build_data_module(args: argparse.Namespace):
         data_module = LJAbsoluteDataModule(
             data_path=data_path,
             bins=args.lj_abs_bins,
+            ordering=args.lj_abs_ordering,
+            hilbert_resolution=args.lj_abs_hilbert_resolution,
             random_grid_shift=(not args.lj_abs_disable_random_shift),
             batch_size=args.batch_size,
             seed=args.seed,
@@ -414,6 +446,11 @@ def main() -> None:
         raise ValueError("--use_rbf_bias and --use_deep_ida are mutually exclusive.")
     if args.ar_permute_group_size <= 0:
         raise ValueError("--ar_permute_group_size must be positive.")
+    if args.use_continuous_head:
+        if args.dataset != "lj_transferable":
+            raise ValueError("--use_continuous_head is only supported with --dataset lj_transferable.")
+        if args.lj_transfer_factorized:
+            raise ValueError("--use_continuous_head currently requires non-factorized lj_transferable training.")
 
     pl.seed_everything(args.seed, workers=True)
     os.makedirs(args.ckpt_dir, exist_ok=True)
@@ -439,7 +476,7 @@ def main() -> None:
             d_model = int(args.dim)
             id_coord_mode = None
             cell_grid_size = None
-            coord_dequant_width = (2.0 * float(args.lj_transfer_window)) / float(max(1, int(args.lj_transfer_bins)))
+            coord_dequant_width = 0.0
             torus = bool(args.lj_transfer_periodic)
             use_density_cond = False
             use_pos_emb = False
@@ -464,6 +501,8 @@ def main() -> None:
             use_density_cond = False
             use_pos_emb = base_use_pos_emb
             use_rope = False
+        if float(args.coord_dequant_width) > 0.0:
+            coord_dequant_width = float(args.coord_dequant_width)
         ar_arch = resolve_ar_arch(args.ar_arch, use_ida=bool(args.use_ida))
         if ar_arch == "ida":
             spatial_dim = int(model_info.get("coord_dim", args.ar_ida_spatial_dim))
@@ -488,6 +527,8 @@ def main() -> None:
                 use_density_cond=use_density_cond,
                 use_rope=use_rope,
                 rope_max_period=args.ar_rope_max_period,
+                use_continuous_head=bool(args.use_continuous_head),
+                num_mixtures=int(args.num_mixtures),
             )
         elif ar_arch == "standard":
             lit_module = GraphormerARStd(
@@ -517,8 +558,12 @@ def main() -> None:
                 use_density_cond=use_density_cond,
                 use_rope=use_rope,
                 rope_max_period=args.ar_rope_max_period,
+                use_continuous_head=bool(args.use_continuous_head),
+                num_mixtures=int(args.num_mixtures),
             )
         elif ar_arch == "vanilla":
+            if args.use_continuous_head:
+                raise ValueError("--use_continuous_head is not supported with --ar_arch vanilla.")
             lit_module = VanillaTransformerAR(
                 K=codebook_size,
                 d_model=d_model,

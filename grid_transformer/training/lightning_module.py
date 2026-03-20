@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import glob
 import os
+import warnings
 from typing import Any, Dict, Optional, Sequence
 
 import torch
@@ -400,10 +401,12 @@ class LJTransferableDataModule(pl.LightningDataModule):
         self.drop_last = bool(drop_last)
         self.preprocessed_path = preprocessed_path
         if self.preprocessed_path is not None and self.random_grid_shift:
-            raise ValueError(
+            warnings.warn(
                 "preprocessed_path is set, but random_grid_shift=True. "
-                "Cached datasets have fixed ordering/shift; disable random shift for cached training."
+                "Cached datasets have fixed ordering/shift; disabling random_grid_shift for cached training.",
+                stacklevel=2,
             )
+            self.random_grid_shift = False
         if self.preprocessed_path is not None and self.use_data_aug:
             raise ValueError(
                 "preprocessed_path is set, but use_data_aug=True. "
@@ -526,6 +529,8 @@ class LJAbsoluteDataModule(pl.LightningDataModule):
         self,
         data_path: str | Sequence[str] = "/mnt/ssd/mcmc/lj_N16_T1.h5",
         bins: int = 512,
+        ordering: str = "raw",
+        hilbert_resolution: int = 128,
         random_grid_shift: bool = False,
         batch_size: int = 128,
         seed: int = 0,
@@ -536,6 +541,8 @@ class LJAbsoluteDataModule(pl.LightningDataModule):
         super().__init__()
         self.data_path = data_path
         self.bins = int(bins)
+        self.ordering = str(ordering).strip().lower()
+        self.hilbert_resolution = int(hilbert_resolution)
         self.random_grid_shift = bool(random_grid_shift)
         self.batch_size = batch_size
         self.seed = int(seed)
@@ -556,6 +563,8 @@ class LJAbsoluteDataModule(pl.LightningDataModule):
             self._train_ds = LJAbsoluteDataset(
                 file_paths=data_paths,
                 bins=self.bins,
+                ordering=self.ordering,
+                hilbert_resolution=self.hilbert_resolution,
                 random_grid_shift=self.random_grid_shift,
                 limit=self.train_limit,
                 seed=self.seed,

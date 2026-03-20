@@ -8,6 +8,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from ..training.ar import MDNHead, mdn_loss
 # Assuming wrap_min_image and id_to_center_xyz are in your spatial utils
 from ..utils.spatial import id_to_center_xyz, wrap_min_image
 
@@ -132,6 +133,8 @@ class GraphormerAR(pl.LightningModule):
         use_density_cond: bool = False,
         use_rope: bool = False,
         rope_max_period: float = 10000.0,
+        use_continuous_head: bool = False,
+        num_mixtures: int = 32,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -152,6 +155,9 @@ class GraphormerAR(pl.LightningModule):
         self.torus = bool(torus)
         self.coord_dequantize_train = bool(coord_dequantize_train)
         self.coord_dequant_width = max(float(coord_dequant_width), 0.0)
+        self.use_continuous_head = bool(use_continuous_head)
+        self.output_spatial_dim = int(spatial_dim)
+        self.num_mixtures = int(num_mixtures)
         
         # Initialize PeriodicIDA instead of EdgeBias
         if self.use_ida:
@@ -193,7 +199,14 @@ class GraphormerAR(pl.LightningModule):
             ]
         )
         self.ln_f = nn.LayerNorm(d_model)
-        self.head = nn.Linear(d_model, K)
+        if self.use_continuous_head:
+            self.head = MDNHead(
+                d_model=d_model,
+                spatial_dim=self.output_spatial_dim,
+                num_mixtures=self.num_mixtures,
+            )
+        else:
+            self.head = nn.Linear(d_model, K)
 
     def on_fit_start(self) -> None:
         dm = self.trainer.datamodule
@@ -277,7 +290,7 @@ class GraphormerAR(pl.LightningModule):
         box_size: Optional[torch.Tensor] = None,
         density: Optional[torch.Tensor] = None,
         pad_mask: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         B, T = seq_in.shape
         if self.use_pos_emb:
             assert self.pos_emb is not None
@@ -355,6 +368,8 @@ class GraphormerAR(pl.LightningModule):
         seq_in: Optional[torch.LongTensor] = None,
         logits: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
+        if self.use_continuous_head:
+            raise NotImplementedError("nll() is only implemented for the discrete classification head.")
         if seq_in is None:
             seq_in = self._shift_with_sos(seq)
         if logits is None:
@@ -394,32 +409,52 @@ class GraphormerAR(pl.LightningModule):
             pad = pad.bool()
 
         coords = self._apply_training_coord_dequantization(coords, box_size)
-        logits = self.forward(seq_in, coords=coords, box_size=box_size, density=density, pad_mask=pad)
-        tok_nll = F.cross_entropy(
-            logits.reshape(-1, self.K),
-            seq.reshape(-1),
-            reduction="none",
-        ).view_as(seq).float()  # [B,T], differentiable
-        
-        if pad is not None:
-            tok_nll = tok_nll.masked_fill(pad, 0.0)
-            tok_count = (~pad).sum(dim=1).to(tok_nll.dtype).clamp_min(1.0)
-        else:
-            tok_count = torch.full(
-                (seq.size(0),),
-                fill_value=seq.size(1),
-                device=seq.device,
-                dtype=tok_nll.dtype,
+        outputs = self.forward(seq_in, coords=coords, box_size=box_size, density=density, pad_mask=pad)
+        if self.use_continuous_head:
+            deltas = batch.get("deltas")
+            if deltas is None:
+                raise KeyError("Continuous head requires batch['deltas'] targets.")
+            deltas = deltas.to(self.device, dtype=torch.float32)
+            log_pi, mu, sigma = outputs
+            if deltas.shape[:2] != log_pi.shape[:2]:
+                raise ValueError(
+                    f"Continuous delta targets shape {tuple(deltas.shape)} does not match "
+                    f"model outputs {tuple(log_pi.shape)}. Continuous head currently requires "
+                    "non-factorized lj_transferable inputs."
+                )
+            loss, seq_nll_exact, coord_count = mdn_loss(
+                log_pi,
+                mu,
+                sigma,
+                deltas,
+                pad_mask=pad,
             )
-        seq_nll_train = tok_nll.sum(dim=1)
-        loss = (seq_nll_train / tok_count).mean()
-        seq_nll_exact = seq_nll_train.detach()
+        else:
+            logits = outputs
+            tok_nll = F.cross_entropy(
+                logits.reshape(-1, self.K),
+                seq.reshape(-1),
+                reduction="none",
+            ).view_as(seq).float()  # [B,T], differentiable
+            if pad is not None:
+                tok_nll = tok_nll.masked_fill(pad, 0.0)
+                coord_count = (~pad).sum(dim=1).to(tok_nll.dtype).clamp_min(1.0)
+            else:
+                coord_count = torch.full(
+                    (seq.size(0),),
+                    fill_value=seq.size(1),
+                    device=seq.device,
+                    dtype=tok_nll.dtype,
+                )
+            seq_nll_train = tok_nll.sum(dim=1)
+            loss = (seq_nll_train / coord_count).mean()
+            seq_nll_exact = seq_nll_train.detach()
         
         self.log("train/loss", loss, prog_bar=True, on_step=True, on_epoch=True, batch_size=seq.size(0))
         self.log("train/nll", seq_nll_exact.mean(), prog_bar=True, on_step=True, on_epoch=True, batch_size=seq.size(0))
         self.log(
             "train/bpd",
-            (seq_nll_exact / (tok_count * torch.log(torch.tensor(2.0, device=seq_nll_exact.device)))).mean(),
+            (seq_nll_exact / (coord_count * torch.log(torch.tensor(2.0, device=seq_nll_exact.device)))).mean(),
             on_step=True,
             on_epoch=True,
             batch_size=seq.size(0),

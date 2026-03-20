@@ -110,6 +110,85 @@ def _sampling_log_probs(
     return F.log_softmax(scaled_logits, dim=-1)
 
 
+def _gmm_log_prob(
+    log_pi: torch.Tensor,
+    mu: torch.Tensor,
+    sigma: torch.Tensor,
+    target: torch.Tensor,
+) -> torch.Tensor:
+    if log_pi.ndim != 2 or mu.ndim != 3 or sigma.ndim != 3 or target.ndim != 2:
+        raise ValueError(
+            "Expected log_pi [B,M], mu/sigma [B,M,D], target [B,D] for GMM log-prob evaluation."
+        )
+    sigma = sigma.clamp_min(1e-8)
+    target_exp = target.unsqueeze(1)
+    log_sigma = torch.log(sigma)
+    sq = ((target_exp - mu) / sigma) ** 2
+    log_norm = -0.5 * (sq + 2.0 * log_sigma + math.log(2.0 * math.pi))
+    comp_log_prob = log_norm.sum(dim=-1)
+    return torch.logsumexp(log_pi + comp_log_prob, dim=-1)
+
+
+def _encode_relative_delta_context(
+    delta: torch.Tensor,
+    tokenizer: RelativeDeltaTokenizer,
+) -> torch.LongTensor:
+    if tokenizer.factorized:
+        raise ValueError("Continuous-head sampling currently requires a non-factorized tokenizer.")
+    if delta.ndim != 2 or delta.shape[-1] != int(tokenizer.dim):
+        raise ValueError(f"delta must be [B,{tokenizer.dim}], got {tuple(delta.shape)}")
+
+    w = float(tokenizer.window)
+    b = int(tokenizer.bins)
+    step = (2.0 * w) / float(b)
+    clipped = delta.clamp(min=-w, max=w)
+    coords = torch.floor((clipped + w) / max(step, 1e-8)).long().clamp_(0, b - 1)
+
+    tokens = torch.zeros((delta.shape[0],), dtype=torch.long, device=delta.device)
+    stride = 1
+    for d in range(int(tokenizer.dim)):
+        tokens += coords[:, d] * stride
+        stride *= b
+
+    if tokenizer.use_long_jump_token:
+        outside = (delta.abs() > w).any(dim=-1)
+        tokens = torch.where(
+            outside,
+            torch.full_like(tokens, int(tokenizer.long_jump_id)),
+            tokens,
+        )
+    return tokens
+
+
+def _infer_relative_tokenizer_settings(
+    *,
+    K: int,
+    bins: int,
+    coord_dim: int,
+    requested_factorized: bool,
+    requested_use_long_jump: bool,
+) -> tuple[bool, bool]:
+    candidates: list[tuple[bool, bool]] = []
+    for factorized in (False, True):
+        base_vocab = int(bins) if factorized else int(bins) ** int(coord_dim)
+        for use_long_jump in (False, True):
+            vocab_size = base_vocab + (1 if use_long_jump else 0)
+            if vocab_size == int(K):
+                candidates.append((factorized, use_long_jump))
+
+    if not candidates:
+        return bool(requested_factorized), bool(requested_use_long_jump)
+
+    requested = (bool(requested_factorized), bool(requested_use_long_jump))
+    if requested in candidates:
+        return requested
+
+    if len(candidates) == 1:
+        return candidates[0]
+
+    return requested
+
+
 @torch.no_grad()
 def autoregressive_unique_hilbert_sample(
     model: torch.nn.Module,
@@ -236,11 +315,15 @@ def autoregressive_relative_delta_sample(
     generator: Optional[torch.Generator] = None,
     density: Optional[float] = None,
     periodic: bool = True,
+    use_continuous_head: bool = False,
+    continuous_sigma_floor: float = 0.0,
 ) -> dict[str, torch.Tensor]:
     if n_particles <= 1:
         raise ValueError(f"n_particles must be > 1, got {n_particles}")
     if nsamples <= 0:
         raise ValueError(f"nsamples must be positive, got {nsamples}")
+    if float(continuous_sigma_floor) < 0.0:
+        raise ValueError(f"continuous_sigma_floor must be >= 0, got {continuous_sigma_floor}")
 
     device = next(model.parameters()).device
     K = int(model.K)
@@ -282,6 +365,8 @@ def autoregressive_relative_delta_sample(
 
     n_predict_particles = n_particles - 1
     factorized = bool(getattr(tokenizer, "factorized", False))
+    if use_continuous_head and factorized:
+        raise ValueError("Continuous-head sampling currently requires a non-factorized tokenizer.")
     n_predict_tokens = n_predict_particles * coord_dim if factorized else n_predict_particles
 
     seq_out = torch.empty((nsamples, n_predict_tokens), dtype=torch.long, device=device)
@@ -294,6 +379,7 @@ def autoregressive_relative_delta_sample(
     x_base = torch.zeros((nsamples, n_particles, coord_dim), dtype=torch.float32, device=device)
     deltas = torch.zeros((nsamples, n_predict_particles, coord_dim), dtype=torch.float32, device=device)
     logp_discrete = torch.zeros((nsamples,), dtype=torch.float32, device=device)
+    logp_continuous = torch.zeros((nsamples,), dtype=torch.float32, device=device) if use_continuous_head else None
 
     for t in range(n_predict_tokens):
         if factorized:
@@ -302,42 +388,80 @@ def autoregressive_relative_delta_sample(
         else:
             coords_in = x_base[:, : t + 1, :].clone()
 
-        logits = model(
+        outputs = model(
             seq_in[:, : t + 1],
             coords=coords_in,
             box_size=box_size,
             density=density_tensor,
-        )[:, -1, :]
-        
-        log_probs = _sampling_log_probs(logits, temperature=temperature, top_k=top_k)
-        if sample_mode == "argmax":
-            nxt = log_probs.argmax(dim=-1)
-        elif sample_mode == "multinomial":
-            probs = torch.exp(log_probs)
-            nxt = torch.multinomial(probs, num_samples=1, generator=gen).squeeze(1)
-        else:
-            raise ValueError(f"Unknown sample_mode '{sample_mode}'")
+        )
 
-        seq_out[:, t] = nxt
-        logp_discrete += log_probs.gather(1, nxt.unsqueeze(1)).squeeze(1)
+        if use_continuous_head:
+            log_pi_all, mu_all, sigma_all = outputs
+            log_pi_t = log_pi_all[:, -1, :]
+            mu_t = mu_all[:, -1, :, :]
+            sigma_t = sigma_all[:, -1, :, :]
+            sigma_sample = sigma_t * math.sqrt(float(temperature))
+            if float(continuous_sigma_floor) > 0.0:
+                sigma_sample = sigma_sample.clamp_min(float(continuous_sigma_floor))
+            log_pi_sample = F.log_softmax(log_pi_t / float(temperature), dim=-1)
 
-        if factorized:
-            if t % coord_dim == coord_dim - 1:
-                particle_tokens = seq_out[:, t - coord_dim + 1 : t + 1]
-                delta_t = tokenizer.decode(particle_tokens).squeeze(1).to(device=device, dtype=torch.float32)
-                p_idx = (t // coord_dim) + 1
-                raw_pos = x_base[:, p_idx - 1, :] + delta_t
-                if periodic:
-                    raw_pos = raw_pos - box_size * torch.round(raw_pos / box_size.clamp_min(1e-8))
-                deltas[:, p_idx - 1, :] = delta_t
-                x_base[:, p_idx, :] = raw_pos
-        else:
-            delta_t = tokenizer.decode(nxt).to(device=device, dtype=torch.float32)
+            if sample_mode == "argmax":
+                chosen_mix_idx = log_pi_sample.argmax(dim=-1)
+            elif sample_mode == "multinomial":
+                mix_probs = torch.exp(log_pi_sample)
+                chosen_mix_idx = torch.multinomial(mix_probs, num_samples=1, generator=gen).squeeze(1)
+            else:
+                raise ValueError(f"Unknown sample_mode '{sample_mode}'")
+
+            gather_idx = chosen_mix_idx[:, None, None].expand(-1, 1, coord_dim)
+            chosen_mu = mu_t.gather(1, gather_idx).squeeze(1)
+            chosen_sigma = sigma_sample.gather(1, gather_idx).squeeze(1)
+            if sample_mode == "argmax":
+                delta_t = chosen_mu
+            else:
+                noise = torch.randn(chosen_mu.shape, device=device, generator=gen, dtype=chosen_mu.dtype)
+                delta_t = chosen_mu + chosen_sigma * noise
+
+            nxt = _encode_relative_delta_context(delta_t, tokenizer)
+            seq_out[:, t] = nxt
+            assert logp_continuous is not None
+            logp_continuous += _gmm_log_prob(log_pi_sample, mu_t, sigma_sample, delta_t)
             raw_pos = x_base[:, t, :] + delta_t
             if periodic:
                 raw_pos = raw_pos - box_size * torch.round(raw_pos / box_size.clamp_min(1e-8))
             deltas[:, t, :] = delta_t
             x_base[:, t + 1, :] = raw_pos
+        else:
+            logits = outputs[:, -1, :]
+            log_probs = _sampling_log_probs(logits, temperature=temperature, top_k=top_k)
+            if sample_mode == "argmax":
+                nxt = log_probs.argmax(dim=-1)
+            elif sample_mode == "multinomial":
+                probs = torch.exp(log_probs)
+                nxt = torch.multinomial(probs, num_samples=1, generator=gen).squeeze(1)
+            else:
+                raise ValueError(f"Unknown sample_mode '{sample_mode}'")
+
+            seq_out[:, t] = nxt
+            logp_discrete += log_probs.gather(1, nxt.unsqueeze(1)).squeeze(1)
+
+            if factorized:
+                if t % coord_dim == coord_dim - 1:
+                    particle_tokens = seq_out[:, t - coord_dim + 1 : t + 1]
+                    delta_t = tokenizer.decode(particle_tokens).squeeze(1).to(device=device, dtype=torch.float32)
+                    p_idx = (t // coord_dim) + 1
+                    raw_pos = x_base[:, p_idx - 1, :] + delta_t
+                    if periodic:
+                        raw_pos = raw_pos - box_size * torch.round(raw_pos / box_size.clamp_min(1e-8))
+                    deltas[:, p_idx - 1, :] = delta_t
+                    x_base[:, p_idx, :] = raw_pos
+            else:
+                delta_t = tokenizer.decode(nxt).to(device=device, dtype=torch.float32)
+                raw_pos = x_base[:, t, :] + delta_t
+                if periodic:
+                    raw_pos = raw_pos - box_size * torch.round(raw_pos / box_size.clamp_min(1e-8))
+                deltas[:, t, :] = delta_t
+                x_base[:, t + 1, :] = raw_pos
 
         if t + 1 < n_predict_tokens:
             seq_in[:, t + 1] = nxt
@@ -348,15 +472,24 @@ def autoregressive_relative_delta_sample(
     
     if periodic:
         # Wrap final coordinates back into the primary simulation box [-L/2, L/2]
-        final_positions = torch.remainder(final_positions + box_size/2, box_size) - box_size/2
+        box_size_particles = box_size[:, None, :]
+        final_positions = (
+            torch.remainder(final_positions + box_size_particles / 2, box_size_particles)
+            - box_size_particles / 2
+        )
 
-    return {
+    out = {
         "token_ids": seq_out,
         "x_base": final_positions, # Returns fully formed (B, N, 3) geometry
         "deltas": deltas,          # Returns (B, N-1, 3) relative jumps
-        "logp_discrete": logp_discrete,
         "density": torch.tensor(rho, dtype=torch.float32, device=device),
     }
+    if use_continuous_head:
+        assert logp_continuous is not None
+        out["logp_continuous"] = logp_continuous
+    else:
+        out["logp_discrete"] = logp_discrete
+    return out
 
 
 @torch.no_grad()
@@ -503,6 +636,17 @@ def parse_args() -> argparse.Namespace:
         help="Enable 1D sequential x,y,z tokenization.",
     )
     ap.add_argument(
+        "--use_continuous_head",
+        action="store_true",
+        help="Force continuous-head relative sampling. If omitted, checkpoint metadata is used.",
+    )
+    ap.add_argument(
+        "--continuous_sigma_floor",
+        type=float,
+        default=0.0,
+        help="Optional minimum stddev floor for continuous-head sampling/log-prob evaluation.",
+    )
+    ap.add_argument(
         "--abs_bins",
         type=int,
         default=None,
@@ -541,7 +685,13 @@ def main() -> None:
         ar_arch=str(args.ar_arch),
         use_ida=bool(args.use_ida),
     )
+    ckpt_uses_continuous_head = bool(getattr(model, "use_continuous_head", False))
+    if args.use_continuous_head and (not ckpt_uses_continuous_head):
+        raise ValueError("Checkpoint was not trained with a continuous head.")
+    use_continuous_head = bool(args.use_continuous_head) or ckpt_uses_continuous_head
     K = int(model.K)
+    if use_continuous_head and args.mode != "relative":
+        raise ValueError("Continuous-head sampling is only supported with --mode relative.")
     periodic = bool(args.periodic) if args.periodic is not None else bool(getattr(model, "torus", True))
     inferred_coord_dim = args.coord_dim
     if inferred_coord_dim is None:
@@ -637,12 +787,34 @@ def main() -> None:
         print(f"Mean logp_base:     {out['logp_base'].mean().item():.6f}")
         return
 
+    requested_factorized = bool(args.factorized)
+    requested_use_long_jump = not bool(args.relative_no_long_jump)
+    resolved_factorized, resolved_use_long_jump = _infer_relative_tokenizer_settings(
+        K=K,
+        bins=int(args.relative_bins),
+        coord_dim=coord_dim,
+        requested_factorized=requested_factorized,
+        requested_use_long_jump=requested_use_long_jump,
+    )
+    if resolved_factorized != requested_factorized:
+        print(
+            f"Note: overriding factorized={requested_factorized} with factorized={resolved_factorized} "
+            f"to match checkpoint vocab K={K}."
+        )
+    if resolved_use_long_jump != requested_use_long_jump:
+        print(
+            f"Note: overriding use_long_jump={requested_use_long_jump} with use_long_jump={resolved_use_long_jump} "
+            f"to match checkpoint vocab K={K}."
+        )
+    if use_continuous_head and resolved_factorized:
+        raise ValueError("Continuous-head sampling currently requires a non-factorized checkpoint/tokenizer.")
+
     tokenizer = RelativeDeltaTokenizer(
         window=float(args.relative_window),
         bins=int(args.relative_bins),
         dim=coord_dim,
-        use_long_jump_token=(not args.relative_no_long_jump),
-        factorized=bool(args.factorized),
+        use_long_jump_token=bool(resolved_use_long_jump),
+        factorized=bool(resolved_factorized),
     )
 
     if args.mode == "abs":
@@ -714,6 +886,8 @@ def main() -> None:
             generator=shared_gen,
             density=args.density,
             periodic=periodic,
+            use_continuous_head=use_continuous_head,
+            continuous_sigma_floor=float(args.continuous_sigma_floor),
         )
         chunks.append(out_chunk)
         done += bsz
@@ -722,39 +896,51 @@ def main() -> None:
         "token_ids": torch.cat([c["token_ids"] for c in chunks], dim=0),
         "x_base": torch.cat([c["x_base"] for c in chunks], dim=0),
         "deltas": torch.cat([c["deltas"] for c in chunks], dim=0),
-        "logp_discrete": torch.cat([c["logp_discrete"] for c in chunks], dim=0),
         "density": chunks[0]["density"],
     }
+    if use_continuous_head:
+        out["logp_continuous"] = torch.cat([c["logp_continuous"] for c in chunks], dim=0)
+    else:
+        out["logp_discrete"] = torch.cat([c["logp_discrete"] for c in chunks], dim=0)
 
     os.makedirs(os.path.dirname(os.path.abspath(args.save)), exist_ok=True)
-    np.savez(
-        args.save,
+    save_kwargs = dict(
         mode=np.array(args.mode),
         token_ids=out["token_ids"].cpu().numpy().astype(np.int32),
         x_base=out["x_base"].cpu().numpy().astype(np.float32),
         deltas=out["deltas"].cpu().numpy().astype(np.float32),
-        logp_discrete=out["logp_discrete"].cpu().numpy().astype(np.float32),
         rho=np.array(float(out["density"].item()), dtype=np.float32),
         K=np.array(K, dtype=np.int32),
         N=np.array(target_n, dtype=np.int32),
         L=np.array(box_lengths, dtype=np.float32),
         window=np.array(float(args.relative_window), dtype=np.float32),
         bins=np.array(int(args.relative_bins), dtype=np.int32),
-        use_long_jump=np.array(int(not args.relative_no_long_jump), dtype=np.int32),
-        factorized=np.array(int(bool(args.factorized)), dtype=np.int32),
+        use_long_jump=np.array(int(bool(resolved_use_long_jump)), dtype=np.int32),
+        factorized=np.array(int(bool(resolved_factorized)), dtype=np.int32),
         periodic=np.array(int(periodic), dtype=np.int32),
         temperature=np.array(args.temperature, dtype=np.float32),
         sample_mode=np.array(args.sample_mode),
         top_k=np.array(-1 if args.top_k is None else int(args.top_k), dtype=np.int32),
         ar_arch=np.array(resolved_arch),
+        use_continuous_head=np.array(int(use_continuous_head), dtype=np.int32),
+        continuous_sigma_floor=np.array(float(args.continuous_sigma_floor), dtype=np.float32),
     )
+    if use_continuous_head:
+        save_kwargs["logp_continuous"] = out["logp_continuous"].cpu().numpy().astype(np.float32)
+    else:
+        save_kwargs["logp_discrete"] = out["logp_discrete"].cpu().numpy().astype(np.float32)
+    np.savez(args.save, **save_kwargs)
 
     print(
         f"Saved {args.save} (mode=relative, nsamples={args.nsamples}, N={target_n}, "
-        f"K={K}, bins={args.relative_bins}, window={args.relative_window}, factorized={bool(args.factorized)}, periodic={periodic}, "
-        f"ar_arch={resolved_arch})"
+        f"K={K}, bins={args.relative_bins}, window={args.relative_window}, factorized={bool(resolved_factorized)}, "
+        f"continuous_head={use_continuous_head}, sigma_floor={float(args.continuous_sigma_floor):.4f}, "
+        f"periodic={periodic}, ar_arch={resolved_arch})"
     )
-    print(f"Mean logp_discrete: {out['logp_discrete'].mean().item():.6f}")
+    if use_continuous_head:
+        print(f"Mean logp_continuous: {out['logp_continuous'].mean().item():.6f}")
+    else:
+        print(f"Mean logp_discrete: {out['logp_discrete'].mean().item():.6f}")
 
 
 if __name__ == "__main__":

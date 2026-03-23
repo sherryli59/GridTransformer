@@ -42,7 +42,7 @@ elif [[ "${USE_COORD_DEQUANT}" == "1" ]]; then
   echo "[train] discrete head dequant width: ${DEQUANT_WIDTH}"
 fi
 
-EPOCHS="${EPOCHS:-200}"
+EPOCHS="${EPOCHS:-500}"
 BATCH_SIZE="${BATCH_SIZE:-512}"
 LR="${LR:-1e-3}"
 NUM_WORKERS="${NUM_WORKERS:-0}"

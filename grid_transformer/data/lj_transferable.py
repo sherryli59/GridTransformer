@@ -147,6 +147,15 @@ def _center_coords_to_com_zero(coords: np.ndarray) -> np.ndarray:
     return coords - coords.mean(axis=-2, keepdims=True)
 
 
+def _repeat_factorized_token_coords(
+    token_coords: np.ndarray,
+    *,
+    coord_dim: int,
+) -> np.ndarray:
+    axis_to_repeat = 1 if token_coords.ndim == 3 else 0
+    return np.repeat(token_coords, int(coord_dim), axis=axis_to_repeat)
+
+
 def _compute_lj_energy_batch(
     coords: np.ndarray,
     *,
@@ -663,10 +672,15 @@ class LJTransferableDataset(Dataset):
         else:
             shifted_coords = sorted_pos - sorted_pos[0]
 
+        token_coords = shifted_coords[:-1]
         if self.tokenizer.factorized:
-            token_coords = np.repeat(shifted_coords[:-1], self.coord_dim, axis=0).astype(np.float32)
-        else:
-            token_coords = shifted_coords[:-1].astype(np.float32)
+            token_coords = _repeat_factorized_token_coords(token_coords, coord_dim=self.coord_dim)
+        token_coords = token_coords.astype(np.float32, copy=False)
+        if int(token_coords.shape[0]) != int(target_idx.shape[0]):
+            raise ValueError(
+                f"token_coords length {token_coords.shape[0]} does not match target_idx length "
+                f"{target_idx.shape[0]} for factorized={self.tokenizer.factorized}."
+            )
 
         density = float(n_particles / max(1e-8, float(np.prod(box, dtype=np.float64))))
         max_abs_relative_displacement = float(np.max(np.abs(deltas))) if deltas.size > 0 else 0.0
@@ -740,11 +754,15 @@ class LJTransferableDataset(Dataset):
         else:
             shifted_coords = sorted_pos - sorted_pos[:, 0:1, :]
 
+        token_coords = shifted_coords[:, :-1, :]
         if self.tokenizer.factorized:
-            token_coords = np.repeat(shifted_coords[:, :-1, :], self.coord_dim, axis=1)
-        else:
-            token_coords = shifted_coords[:, :-1, :]
+            token_coords = _repeat_factorized_token_coords(token_coords, coord_dim=self.coord_dim)
         token_coords = token_coords.astype(np.float32, copy=False)
+        if int(token_coords.shape[1]) != int(target_idx.shape[1]):
+            raise ValueError(
+                f"token_coords length {token_coords.shape[1]} does not match target_idx length "
+                f"{target_idx.shape[1]} for factorized={self.tokenizer.factorized}."
+            )
 
         density = np.full(
             (batch_size,),

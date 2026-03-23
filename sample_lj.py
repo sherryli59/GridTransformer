@@ -383,8 +383,8 @@ def autoregressive_relative_delta_sample(
 
     for t in range(n_predict_tokens):
         if factorized:
-            x_base_rep = torch.repeat_interleave(x_base, coord_dim, dim=1)
-            coords_in = x_base_rep[:, : t + 1, :].clone()
+            anchor_ids = torch.arange(t + 1, device=device) // coord_dim
+            coords_in = x_base.index_select(1, anchor_ids).clone()
         else:
             coords_in = x_base[:, : t + 1, :].clone()
 

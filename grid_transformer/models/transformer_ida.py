@@ -133,6 +133,7 @@ class GraphormerAR(pl.LightningModule):
         use_density_cond: bool = False,
         use_rope: bool = False,
         rope_max_period: float = 10000.0,
+        is_factorized: bool = False,
         use_continuous_head: bool = False,
         num_mixtures: int = 32,
         lambda_var: float = 0.0,
@@ -156,8 +157,10 @@ class GraphormerAR(pl.LightningModule):
         self.tok_emb = nn.Embedding(in_vocab, d_model)
         self.use_pos_emb = bool(use_pos_emb)
         self.use_density_cond = bool(use_density_cond)
+        self.is_factorized = bool(is_factorized)
         self.pos_emb = nn.Embedding(4096, d_model) if self.use_pos_emb else None
         self.density_emb = nn.Linear(1, d_model) if self.use_density_cond else None
+        self.axis_emb = nn.Embedding(3, d_model) if self.is_factorized else None
 
         self.use_ida = bool(use_ida)
         self.torus = bool(torus)
@@ -310,6 +313,11 @@ class GraphormerAR(pl.LightningModule):
             x = self.tok_emb(seq_in) + self.pos_emb(pos)[None, :, :]
         else:
             x = self.tok_emb(seq_in)
+
+        if self.is_factorized:
+            assert self.axis_emb is not None
+            axis_ids = torch.arange(T, device=seq_in.device) % 3
+            x = x + self.axis_emb(axis_ids)[None, :, :]
 
         if self.use_density_cond:
             if density is None:
@@ -469,7 +477,7 @@ class GraphormerAR(pl.LightningModule):
                     "Regenerate the lj_transferable cache with RUN_PREPROCESS=1."
                 )
             target_energy = target_energy.to(self.device, dtype=torch.float32)
-            var_log_w, target_log_p, _ = compute_log_weight_variance(
+            var_log_w, target_log_p, _, ess_fraction = compute_log_weight_variance(
                 seq_nll_model,
                 target_energy,
                 kT=self.lj_kT,
@@ -485,6 +493,13 @@ class GraphormerAR(pl.LightningModule):
             self.log(
                 "train/target_log_p",
                 target_log_p.mean().detach(),
+                on_step=True,
+                on_epoch=True,
+                batch_size=target_energy.size(0),
+            )
+            self.log(
+                "train/ess_fraction",
+                ess_fraction.detach(),
                 on_step=True,
                 on_epoch=True,
                 batch_size=target_energy.size(0),

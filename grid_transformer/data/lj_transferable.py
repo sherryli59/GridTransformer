@@ -9,6 +9,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset, Sampler
 
+from ..physics.energy import LJ
 from ..utils.spatial import spectral_argsort
 
 
@@ -144,6 +145,53 @@ def _load_h5_traj_and_box(path: str) -> tuple[np.ndarray, np.ndarray]:
 
 def _center_coords_to_com_zero(coords: np.ndarray) -> np.ndarray:
     return coords - coords.mean(axis=-2, keepdims=True)
+
+
+def _compute_lj_energy_batch(
+    coords: np.ndarray,
+    *,
+    box: np.ndarray,
+    periodic: bool,
+    epsilon: float,
+    sigma: float,
+    cutoff: Optional[float],
+    spring_constant: float,
+    chunk_size: int = 2048,
+) -> np.ndarray:
+    coords_np = np.asarray(coords, dtype=np.float32)
+    if coords_np.ndim != 3:
+        raise ValueError(f"coords must be [B,N,D], got {tuple(coords_np.shape)}")
+    box_np = np.asarray(box, dtype=np.float32).reshape(-1)
+    if box_np.size != int(coords_np.shape[-1]):
+        raise ValueError(
+            f"box must have one entry per coordinate dimension, got {tuple(box_np.shape)} "
+            f"for coords dim {coords_np.shape[-1]}"
+        )
+    if chunk_size <= 0:
+        raise ValueError(f"chunk_size must be positive, got {chunk_size}")
+
+    lj = LJ(
+        nparticles=None,
+        dim=int(coords_np.shape[-1]),
+        batch_size=None,
+        device="cpu",
+        boxlength=torch.as_tensor(box_np, dtype=torch.float32),
+        kT=1.0,
+        epsilon=float(epsilon),
+        sigma=float(sigma),
+        cutoff=None if cutoff is None else float(cutoff),
+        periodic=bool(periodic),
+        spring_constant=float(spring_constant),
+    )
+
+    energies: list[np.ndarray] = []
+    for start in range(0, int(coords_np.shape[0]), int(chunk_size)):
+        end = min(start + int(chunk_size), int(coords_np.shape[0]))
+        chunk = torch.from_numpy(coords_np[start:end]).to(dtype=torch.float32)
+        with torch.no_grad():
+            energy = lj.potential(chunk)
+        energies.append(energy.detach().cpu().numpy().astype(np.float32, copy=False))
+    return np.concatenate(energies, axis=0)
 
 
 def _rotation_matrix_2d(k: int) -> np.ndarray:
@@ -629,11 +677,13 @@ class LJTransferableDataset(Dataset):
             "target_idx": target_idx,
             "seq": target_idx,
             "deltas": torch.from_numpy(deltas.astype(np.float32, copy=False)),
+            "absolute_coords": torch.from_numpy(sorted_pos.astype(np.float32, copy=False)),
             "box_size": torch.from_numpy(np.asarray(box, dtype=np.float32)),
             "density": torch.tensor(density, dtype=torch.float32),
             "token_coords": torch.from_numpy(token_coords),
             "long_jump_mask": torch.from_numpy(long_jump_mask_np),
             "sample_length": torch.tensor(seq_len, dtype=torch.long),
+            "particle_length": torch.tensor(n_particles, dtype=torch.long),
             "sos_id": torch.tensor(self.sos_id, dtype=torch.long),
             "vocab_size": torch.tensor(self.vocab_size, dtype=torch.long),
             "periodic": torch.tensor(self.periodic, dtype=torch.bool),
@@ -703,7 +753,7 @@ class LJTransferableDataset(Dataset):
         )
         sample_length = np.full((batch_size,), int(token_ids.shape[1]), dtype=np.int64)
         delta_length = np.full((batch_size,), int(deltas.shape[1]), dtype=np.int64)
-        box_size = np.broadcast_to(box[None, :], (batch_size, box.shape[0])).astype(np.float32, copy=False)
+        box_size = np.broadcast_to(box[None, :], (batch_size, box.shape[0])).astype(np.float32, copy=True)
         max_abs_relative_displacement = (
             float(np.max(np.abs(deltas))) if deltas.size > 0 else 0.0
         )
@@ -713,12 +763,14 @@ class LJTransferableDataset(Dataset):
             "input_idx": input_idx,
             "target_idx": target_idx,
             "deltas": deltas,
+            "absolute_coords": sorted_pos.astype(np.float32, copy=False),
             "token_coords": token_coords,
             "long_jump_mask": long_jump_mask,
             "box_size": box_size,
             "density": density,
             "sample_length": sample_length,
             "delta_length": delta_length,
+            "particle_length": np.full((batch_size,), int(n_particles), dtype=np.int64),
             "max_abs_relative_displacement": np.array(max_abs_relative_displacement, dtype=np.float32),
         }
 
@@ -771,6 +823,16 @@ class LJTransferableCachedDataset(Dataset):
         self.box_size_all = torch.as_tensor(payload["box_size"], dtype=torch.float32)
         self.density_all = torch.as_tensor(payload["density"], dtype=torch.float32)
         self.sample_length_all = torch.as_tensor(payload["sample_length"], dtype=torch.long)
+        self.particle_length_all = torch.as_tensor(
+            payload.get("particle_length", torch.full_like(self.sample_length_all, -1)),
+            dtype=torch.long,
+        )
+        self.absolute_coords_all = None
+        if "absolute_coords" in payload:
+            self.absolute_coords_all = torch.as_tensor(payload["absolute_coords"], dtype=torch.float32)
+        self.target_energy_all = None
+        if "target_energy" in payload:
+            self.target_energy_all = torch.as_tensor(payload["target_energy"], dtype=torch.float32)
 
         if self.sample_length_all.ndim != 1:
             raise ValueError(f"sample_length must be rank-1, got {tuple(self.sample_length_all.shape)}")
@@ -785,9 +847,18 @@ class LJTransferableCachedDataset(Dataset):
             ("long_jump_mask", self.long_jump_mask_all),
             ("box_size", self.box_size_all),
             ("density", self.density_all),
+            ("particle_length", self.particle_length_all),
         ):
             if t.shape[0] != n_samples:
                 raise ValueError(f"{name} has first dim {t.shape[0]} but expected {n_samples}")
+        if self.absolute_coords_all is not None and self.absolute_coords_all.shape[0] != n_samples:
+            raise ValueError(
+                f"absolute_coords has first dim {self.absolute_coords_all.shape[0]} but expected {n_samples}"
+            )
+        if self.target_energy_all is not None and self.target_energy_all.shape[0] != n_samples:
+            raise ValueError(
+                f"target_energy has first dim {self.target_energy_all.shape[0]} but expected {n_samples}"
+            )
 
         self.sample_lengths = self.sample_length_all.numpy().astype(np.int64, copy=False)
         if limit is not None:
@@ -802,7 +873,12 @@ class LJTransferableCachedDataset(Dataset):
             self.box_size_all = self.box_size_all[:lim]
             self.density_all = self.density_all[:lim]
             self.sample_length_all = self.sample_length_all[:lim]
+            self.particle_length_all = self.particle_length_all[:lim]
             self.sample_lengths = self.sample_lengths[:lim]
+            if self.absolute_coords_all is not None:
+                self.absolute_coords_all = self.absolute_coords_all[:lim]
+            if self.target_energy_all is not None:
+                self.target_energy_all = self.target_energy_all[:lim]
 
         self.vocab_size = int(payload["vocab_size"])
         self.sos_id = int(payload["sos_id"])
@@ -817,7 +893,7 @@ class LJTransferableCachedDataset(Dataset):
     def __getitem__(self, idx: int):
         seq_len = int(self.sample_length_all[idx].item())
         delta_len = int(self.delta_length_all[idx].item())
-        return {
+        item = {
             "sequence": self.sequence_all[idx, : seq_len + 1],
             "input_idx": self.input_idx_all[idx, :seq_len],
             "target_idx": self.target_idx_all[idx, :seq_len],
@@ -828,10 +904,19 @@ class LJTransferableCachedDataset(Dataset):
             "token_coords": self.token_coords_all[idx, :seq_len, :],
             "long_jump_mask": self.long_jump_mask_all[idx, :seq_len],
             "sample_length": self.sample_length_all[idx],
+            "particle_length": self.particle_length_all[idx],
             "sos_id": torch.tensor(self.sos_id, dtype=torch.long),
             "vocab_size": torch.tensor(self.vocab_size, dtype=torch.long),
             "periodic": torch.tensor(self.periodic, dtype=torch.bool),
         }
+        if self.absolute_coords_all is not None:
+            particle_len = int(self.particle_length_all[idx].item())
+            if particle_len <= 0:
+                particle_len = int(self.absolute_coords_all.shape[1])
+            item["absolute_coords"] = self.absolute_coords_all[idx, :particle_len, :]
+        if self.target_energy_all is not None:
+            item["target_energy"] = self.target_energy_all[idx]
+        return item
 
 
 def build_lj_transferable_cache(
@@ -851,6 +936,10 @@ def build_lj_transferable_cache(
     augment_90deg_rotations: bool = False,
     limit: Optional[int] = None,
     seed: int = 0,
+    lj_epsilon: float = 1.0,
+    lj_sigma: float = 1.0,
+    lj_cutoff: Optional[float] = None,
+    lj_spring_constant: float = 0.5,
 ) -> dict[str, Any]:
     """
     Precompute tokenized lj_transferable samples and store them in a .pt cache.
@@ -893,12 +982,15 @@ def build_lj_transferable_cache(
     input_idx = torch.empty((n_samples, max_seq_len), dtype=torch.long)
     target_idx = torch.empty((n_samples, max_seq_len), dtype=torch.long)
     deltas = torch.empty((n_samples, max_seq_len, int(dataset.coord_dim)), dtype=torch.float32)
+    absolute_coords = torch.empty((n_samples, max_particles, int(dataset.coord_dim)), dtype=torch.float32)
     token_coords = torch.empty((n_samples, max_seq_len, int(dataset.coord_dim)), dtype=torch.float32)
     long_jump_mask = torch.empty((n_samples, max_seq_len), dtype=torch.bool)
     box_size = torch.empty((n_samples, int(dataset.coord_dim)), dtype=torch.float32)
     density = torch.empty((n_samples,), dtype=torch.float32)
     sample_length = torch.empty((n_samples,), dtype=torch.long)
     delta_length = torch.empty((n_samples,), dtype=torch.long)
+    particle_length = torch.empty((n_samples,), dtype=torch.long)
+    target_energy = torch.empty((n_samples,), dtype=torch.float32)
     max_abs_relative_displacement = 0.0
 
     out_idx = 0
@@ -908,7 +1000,6 @@ def build_lj_transferable_cache(
         and dataset.ordering == "hilbert"
     )
     if can_batch_3d:
-        batch_chunk_size = 1024
         for file_idx in np.unique(dataset.sample_id_to_file_index):
             sample_ids = np.nonzero(dataset.sample_id_to_file_index == file_idx)[0].astype(np.int64, copy=False)
             if sample_ids.size == 0:
@@ -916,45 +1007,72 @@ def build_lj_transferable_cache(
             local_ids = dataset.sample_id_to_local_index[sample_ids]
             coords_all = dataset._coords_by_file[int(file_idx)][local_ids]
             box = dataset._box_by_file[int(file_idx)]
+            if not np.all(sample_ids == np.arange(sample_ids[0], sample_ids[0] + sample_ids.size)):
+                raise RuntimeError("Expected contiguous sample ids per file in batched cache build.")
+            energies_all = _compute_lj_energy_batch(
+                coords_all,
+                box=box,
+                periodic=bool(periodic),
+                epsilon=float(lj_epsilon),
+                sigma=float(lj_sigma),
+                cutoff=None if lj_cutoff is None else float(lj_cutoff),
+                spring_constant=float(lj_spring_constant),
+                chunk_size=int(coords_all.shape[0]),
+            )
+            batch = dataset._build_batch_3d(coords_all, box)
+            max_abs_relative_displacement = max(
+                max_abs_relative_displacement,
+                float(batch["max_abs_relative_displacement"]),
+            )
 
-            for chunk_start in range(0, sample_ids.shape[0], batch_chunk_size):
-                chunk_end = min(chunk_start + batch_chunk_size, sample_ids.shape[0])
-                sample_ids_chunk = sample_ids[chunk_start:chunk_end]
-                coords_chunk = coords_all[chunk_start:chunk_end]
-                if sample_ids_chunk.size == 0:
-                    continue
-                if not np.all(sample_ids_chunk == np.arange(sample_ids_chunk[0], sample_ids_chunk[0] + sample_ids_chunk.size)):
-                    raise RuntimeError("Expected contiguous sample ids per file chunk in batched cache build.")
+            dest_start = int(sample_ids[0])
+            dest_end = dest_start + int(sample_ids.size)
+            n = int(batch["sample_length"][0])
+            n_delta = int(batch["delta_length"][0])
+            sequence[dest_start:dest_end].fill_(int(dataset.sos_id))
+            input_idx[dest_start:dest_end].zero_()
+            target_idx[dest_start:dest_end].zero_()
+            deltas[dest_start:dest_end].zero_()
+            absolute_coords[dest_start:dest_end].zero_()
+            token_coords[dest_start:dest_end].zero_()
+            long_jump_mask[dest_start:dest_end].zero_()
 
-                batch = dataset._build_batch_3d(coords_chunk, box)
-                max_abs_relative_displacement = max(
-                    max_abs_relative_displacement,
-                    float(batch["max_abs_relative_displacement"]),
-                )
-
-                dest_start = int(sample_ids_chunk[0])
-                dest_end = dest_start + int(sample_ids_chunk.size)
-                n = int(batch["sample_length"][0])
-                n_delta = int(batch["delta_length"][0])
-                sequence[dest_start:dest_end].fill_(int(dataset.sos_id))
-                input_idx[dest_start:dest_end].zero_()
-                target_idx[dest_start:dest_end].zero_()
-                deltas[dest_start:dest_end].zero_()
-                token_coords[dest_start:dest_end].zero_()
-                long_jump_mask[dest_start:dest_end].zero_()
-
-                sequence[dest_start:dest_end, : n + 1] = torch.from_numpy(batch["sequence"])
-                input_idx[dest_start:dest_end, :n] = torch.from_numpy(batch["input_idx"])
-                target_idx[dest_start:dest_end, :n] = torch.from_numpy(batch["target_idx"])
-                deltas[dest_start:dest_end, :n_delta, :] = torch.from_numpy(batch["deltas"])
-                token_coords[dest_start:dest_end, :n, :] = torch.from_numpy(batch["token_coords"])
-                long_jump_mask[dest_start:dest_end, :n] = torch.from_numpy(batch["long_jump_mask"])
-                box_size[dest_start:dest_end] = torch.from_numpy(batch["box_size"])
-                density[dest_start:dest_end] = torch.from_numpy(batch["density"])
-                sample_length[dest_start:dest_end] = torch.from_numpy(batch["sample_length"])
-                delta_length[dest_start:dest_end] = torch.from_numpy(batch["delta_length"])
-                out_idx = dest_end
+            sequence[dest_start:dest_end, : n + 1] = torch.from_numpy(batch["sequence"])
+            input_idx[dest_start:dest_end, :n] = torch.from_numpy(batch["input_idx"])
+            target_idx[dest_start:dest_end, :n] = torch.from_numpy(batch["target_idx"])
+            deltas[dest_start:dest_end, :n_delta, :] = torch.from_numpy(batch["deltas"])
+            absolute_coords[dest_start:dest_end, : int(batch["particle_length"][0]), :] = torch.from_numpy(
+                batch["absolute_coords"]
+            )
+            token_coords[dest_start:dest_end, :n, :] = torch.from_numpy(batch["token_coords"])
+            long_jump_mask[dest_start:dest_end, :n] = torch.from_numpy(batch["long_jump_mask"])
+            box_size[dest_start:dest_end] = torch.from_numpy(batch["box_size"])
+            density[dest_start:dest_end] = torch.from_numpy(batch["density"])
+            sample_length[dest_start:dest_end] = torch.from_numpy(batch["sample_length"])
+            delta_length[dest_start:dest_end] = torch.from_numpy(batch["delta_length"])
+            particle_length[dest_start:dest_end] = torch.from_numpy(batch["particle_length"])
+            target_energy[dest_start:dest_end] = torch.from_numpy(
+                np.asarray(energies_all, dtype=np.float32)
+            )
+            out_idx = dest_end
     else:
+        base_target_energy = np.empty((base_n_samples,), dtype=np.float32)
+        for file_idx in np.unique(dataset.sample_id_to_file_index):
+            sample_ids = np.nonzero(dataset.sample_id_to_file_index == file_idx)[0].astype(np.int64, copy=False)
+            if sample_ids.size == 0:
+                continue
+            local_ids = dataset.sample_id_to_local_index[sample_ids]
+            coords_all = dataset._coords_by_file[int(file_idx)][local_ids]
+            box = dataset._box_by_file[int(file_idx)]
+            base_target_energy[sample_ids] = _compute_lj_energy_batch(
+                coords_all,
+                box=box,
+                periodic=bool(periodic),
+                epsilon=float(lj_epsilon),
+                sigma=float(lj_sigma),
+                cutoff=None if lj_cutoff is None else float(lj_cutoff),
+                spring_constant=float(lj_spring_constant),
+            )
         for sample_idx in range(base_n_samples):
             for rotation_k in rotation_indices:
                 item, sample_max_abs = dataset._build_item_from_index(sample_idx, rotation_k=rotation_k)
@@ -964,6 +1082,7 @@ def build_lj_transferable_cache(
                 input_idx[out_idx].zero_()
                 target_idx[out_idx].zero_()
                 deltas[out_idx].zero_()
+                absolute_coords[out_idx].zero_()
                 token_coords[out_idx].zero_()
                 long_jump_mask[out_idx].zero_()
 
@@ -972,12 +1091,16 @@ def build_lj_transferable_cache(
                 target_idx[out_idx, :n] = item["target_idx"]
                 n_delta = int(item["deltas"].shape[0])
                 deltas[out_idx, :n_delta, :] = item["deltas"]
+                particle_len = int(item["particle_length"].item())
+                absolute_coords[out_idx, :particle_len, :] = item["absolute_coords"]
                 token_coords[out_idx, :n, :] = item["token_coords"]
                 long_jump_mask[out_idx, :n] = item["long_jump_mask"]
                 box_size[out_idx] = item["box_size"]
                 density[out_idx] = item["density"]
                 sample_length[out_idx] = item["sample_length"]
                 delta_length[out_idx] = n_delta
+                particle_length[out_idx] = particle_len
+                target_energy[out_idx] = float(base_target_energy[sample_idx])
                 out_idx += 1
 
     metadata = {
@@ -998,7 +1121,11 @@ def build_lj_transferable_cache(
         "base_n_samples": int(base_n_samples),
         "max_abs_relative_displacement": float(max_abs_relative_displacement),
         "seed": int(seed),
-        "version": 5,
+        "lj_epsilon": float(lj_epsilon),
+        "lj_sigma": float(lj_sigma),
+        "lj_cutoff": None if lj_cutoff is None else float(lj_cutoff),
+        "lj_spring_constant": float(lj_spring_constant),
+        "version": 7,
     }
 
     payload = {
@@ -1006,12 +1133,15 @@ def build_lj_transferable_cache(
         "input_idx": input_idx,
         "target_idx": target_idx,
         "deltas": deltas,
+        "absolute_coords": absolute_coords,
         "token_coords": token_coords,
         "long_jump_mask": long_jump_mask,
         "box_size": box_size,
         "density": density,
         "sample_length": sample_length,
         "delta_length": delta_length,
+        "particle_length": particle_length,
+        "target_energy": target_energy,
         "vocab_size": int(dataset.vocab_size),
         "sos_id": int(dataset.sos_id),
         "metadata": metadata,

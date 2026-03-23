@@ -19,6 +19,13 @@ TRAIN_DATA_AUG="${TRAIN_DATA_AUG:-0}"
 FACTORIZED="${FACTORIZED:-0}"
 USE_CONTINUOUS_HEAD="${USE_CONTINUOUS_HEAD:-1}"
 NUM_MIXTURES="${NUM_MIXTURES:-64}"
+LAMBDA_VAR="${LAMBDA_VAR:-0.0}"
+LJ_KT="${LJ_KT:-1.0}"
+LJ_EPSILON="${LJ_EPSILON:-1.0}"
+LJ_SIGMA="${LJ_SIGMA:-1.0}"
+LJ_CUTOFF="${LJ_CUTOFF:-}"
+LJ_SPRING_CONSTANT="${LJ_SPRING_CONSTANT:-0.5}"
+PBC="${PBC:-0}"
 
 SEED="${SEED:-0}"
 ORDERING="${ORDERING:-hilbert}"
@@ -35,7 +42,7 @@ elif [[ "${USE_COORD_DEQUANT}" == "1" ]]; then
   echo "[train] discrete head dequant width: ${DEQUANT_WIDTH}"
 fi
 
-EPOCHS="${EPOCHS:-400}"
+EPOCHS="${EPOCHS:-200}"
 BATCH_SIZE="${BATCH_SIZE:-512}"
 LR="${LR:-1e-3}"
 NUM_WORKERS="${NUM_WORKERS:-0}"
@@ -132,6 +139,13 @@ if [[ -z "${RUN_SUBDIR}" ]]; then
         "${FACTORIZED}" \
         "${USE_CONTINUOUS_HEAD}" \
         "${NUM_MIXTURES}" \
+        "${LAMBDA_VAR}" \
+        "${LJ_KT}" \
+        "${LJ_EPSILON}" \
+        "${LJ_SIGMA}" \
+        "${LJ_CUTOFF}" \
+        "${LJ_SPRING_CONSTANT}" \
+        "${PBC}" \
         "${SEED}" \
         "${EPOCHS}" \
         "${BATCH_SIZE}" \
@@ -188,6 +202,13 @@ write_reproduce_script() {
     FACTORIZED
     USE_CONTINUOUS_HEAD
     NUM_MIXTURES
+    LAMBDA_VAR
+    LJ_KT
+    LJ_EPSILON
+    LJ_SIGMA
+    LJ_CUTOFF
+    LJ_SPRING_CONSTANT
+    PBC
     SEED
     ORDERING
     HILBERT_RESOLUTION
@@ -267,8 +288,14 @@ if [[ "${RUN_PREPROCESS}" == "1" ]]; then
       --hilbert_resolution "${HILBERT_RESOLUTION}"
       --window "${WINDOW}"
       --bins "${BINS}"
+      --lj_epsilon "${LJ_EPSILON}"
+      --lj_sigma "${LJ_SIGMA}"
+      --lj_spring_constant "${LJ_SPRING_CONSTANT}"
       --seed "${SEED}"
     )
+    if [[ -n "${LJ_CUTOFF}" ]]; then
+      PREPROCESS_ARGS+=(--lj_cutoff "${LJ_CUTOFF}")
+    fi
     if [[ "${FACTORIZED}" == "1" ]]; then
       PREPROCESS_ARGS+=(--factorized)
     fi
@@ -282,6 +309,10 @@ if [[ "${RUN_TRAIN}" == "1" ]]; then
   echo "[train] dataset=${DATA_H5} ckpt_dir=${CKPT_DIR}"
   if [[ -n "${RESUME_FROM}" ]]; then
     echo "[train] resuming from ckpt=${RESUME_FROM}"
+  fi
+  if [[ "${TRAIN_DATA_AUG}" == "1" ]] && [[ "${LAMBDA_VAR}" != "0" ]] && [[ "${LAMBDA_VAR}" != "0.0" ]]; then
+    echo "LAMBDA_VAR requires the preprocessed cache because target energies are cached during preprocessing. Set TRAIN_DATA_AUG=0 and RUN_PREPROCESS=1." >&2
+    exit 1
   fi
   TRAIN_ARGS=(
     --dataset lj_transferable
@@ -302,6 +333,12 @@ if [[ "${RUN_TRAIN}" == "1" ]]; then
     --depth "${MODEL_DEPTH}"
     --ckpt_dir "${CKPT_DIR}"
     --ar_arch "${AR_ARCH}"
+    --lambda_var "${LAMBDA_VAR}"
+    --lj_kT "${LJ_KT}"
+    --lj_epsilon "${LJ_EPSILON}"
+    --lj_sigma "${LJ_SIGMA}"
+    --lj_spring_constant "${LJ_SPRING_CONSTANT}"
+    --lj_boxlength "${BOX_LENGTH}"
   )
   if [[ "${TRAIN_DATA_AUG}" == "1" ]]; then
     echo "[train] using on-the-fly right-angle augmentation: random 90-degree rotations about each axis, then Hilbert-sorted relative-displacement tokenization per sample"
@@ -328,6 +365,12 @@ if [[ "${RUN_TRAIN}" == "1" ]]; then
   fi
   if [[ -n "${RESUME_FROM}" ]]; then
     TRAIN_ARGS+=(--resume_from "${RESUME_FROM}")
+  fi
+  if [[ "${PBC}" == "1" ]]; then
+    TRAIN_ARGS+=(--lj_periodic)
+  fi
+  if [[ -n "${LJ_CUTOFF}" ]]; then
+    TRAIN_ARGS+=(--lj_cutoff "${LJ_CUTOFF}")
   fi
   echo "[train] nohup log=${TRAIN_LOG} pid_file=${TRAIN_PID_FILE}"
   nohup "${PYTHON_BIN}" "${ROOT_DIR}/train.py" "${TRAIN_ARGS[@]}" >"${TRAIN_LOG}" 2>&1 &

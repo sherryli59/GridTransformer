@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from ..training.ar import MDNHead, mdn_loss
+from ..training.ar import MDNHead, compute_log_weight_variance, mdn_loss
 from .deep_ida import DeepIDABias
 from .ida import PeriodicIDA
 from .rbf_edge_bias import RBFEdgeBias
@@ -173,6 +173,14 @@ class GraphormerAR(pl.LightningModule):
         rope_max_period: float = 10000.0,
         use_continuous_head: bool = False,
         num_mixtures: int = 32,
+        lambda_var: float = 0.0,
+        lj_kT: float = 1.0,
+        lj_epsilon: float = 1.0,
+        lj_sigma: float = 1.0,
+        lj_cutoff: Optional[float] = None,
+        lj_spring_constant: float = 0.5,
+        lj_boxlength: float = 10.0,
+        lj_periodic: bool = False,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -219,6 +227,8 @@ class GraphormerAR(pl.LightningModule):
         self.use_continuous_head = bool(use_continuous_head)
         self.output_spatial_dim = int(ida_spatial_dim)
         self.num_mixtures = int(num_mixtures)
+        self.lambda_var = float(lambda_var)
+        self.lj_kT = float(lj_kT)
         if self.use_ida_pre:
             self.ida_pre = PeriodicIDA(
                 d_model=d_model,
@@ -491,13 +501,14 @@ class GraphormerAR(pl.LightningModule):
                     f"model outputs {tuple(log_pi.shape)}. Continuous head currently requires "
                     "non-factorized lj_transferable inputs."
                 )
-            loss, seq_nll_exact, coord_count = mdn_loss(
+            loss, seq_nll_model, coord_count = mdn_loss(
                 log_pi,
                 mu,
                 sigma,
                 deltas,
                 pad_mask=pad,
             )
+            seq_nll_exact = seq_nll_model.detach()
         else:
             logits = outputs
             tok_nll = F.cross_entropy(
@@ -515,9 +526,38 @@ class GraphormerAR(pl.LightningModule):
                     device=seq.device,
                     dtype=tok_nll.dtype,
                 )
-            seq_nll_train = tok_nll.sum(dim=1)
-            loss = (seq_nll_train / coord_count).mean()
-            seq_nll_exact = seq_nll_train.detach()
+            seq_nll_model = tok_nll.sum(dim=1)
+            loss = (seq_nll_model / coord_count).mean()
+            seq_nll_exact = seq_nll_model.detach()
+
+        if self.lambda_var > 0.0:
+            target_energy = batch.get("target_energy")
+            if target_energy is None:
+                raise KeyError(
+                    "lambda_var > 0 requires batch['target_energy']. "
+                    "Regenerate the lj_transferable cache with RUN_PREPROCESS=1."
+                )
+            target_energy = target_energy.to(self.device, dtype=torch.float32)
+            var_log_w, target_log_p, _ = compute_log_weight_variance(
+                seq_nll_model,
+                target_energy,
+                kT=self.lj_kT,
+            )
+            loss = loss + (self.lambda_var * var_log_w)
+            self.log(
+                "train/energy_var_loss",
+                var_log_w.detach(),
+                on_step=True,
+                on_epoch=True,
+                batch_size=target_energy.size(0),
+            )
+            self.log(
+                "train/target_log_p",
+                target_log_p.mean().detach(),
+                on_step=True,
+                on_epoch=True,
+                batch_size=target_energy.size(0),
+            )
         self.log("train/loss", loss, prog_bar=True, on_step=True, on_epoch=True, batch_size=seq.size(0))
         self.log("train/nll", seq_nll_exact.mean(), prog_bar=True, on_step=True, on_epoch=True, batch_size=seq.size(0))
         self.log(

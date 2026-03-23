@@ -299,6 +299,33 @@ def parse_args() -> argparse.Namespace:
         default=32,
         help="Number of Gaussian mixtures used by the continuous MDN head.",
     )
+    parser.add_argument(
+        "--lambda_var",
+        type=float,
+        default=0.0,
+        help="Coefficient for the log-importance-weight variance penalty.",
+    )
+    parser.add_argument("--lj_kT", type=float, default=1.0, help="Lennard-Jones thermal energy kT.")
+    parser.add_argument("--lj_epsilon", type=float, default=1.0, help="Lennard-Jones epsilon.")
+    parser.add_argument("--lj_sigma", type=float, default=1.0, help="Lennard-Jones sigma.")
+    parser.add_argument("--lj_cutoff", type=float, default=None, help="Optional Lennard-Jones cutoff radius.")
+    parser.add_argument(
+        "--lj_spring_constant",
+        type=float,
+        default=0.5,
+        help="Harmonic spring constant used for nonperiodic Lennard-Jones evaluation.",
+    )
+    parser.add_argument(
+        "--lj_boxlength",
+        type=float,
+        default=10.0,
+        help="Box length used by the optional Lennard-Jones energy term.",
+    )
+    parser.add_argument(
+        "--lj_periodic",
+        action="store_true",
+        help="Use periodic boundary conditions for the optional Lennard-Jones energy term.",
+    )
     return parser.parse_args()
 
 
@@ -446,11 +473,20 @@ def main() -> None:
         raise ValueError("--use_rbf_bias and --use_deep_ida are mutually exclusive.")
     if args.ar_permute_group_size <= 0:
         raise ValueError("--ar_permute_group_size must be positive.")
+    if float(args.lambda_var) < 0.0:
+        raise ValueError("--lambda_var must be non-negative.")
     if args.use_continuous_head:
         if args.dataset != "lj_transferable":
             raise ValueError("--use_continuous_head is only supported with --dataset lj_transferable.")
         if args.lj_transfer_factorized:
             raise ValueError("--use_continuous_head currently requires non-factorized lj_transferable training.")
+    if float(args.lambda_var) > 0.0 and args.dataset != "lj_transferable":
+        raise ValueError("--lambda_var is currently supported only with --dataset lj_transferable.")
+    if float(args.lambda_var) > 0.0 and not args.lj_transfer_preprocessed_path:
+        raise ValueError(
+            "--lambda_var requires --lj_transfer_preprocessed_path so target energies are cached "
+            "during preprocessing."
+        )
 
     pl.seed_everything(args.seed, workers=True)
     os.makedirs(args.ckpt_dir, exist_ok=True)
@@ -529,6 +565,14 @@ def main() -> None:
                 rope_max_period=args.ar_rope_max_period,
                 use_continuous_head=bool(args.use_continuous_head),
                 num_mixtures=int(args.num_mixtures),
+                lambda_var=float(args.lambda_var),
+                lj_kT=float(args.lj_kT),
+                lj_epsilon=float(args.lj_epsilon),
+                lj_sigma=float(args.lj_sigma),
+                lj_cutoff=args.lj_cutoff,
+                lj_spring_constant=float(args.lj_spring_constant),
+                lj_boxlength=float(args.lj_boxlength),
+                lj_periodic=bool(args.lj_periodic),
             )
         elif ar_arch == "standard":
             lit_module = GraphormerARStd(
@@ -560,10 +604,20 @@ def main() -> None:
                 rope_max_period=args.ar_rope_max_period,
                 use_continuous_head=bool(args.use_continuous_head),
                 num_mixtures=int(args.num_mixtures),
+                lambda_var=float(args.lambda_var),
+                lj_kT=float(args.lj_kT),
+                lj_epsilon=float(args.lj_epsilon),
+                lj_sigma=float(args.lj_sigma),
+                lj_cutoff=args.lj_cutoff,
+                lj_spring_constant=float(args.lj_spring_constant),
+                lj_boxlength=float(args.lj_boxlength),
+                lj_periodic=bool(args.lj_periodic),
             )
         elif ar_arch == "vanilla":
             if args.use_continuous_head:
                 raise ValueError("--use_continuous_head is not supported with --ar_arch vanilla.")
+            if float(args.lambda_var) > 0.0:
+                raise ValueError("--lambda_var is not supported with --ar_arch vanilla.")
             lit_module = VanillaTransformerAR(
                 K=codebook_size,
                 d_model=d_model,

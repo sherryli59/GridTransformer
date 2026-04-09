@@ -12,6 +12,7 @@ import torch.nn.functional as F
 from grid_transformer.data.lj_abs_dataset import AbsoluteCoordinateTokenizer
 from grid_transformer.data.lj_transferable import RelativeDeltaTokenizer
 from grid_transformer.models.ar_registry import AR_ARCH_CHOICES, load_ar_checkpoint
+from grid_transformer.utils.spatial import spherical_to_cartesian
 
 
 def _is_power_of_two(v: int) -> bool:
@@ -113,20 +114,49 @@ def _sampling_log_probs(
 def _gmm_log_prob(
     log_pi: torch.Tensor,
     mu: torch.Tensor,
-    sigma: torch.Tensor,
+    scale_param: torch.Tensor,
     target: torch.Tensor,
 ) -> torch.Tensor:
-    if log_pi.ndim != 2 or mu.ndim != 3 or sigma.ndim != 3 or target.ndim != 2:
+    if log_pi.ndim != 2 or mu.ndim != 3 or target.ndim != 2:
         raise ValueError(
-            "Expected log_pi [B,M], mu/sigma [B,M,D], target [B,D] for GMM log-prob evaluation."
+            "Expected log_pi [B,M], mu [B,M,D], target [B,D] for GMM log-prob evaluation."
         )
-    sigma = sigma.clamp_min(1e-8)
-    target_exp = target.unsqueeze(1)
-    log_sigma = torch.log(sigma)
-    sq = ((target_exp - mu) / sigma) ** 2
-    log_norm = -0.5 * (sq + 2.0 * log_sigma + math.log(2.0 * math.pi))
-    comp_log_prob = log_norm.sum(dim=-1)
+    if mu.shape[:2] != log_pi.shape or mu.shape[0] != target.shape[0]:
+        raise ValueError(
+            f"Incompatible shapes: log_pi={tuple(log_pi.shape)}, mu={tuple(mu.shape)}, target={tuple(target.shape)}"
+        )
+    if scale_param.ndim == 3:
+        sigma = scale_param.clamp_min(1e-8)
+        target_exp = target.unsqueeze(1)
+        log_sigma = torch.log(sigma)
+        sq = ((target_exp - mu) / sigma) ** 2
+        log_norm = -0.5 * (sq + 2.0 * log_sigma + math.log(2.0 * math.pi))
+        comp_log_prob = log_norm.sum(dim=-1)
+    elif scale_param.ndim == 4:
+        if scale_param.shape[:2] != log_pi.shape or scale_param.shape[-2] != target.shape[-1] or scale_param.shape[-1] != target.shape[-1]:
+            raise ValueError(
+                "Expected scale_tril [B,M,D,D] for full-covariance GMM log-prob evaluation, "
+                f"got {tuple(scale_param.shape)} with target {tuple(target.shape)}"
+            )
+        centered = (target.unsqueeze(1) - mu).unsqueeze(-1)
+        solved = torch.linalg.solve_triangular(scale_param, centered, upper=False)
+        quad = solved.squeeze(-1).square().sum(dim=-1)
+        diag = torch.diagonal(scale_param, dim1=-2, dim2=-1).clamp_min(1e-8)
+        comp_log_prob = -0.5 * (quad + target.shape[-1] * math.log(2.0 * math.pi)) - torch.log(diag).sum(dim=-1)
+    else:
+        raise ValueError(
+            f"scale_param must be diagonal sigma [B,M,D] or scale_tril [B,M,D,D], got {tuple(scale_param.shape)}"
+        )
     return torch.logsumexp(log_pi + comp_log_prob, dim=-1)
+
+
+def _clamp_scale_tril_diag(scale_tril: torch.Tensor, floor: float) -> torch.Tensor:
+    if floor <= 0.0:
+        return scale_tril
+    out = scale_tril.clone()
+    diag_idx = torch.arange(out.shape[-1], device=out.device)
+    out[..., diag_idx, diag_idx] = out[..., diag_idx, diag_idx].clamp_min(float(floor))
+    return out
 
 
 def _encode_relative_delta_context(
@@ -134,8 +164,9 @@ def _encode_relative_delta_context(
     tokenizer: RelativeDeltaTokenizer,
 ) -> torch.LongTensor:
     if tokenizer.factorized:
-        raise ValueError("Continuous-head sampling currently requires a non-factorized tokenizer.")
-    if delta.ndim != 2 or delta.shape[-1] != int(tokenizer.dim):
+        if delta.ndim != 2 or delta.shape[-1] != 1:
+            raise ValueError(f"factorized delta must be [B,1], got {tuple(delta.shape)}")
+    elif delta.ndim != 2 or delta.shape[-1] != int(tokenizer.dim):
         raise ValueError(f"delta must be [B,{tokenizer.dim}], got {tuple(delta.shape)}")
 
     w = float(tokenizer.window)
@@ -143,6 +174,17 @@ def _encode_relative_delta_context(
     step = (2.0 * w) / float(b)
     clipped = delta.clamp(min=-w, max=w)
     coords = torch.floor((clipped + w) / max(step, 1e-8)).long().clamp_(0, b - 1)
+
+    if tokenizer.factorized:
+        tokens = coords[:, 0]
+        if tokenizer.use_long_jump_token:
+            outside = delta[:, 0].abs() > w
+            tokens = torch.where(
+                outside,
+                torch.full_like(tokens, int(tokenizer.long_jump_id)),
+                tokens,
+            )
+        return tokens
 
     tokens = torch.zeros((delta.shape[0],), dtype=torch.long, device=delta.device)
     stride = 1
@@ -187,6 +229,13 @@ def _infer_relative_tokenizer_settings(
         return candidates[0]
 
     return requested
+
+
+def _wrap_positions_0_to_L(
+    pos: torch.Tensor,
+    box_size: torch.Tensor,
+) -> torch.Tensor:
+    return torch.remainder(pos, box_size.clamp_min(1e-8))
 
 
 @torch.no_grad()
@@ -317,6 +366,8 @@ def autoregressive_relative_delta_sample(
     periodic: bool = True,
     use_continuous_head: bool = False,
     continuous_sigma_floor: float = 0.0,
+    polar: bool = False,
+    full_covariance: bool = False,
 ) -> dict[str, torch.Tensor]:
     if n_particles <= 1:
         raise ValueError(f"n_particles must be > 1, got {n_particles}")
@@ -365,17 +416,20 @@ def autoregressive_relative_delta_sample(
 
     n_predict_particles = n_particles - 1
     factorized = bool(getattr(tokenizer, "factorized", False))
-    if use_continuous_head and factorized:
-        raise ValueError("Continuous-head sampling currently requires a non-factorized tokenizer.")
+    if polar and factorized:
+        raise ValueError(
+            "Polar continuous sampling with factorized token conditioning is not supported in this checkout."
+        )
     n_predict_tokens = n_predict_particles * coord_dim if factorized else n_predict_particles
 
     seq_out = torch.empty((nsamples, n_predict_tokens), dtype=torch.long, device=device)
     seq_in = torch.empty((nsamples, n_predict_tokens), dtype=torch.long, device=device)
     seq_in[:, 0] = sos_id
 
-    # Particle 0 is implicit during autoregressive generation and starts at the origin.
+    # Particle 0 is implicit and fixed at the origin during autoregressive generation.
     # The model predicts particle 1 relative to particle 0 first, then particle 2
-    # relative to particle 1, etc. COM=0 is enforced only after the full chain exists.
+    # relative to particle 1, etc. Periodic mode wraps into [0, L); nonperiodic
+    # mode shifts the full chain only at the end so COM lands at box center.
     x_base = torch.zeros((nsamples, n_particles, coord_dim), dtype=torch.float32, device=device)
     deltas = torch.zeros((nsamples, n_predict_particles, coord_dim), dtype=torch.float32, device=device)
     logp_discrete = torch.zeros((nsamples,), dtype=torch.float32, device=device)
@@ -396,13 +450,34 @@ def autoregressive_relative_delta_sample(
         )
 
         if use_continuous_head:
-            log_pi_all, mu_all, sigma_all = outputs
+            log_pi_all, mu_all, scale_all = outputs
             log_pi_t = log_pi_all[:, -1, :]
             mu_t = mu_all[:, -1, :, :]
-            sigma_t = sigma_all[:, -1, :, :]
-            sigma_sample = sigma_t * math.sqrt(float(temperature))
-            if float(continuous_sigma_floor) > 0.0:
-                sigma_sample = sigma_sample.clamp_min(float(continuous_sigma_floor))
+            expected_out_dim = 1 if factorized else coord_dim
+            if mu_t.shape[-1] != expected_out_dim:
+                raise ValueError(
+                    f"Continuous head output dim {mu_t.shape[-1]} does not match "
+                    f"expected dim {expected_out_dim} for factorized={factorized}."
+                )
+            if full_covariance:
+                scale_t = scale_all[:, -1, :, :, :]
+                if scale_t.shape[-2:] != (expected_out_dim, expected_out_dim):
+                    raise ValueError(
+                        f"Full-covariance head output shape {tuple(scale_t.shape)} does not match expected "
+                        f"(...,{expected_out_dim},{expected_out_dim})."
+                    )
+                scale_sample = scale_t * math.sqrt(float(temperature))
+                scale_sample = _clamp_scale_tril_diag(scale_sample, float(continuous_sigma_floor))
+            else:
+                sigma_t = scale_all[:, -1, :, :]
+                if sigma_t.shape[-1] != expected_out_dim:
+                    raise ValueError(
+                        f"Diagonal continuous head output dim {sigma_t.shape[-1]} does not match "
+                        f"expected dim {expected_out_dim}."
+                    )
+                scale_sample = sigma_t * math.sqrt(float(temperature))
+                if float(continuous_sigma_floor) > 0.0:
+                    scale_sample = scale_sample.clamp_min(float(continuous_sigma_floor))
             log_pi_sample = F.log_softmax(log_pi_t / float(temperature), dim=-1)
 
             if sample_mode == "argmax":
@@ -413,24 +488,45 @@ def autoregressive_relative_delta_sample(
             else:
                 raise ValueError(f"Unknown sample_mode '{sample_mode}'")
 
-            gather_idx = chosen_mix_idx[:, None, None].expand(-1, 1, coord_dim)
+            gather_idx = chosen_mix_idx[:, None, None].expand(-1, 1, mu_t.shape[-1])
             chosen_mu = mu_t.gather(1, gather_idx).squeeze(1)
-            chosen_sigma = sigma_sample.gather(1, gather_idx).squeeze(1)
+            batch_idx = torch.arange(mu_t.shape[0], device=device)
+            chosen_scale = scale_sample[batch_idx, chosen_mix_idx]
             if sample_mode == "argmax":
-                delta_t = chosen_mu
+                delta_model_t = chosen_mu
             else:
                 noise = torch.randn(chosen_mu.shape, device=device, generator=gen, dtype=chosen_mu.dtype)
-                delta_t = chosen_mu + chosen_sigma * noise
+                if full_covariance:
+                    delta_model_t = chosen_mu + torch.matmul(chosen_scale, noise.unsqueeze(-1)).squeeze(-1)
+                else:
+                    delta_model_t = chosen_mu + chosen_scale * noise
 
-            nxt = _encode_relative_delta_context(delta_t, tokenizer)
+            delta_context_t = delta_model_t
+            delta_cart_t = delta_model_t
+            if polar:
+                delta_cart_t = spherical_to_cartesian(delta_model_t)
+                delta_context_t = delta_cart_t
+
+            nxt = _encode_relative_delta_context(delta_context_t, tokenizer)
             seq_out[:, t] = nxt
             assert logp_continuous is not None
-            logp_continuous += _gmm_log_prob(log_pi_sample, mu_t, sigma_sample, delta_t)
-            raw_pos = x_base[:, t, :] + delta_t
-            if periodic:
-                raw_pos = raw_pos - box_size * torch.round(raw_pos / box_size.clamp_min(1e-8))
-            deltas[:, t, :] = delta_t
-            x_base[:, t + 1, :] = raw_pos
+            logp_continuous += _gmm_log_prob(log_pi_sample, mu_t, scale_sample, delta_model_t)
+            if factorized:
+                p_idx = t // coord_dim
+                axis_idx = t % coord_dim
+                deltas[:, p_idx, axis_idx] = delta_cart_t[:, 0]
+                if axis_idx == coord_dim - 1:
+                    delta_vec = deltas[:, p_idx, :]
+                    raw_pos = x_base[:, p_idx, :] + delta_vec
+                    if periodic:
+                        raw_pos = _wrap_positions_0_to_L(raw_pos, box_size)
+                    x_base[:, p_idx + 1, :] = raw_pos
+            else:
+                raw_pos = x_base[:, t, :] + delta_cart_t
+                if periodic:
+                    raw_pos = _wrap_positions_0_to_L(raw_pos, box_size)
+                deltas[:, t, :] = delta_cart_t
+                x_base[:, t + 1, :] = raw_pos
         else:
             logits = outputs[:, -1, :]
             log_probs = _sampling_log_probs(logits, temperature=temperature, top_k=top_k)
@@ -452,36 +548,29 @@ def autoregressive_relative_delta_sample(
                     p_idx = (t // coord_dim) + 1
                     raw_pos = x_base[:, p_idx - 1, :] + delta_t
                     if periodic:
-                        raw_pos = raw_pos - box_size * torch.round(raw_pos / box_size.clamp_min(1e-8))
+                        raw_pos = _wrap_positions_0_to_L(raw_pos, box_size)
                     deltas[:, p_idx - 1, :] = delta_t
                     x_base[:, p_idx, :] = raw_pos
             else:
                 delta_t = tokenizer.decode(nxt).to(device=device, dtype=torch.float32)
                 raw_pos = x_base[:, t, :] + delta_t
                 if periodic:
-                    raw_pos = raw_pos - box_size * torch.round(raw_pos / box_size.clamp_min(1e-8))
+                    raw_pos = _wrap_positions_0_to_L(raw_pos, box_size)
                 deltas[:, t, :] = delta_t
                 x_base[:, t + 1, :] = raw_pos
 
         if t + 1 < n_predict_tokens:
             seq_in[:, t + 1] = nxt
 
-    # Recover the final absolute frame by shifting the whole chain so COM=0.
-    com = x_base.mean(dim=1, keepdim=True)
-    final_positions = x_base - com
-    
     if periodic:
-        # Wrap final coordinates back into the primary simulation box [-L/2, L/2]
-        box_size_particles = box_size[:, None, :]
-        final_positions = (
-            torch.remainder(final_positions + box_size_particles / 2, box_size_particles)
-            - box_size_particles / 2
-        )
+        final_positions = _wrap_positions_0_to_L(x_base, box_size[:, None, :])
+    else:
+        final_positions = x_base - x_base.mean(dim=1, keepdim=True) + 0.5 * box_size[:, None, :]
 
     out = {
         "token_ids": seq_out,
-        "x_base": final_positions, # Returns fully formed (B, N, 3) geometry
-        "deltas": deltas,          # Returns (B, N-1, 3) relative jumps
+        "x_base": final_positions,
+        "deltas": deltas,
         "density": torch.tensor(rho, dtype=torch.float32, device=device),
     }
     if use_continuous_head:
@@ -636,6 +725,11 @@ def parse_args() -> argparse.Namespace:
         help="Enable 1D sequential x,y,z tokenization.",
     )
     ap.add_argument(
+        "--polar",
+        action="store_true",
+        help="Interpret continuous relative outputs as spherical coordinates and convert them back to Cartesian for geometry.",
+    )
+    ap.add_argument(
         "--use_continuous_head",
         action="store_true",
         help="Force continuous-head relative sampling. If omitted, checkpoint metadata is used.",
@@ -645,6 +739,11 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.0,
         help="Optional minimum stddev floor for continuous-head sampling/log-prob evaluation.",
+    )
+    ap.add_argument(
+        "--full_covariance",
+        action="store_true",
+        help="Force full-covariance continuous sampling. If omitted, checkpoint metadata is used.",
     )
     ap.add_argument(
         "--abs_bins",
@@ -689,9 +788,21 @@ def main() -> None:
     if args.use_continuous_head and (not ckpt_uses_continuous_head):
         raise ValueError("Checkpoint was not trained with a continuous head.")
     use_continuous_head = bool(args.use_continuous_head) or ckpt_uses_continuous_head
+    ckpt_uses_full_covariance = bool(getattr(model, "full_covariance", False))
+    if args.full_covariance and (not ckpt_uses_full_covariance):
+        raise ValueError("Checkpoint was not trained with a full-covariance continuous head.")
+    full_covariance = bool(args.full_covariance) or ckpt_uses_full_covariance
+    ckpt_uses_polar = bool(getattr(model, "polar", False))
+    if args.polar and (not ckpt_uses_polar):
+        raise ValueError("Checkpoint was not trained with polar continuous targets.")
+    polar = bool(args.polar) or ckpt_uses_polar
     K = int(model.K)
     if use_continuous_head and args.mode != "relative":
         raise ValueError("Continuous-head sampling is only supported with --mode relative.")
+    if full_covariance and (not use_continuous_head):
+        raise ValueError("Full-covariance sampling currently requires a continuous-head relative checkpoint.")
+    if polar and (not use_continuous_head):
+        raise ValueError("Polar sampling currently requires a continuous-head relative checkpoint.")
     periodic = bool(args.periodic) if args.periodic is not None else bool(getattr(model, "torus", True))
     inferred_coord_dim = args.coord_dim
     if inferred_coord_dim is None:
@@ -773,6 +884,7 @@ def main() -> None:
             N=np.array(target_n, dtype=np.int32),
             L=np.array([args.Lx, args.Ly], dtype=np.float32),
             periodic=np.array(int(periodic), dtype=np.int32),
+            box_convention=np.array("zero_to_L"),
             temperature=np.array(args.temperature, dtype=np.float32),
             sample_mode=np.array(args.sample_mode),
             top_k=np.array(-1 if args.top_k is None else int(args.top_k), dtype=np.int32),
@@ -806,9 +918,6 @@ def main() -> None:
             f"Note: overriding use_long_jump={requested_use_long_jump} with use_long_jump={resolved_use_long_jump} "
             f"to match checkpoint vocab K={K}."
         )
-    if use_continuous_head and resolved_factorized:
-        raise ValueError("Continuous-head sampling currently requires a non-factorized checkpoint/tokenizer.")
-
     tokenizer = RelativeDeltaTokenizer(
         window=float(args.relative_window),
         bins=int(args.relative_bins),
@@ -859,6 +968,7 @@ def main() -> None:
             L=np.array([args.Lx, args.Ly], dtype=np.float32),
             bins=np.array(int(tokenizer_abs.bins), dtype=np.int32),
             periodic=np.array(1, dtype=np.int32),
+            box_convention=np.array("zero_to_L"),
             temperature=np.array(args.temperature, dtype=np.float32),
             sample_mode=np.array(args.sample_mode),
             top_k=np.array(-1 if args.top_k is None else int(args.top_k), dtype=np.int32),
@@ -888,6 +998,8 @@ def main() -> None:
             periodic=periodic,
             use_continuous_head=use_continuous_head,
             continuous_sigma_floor=float(args.continuous_sigma_floor),
+            polar=polar,
+            full_covariance=full_covariance,
         )
         chunks.append(out_chunk)
         done += bsz
@@ -918,11 +1030,15 @@ def main() -> None:
         use_long_jump=np.array(int(bool(resolved_use_long_jump)), dtype=np.int32),
         factorized=np.array(int(bool(resolved_factorized)), dtype=np.int32),
         periodic=np.array(int(periodic), dtype=np.int32),
+        box_convention=np.array("zero_to_L"),
+        relative_anchor_convention=np.array("first_particle_origin_chain"),
         temperature=np.array(args.temperature, dtype=np.float32),
         sample_mode=np.array(args.sample_mode),
         top_k=np.array(-1 if args.top_k is None else int(args.top_k), dtype=np.int32),
         ar_arch=np.array(resolved_arch),
         use_continuous_head=np.array(int(use_continuous_head), dtype=np.int32),
+        full_covariance=np.array(int(full_covariance), dtype=np.int32),
+        polar=np.array(int(polar), dtype=np.int32),
         continuous_sigma_floor=np.array(float(args.continuous_sigma_floor), dtype=np.float32),
     )
     if use_continuous_head:
@@ -934,7 +1050,7 @@ def main() -> None:
     print(
         f"Saved {args.save} (mode=relative, nsamples={args.nsamples}, N={target_n}, "
         f"K={K}, bins={args.relative_bins}, window={args.relative_window}, factorized={bool(resolved_factorized)}, "
-        f"continuous_head={use_continuous_head}, sigma_floor={float(args.continuous_sigma_floor):.4f}, "
+        f"continuous_head={use_continuous_head}, full_covariance={full_covariance}, polar={polar}, sigma_floor={float(args.continuous_sigma_floor):.4f}, "
         f"periodic={periodic}, ar_arch={resolved_arch})"
     )
     if use_continuous_head:

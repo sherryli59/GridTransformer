@@ -367,6 +367,7 @@ class LJTransferableDataModule(pl.LightningDataModule):
         local_bins: int = 64,
         use_long_jump_token: bool = True,
         factorized: bool = False,
+        polar: bool = False,
         random_grid_shift: bool = True,
         use_data_aug: bool = False,
         batch_size: int = 128,
@@ -391,6 +392,7 @@ class LJTransferableDataModule(pl.LightningDataModule):
         self.local_bins = int(local_bins)
         self.use_long_jump_token = bool(use_long_jump_token)
         self.factorized = bool(factorized)
+        self.polar = bool(polar)
         self.random_grid_shift = bool(random_grid_shift)
         self.use_data_aug = bool(use_data_aug)
         self.batch_size = batch_size
@@ -437,6 +439,12 @@ class LJTransferableDataModule(pl.LightningDataModule):
                         "Cached lj_transferable factorized setting does not match the datamodule: "
                         f"cache factorized={cached_factorized}, requested factorized={self.factorized}."
                     )
+                cached_polar = bool(getattr(self._train_ds, "polar", False))
+                if cached_polar != self.polar:
+                    raise ValueError(
+                        "Cached lj_transferable polar setting does not match the datamodule: "
+                        f"cache polar={cached_polar}, requested polar={self.polar}."
+                    )
                 return
             data_paths: str | Sequence[str]
             data_paths = self.data_path
@@ -455,6 +463,7 @@ class LJTransferableDataModule(pl.LightningDataModule):
                 local_bins=self.local_bins,
                 use_long_jump_token=self.use_long_jump_token,
                 factorized=self.factorized,
+                polar=self.polar,
                 random_grid_shift=self.random_grid_shift,
                 use_data_aug=self.use_data_aug,
                 limit=self.train_limit,
@@ -474,7 +483,23 @@ class LJTransferableDataModule(pl.LightningDataModule):
         if isinstance(self._train_ds, LJTransferableCachedDataset):
             uniq = np.unique(self._train_ds.sample_lengths)
             if uniq.size == 1:
-                return int(uniq[0])
+                base_len = int(uniq[0])
+                if getattr(self, "factorized", False) or getattr(self._train_ds, "factorized", False):
+                    coord_dim = int(getattr(self._train_ds, "coord_dim", self.coord_dim or 3))
+                    target_idx_all = getattr(self._train_ds, "target_idx_all", None)
+                    if target_idx_all is not None and base_len == int(target_idx_all.shape[1]):
+                        return int(base_len)
+                    particle_length_all = getattr(self._train_ds, "particle_length_all", None)
+                    if particle_length_all is not None:
+                        particle_uniq = np.unique(particle_length_all.numpy())
+                        if particle_uniq.size == 1 and base_len == int(particle_uniq[0]):
+                            return max(0, base_len - 1) * coord_dim
+                    delta_length_all = getattr(self._train_ds, "delta_length_all", None)
+                    if delta_length_all is not None:
+                        delta_uniq = np.unique(delta_length_all.numpy())
+                        if delta_uniq.size == 1 and base_len == int(delta_uniq[0]):
+                            return int(base_len) * coord_dim
+                return int(base_len)
             return None
         uniq = np.unique(self._train_ds.sample_lengths)
         if uniq.size == 1:

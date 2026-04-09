@@ -110,6 +110,19 @@ def raw_delta(delta: np.ndarray, box: np.ndarray, *, periodic: bool) -> np.ndarr
     return delta
 
 
+def _cartesian_to_spherical_np(deltas: np.ndarray) -> np.ndarray:
+    if deltas.shape[-1] != 3:
+        raise ValueError(f"Polar conversion requires trailing dim 3, got {tuple(deltas.shape)}")
+    x = deltas[..., 0]
+    y = deltas[..., 1]
+    z = deltas[..., 2]
+    r = np.sqrt(x * x + y * y + z * z).astype(np.float32, copy=False)
+    xy = np.sqrt(x * x + y * y).astype(np.float32, copy=False)
+    theta = np.arctan2(xy, z).astype(np.float32, copy=False)
+    phi = np.arctan2(y, x).astype(np.float32, copy=False)
+    return np.stack((r, theta, phi), axis=-1).astype(np.float32, copy=False)
+
+
 def _load_h5_traj_and_box(path: str) -> tuple[np.ndarray, np.ndarray]:
     with h5py.File(path, "r") as h5f:
         if "traj" not in h5f:
@@ -231,7 +244,8 @@ def _random_right_angle_rotation(
     rng: np.random.Generator,
     coords: np.ndarray,
 ) -> np.ndarray:
-    dim = int(coords.shape[-1])
+    coords_arr = np.asarray(coords, dtype=np.float32)
+    dim = int(coords_arr.shape[-1])
     if dim == 2:
         rot = _rotation_matrix_2d(int(rng.integers(0, 4)))
     elif dim == 3:
@@ -242,7 +256,7 @@ def _random_right_angle_rotation(
         )
     else:
         raise ValueError(f"Right-angle data augmentation is only supported in 2D/3D, got dim={dim}")
-    return np.asarray(coords @ rot.T, dtype=np.float32)
+    return np.asarray(coords_arr @ rot.T, dtype=np.float32)
 
 
 def _apply_fixed_right_angle_rotation_2d(
@@ -431,6 +445,7 @@ class LJTransferableDataset(Dataset):
         local_bins: int = 64,
         use_long_jump_token: bool = True,
         factorized: bool = False,
+        polar: bool = False,
         random_grid_shift: bool = True,
         use_data_aug: bool = False,
         limit: Optional[int] = None,
@@ -459,6 +474,12 @@ class LJTransferableDataset(Dataset):
         self.random_grid_shift = bool(random_grid_shift)
         self.use_data_aug = bool(use_data_aug)
         self.factorized = bool(factorized)
+        self.polar = bool(polar)
+        if self.polar and self.factorized:
+            raise ValueError(
+                "polar=True with factorized=True is not supported in this checkout because "
+                "polar token-sequence conditioning has not been defined."
+            )
         if (not self.periodic) and self.random_grid_shift:
             raise ValueError(
                 "random_grid_shift=True is only supported for periodic lj_transferable data. "
@@ -645,8 +666,6 @@ class LJTransferableDataset(Dataset):
 
         sorted_pos = shifted[order]
 
-        # The first predicted token is always the displacement of sorted particle 1
-        # relative to sorted particle 0. Particle 0 itself is implicit.
         n_predict = n_particles - 1
         deltas = np.empty((n_predict, int(self.coord_dim)), dtype=np.float32)
         for i in range(1, n_particles):
@@ -664,11 +683,8 @@ class LJTransferableDataset(Dataset):
         input_idx = sequence[:-1].clone()
         target_idx = sequence[1:].clone()
 
-        # Geometry context is expressed in the frame where sorted particle 0 sits at the
-        # origin. The final absolute location of particle 0 is recovered only after a
-        # full chain is generated and COM=0 is imposed.
         if self.periodic:
-            shifted_coords = raw_delta(sorted_pos - sorted_pos[0], box, periodic=True)
+            shifted_coords = np.mod(sorted_pos - sorted_pos[0], box)
         else:
             shifted_coords = sorted_pos - sorted_pos[0]
 
@@ -682,16 +698,22 @@ class LJTransferableDataset(Dataset):
                 f"{target_idx.shape[0]} for factorized={self.tokenizer.factorized}."
             )
 
+        target_deltas = deltas
+        if self.polar:
+            target_deltas = _cartesian_to_spherical_np(deltas)
+
         density = float(n_particles / max(1e-8, float(np.prod(box, dtype=np.float64))))
         max_abs_relative_displacement = float(np.max(np.abs(deltas))) if deltas.size > 0 else 0.0
 
+        absolute_coords_t = torch.from_numpy(sorted_pos.astype(np.float32, copy=False))
         return {
             "sequence": sequence,
             "input_idx": input_idx,
             "target_idx": target_idx,
             "seq": target_idx,
-            "deltas": torch.from_numpy(deltas.astype(np.float32, copy=False)),
-            "absolute_coords": torch.from_numpy(sorted_pos.astype(np.float32, copy=False)),
+            "deltas": torch.from_numpy(target_deltas.astype(np.float32, copy=False)),
+            "absolute_coords": absolute_coords_t,
+            "abs_coords": absolute_coords_t,
             "box_size": torch.from_numpy(np.asarray(box, dtype=np.float32)),
             "density": torch.tensor(density, dtype=torch.float32),
             "token_coords": torch.from_numpy(token_coords),
@@ -703,7 +725,13 @@ class LJTransferableDataset(Dataset):
             "periodic": torch.tensor(self.periodic, dtype=torch.bool),
         }, max_abs_relative_displacement
 
-    def _build_batch_3d(self, coords_chunk: np.ndarray, box: np.ndarray) -> dict[str, np.ndarray]:
+    def _build_batch_3d(
+        self,
+        coords_chunk: np.ndarray,
+        box: np.ndarray,
+        shift: Optional[np.ndarray] = None,
+        rot_matrix: Optional[np.ndarray] = None,
+    ) -> dict[str, np.ndarray]:
         if int(self.coord_dim) != 3:
             raise ValueError(f"_build_batch_3d requires coord_dim=3, got {self.coord_dim}")
         if self.ordering != "hilbert":
@@ -716,8 +744,26 @@ class LJTransferableDataset(Dataset):
         working = np.asarray(coords_chunk, dtype=np.float32)
         box = np.asarray(box, dtype=np.float32)
         batch_size, n_particles, _ = working.shape
+        if rot_matrix is not None:
+            rot = np.asarray(rot_matrix, dtype=np.float32)
+            if rot.shape != (3, 3):
+                raise ValueError(f"rot_matrix must have shape (3, 3), got {tuple(rot.shape)}")
+            working = np.asarray(working @ rot.T, dtype=np.float32)
 
-        if self.periodic and self.random_grid_shift:
+        if shift is not None:
+            if not self.periodic:
+                raise ValueError("Explicit shift is only supported for periodic _build_batch_3d inputs.")
+            shift_arr = np.asarray(shift, dtype=np.float32)
+            if shift_arr.shape == (3,):
+                shift_arr = shift_arr.reshape(1, 1, 3)
+            elif shift_arr.shape == (batch_size, 3):
+                shift_arr = shift_arr.reshape(batch_size, 1, 3)
+            elif shift_arr.shape != (batch_size, 1, 3):
+                raise ValueError(
+                    f"shift must have shape (3,), (B,3), or (B,1,3); got {tuple(shift_arr.shape)}"
+                )
+            shifted = np.mod(working + shift_arr, box[None, None, :])
+        elif self.periodic and self.random_grid_shift:
             shift = (
                 self.rng.uniform(low=0.0, high=1.0, size=(batch_size, 1, 3)).astype(np.float32)
                 * box[None, None, :]
@@ -750,10 +796,9 @@ class LJTransferableDataset(Dataset):
         target_idx = sequence[:, 1:].copy()
 
         if self.periodic:
-            shifted_coords = raw_delta(sorted_pos - sorted_pos[:, 0:1, :], box, periodic=True)
+            shifted_coords = np.mod(sorted_pos - sorted_pos[:, 0:1, :], box)
         else:
             shifted_coords = sorted_pos - sorted_pos[:, 0:1, :]
-
         token_coords = shifted_coords[:, :-1, :]
         if self.tokenizer.factorized:
             token_coords = _repeat_factorized_token_coords(token_coords, coord_dim=self.coord_dim)
@@ -763,6 +808,10 @@ class LJTransferableDataset(Dataset):
                 f"token_coords length {token_coords.shape[1]} does not match target_idx length "
                 f"{target_idx.shape[1]} for factorized={self.tokenizer.factorized}."
             )
+
+        target_deltas = deltas
+        if self.polar:
+            target_deltas = _cartesian_to_spherical_np(deltas)
 
         density = np.full(
             (batch_size,),
@@ -780,7 +829,7 @@ class LJTransferableDataset(Dataset):
             "sequence": sequence,
             "input_idx": input_idx,
             "target_idx": target_idx,
-            "deltas": deltas,
+            "deltas": target_deltas,
             "absolute_coords": sorted_pos.astype(np.float32, copy=False),
             "token_coords": token_coords,
             "long_jump_mask": long_jump_mask,
@@ -904,6 +953,7 @@ class LJTransferableCachedDataset(Dataset):
         self.periodic = bool(self.metadata.get("periodic", True))
         self.coord_dim = int(self.token_coords_all.shape[-1])
         self.factorized = bool(self.metadata.get("factorized", False))
+        self.polar = bool(self.metadata.get("polar", False))
 
     def __len__(self) -> int:
         return int(self.sample_length_all.shape[0])
@@ -931,7 +981,9 @@ class LJTransferableCachedDataset(Dataset):
             particle_len = int(self.particle_length_all[idx].item())
             if particle_len <= 0:
                 particle_len = int(self.absolute_coords_all.shape[1])
-            item["absolute_coords"] = self.absolute_coords_all[idx, :particle_len, :]
+            abs_coords = self.absolute_coords_all[idx, :particle_len, :]
+            item["absolute_coords"] = abs_coords
+            item["abs_coords"] = abs_coords
         if self.target_energy_all is not None:
             item["target_energy"] = self.target_energy_all[idx]
         return item
@@ -950,8 +1002,12 @@ def build_lj_transferable_cache(
     local_bins: int = 64,
     use_long_jump_token: bool = True,
     factorized: bool = False,
+    polar: bool = False,
     random_grid_shift: bool = False,
     augment_90deg_rotations: bool = False,
+    num_augmentations: int = 5,
+    energy_chunk_size: int = 2048,
+    cache_build_chunk_size: int = 16384,
     limit: Optional[int] = None,
     seed: int = 0,
     lj_epsilon: float = 1.0,
@@ -975,6 +1031,7 @@ def build_lj_transferable_cache(
         local_bins=int(local_bins),
         use_long_jump_token=bool(use_long_jump_token),
         factorized=bool(factorized),
+        polar=bool(polar),
         random_grid_shift=bool(random_grid_shift),
         limit=limit,
         seed=int(seed),
@@ -982,6 +1039,12 @@ def build_lj_transferable_cache(
     base_n_samples = len(dataset)
     if base_n_samples <= 0:
         raise RuntimeError("No samples found for cache build.")
+    if int(num_augmentations) <= 0:
+        raise ValueError(f"num_augmentations must be positive, got {num_augmentations}")
+    if int(energy_chunk_size) <= 0:
+        raise ValueError(f"energy_chunk_size must be positive, got {energy_chunk_size}")
+    if int(cache_build_chunk_size) <= 0:
+        raise ValueError(f"cache_build_chunk_size must be positive, got {cache_build_chunk_size}")
     if augment_90deg_rotations and int(dataset.coord_dim) != 2:
         raise ValueError(
             "augment_90deg_rotations=True is only supported for 2D lj_transferable data."
@@ -989,17 +1052,25 @@ def build_lj_transferable_cache(
     rotation_indices = [None]
     if augment_90deg_rotations:
         rotation_indices = [0, 1, 2, 3]
-    n_samples = int(base_n_samples * len(rotation_indices))
+
+    can_batch_3d = (
+        int(dataset.coord_dim) == 3
+        and (not augment_90deg_rotations)
+        and dataset.ordering == "hilbert"
+    )
+    effective_num_augmentations = int(num_augmentations) if (can_batch_3d and bool(dataset.periodic)) else 1
+    n_samples = int(base_n_samples * len(rotation_indices) * effective_num_augmentations)
 
     max_particles = int(dataset.sample_lengths.max())
-    max_seq_len = int(max(0, max_particles - 1))
+    max_delta_len = int(max(0, max_particles - 1))
+    max_seq_len = int(max_delta_len)
     if dataset.tokenizer.factorized:
         max_seq_len *= int(dataset.coord_dim)
 
     sequence = torch.empty((n_samples, max_seq_len + 1), dtype=torch.long)
     input_idx = torch.empty((n_samples, max_seq_len), dtype=torch.long)
     target_idx = torch.empty((n_samples, max_seq_len), dtype=torch.long)
-    deltas = torch.empty((n_samples, max_seq_len, int(dataset.coord_dim)), dtype=torch.float32)
+    deltas = torch.empty((n_samples, max_delta_len, int(dataset.coord_dim)), dtype=torch.float32)
     absolute_coords = torch.empty((n_samples, max_particles, int(dataset.coord_dim)), dtype=torch.float32)
     token_coords = torch.empty((n_samples, max_seq_len, int(dataset.coord_dim)), dtype=torch.float32)
     long_jump_mask = torch.empty((n_samples, max_seq_len), dtype=torch.bool)
@@ -1012,67 +1083,80 @@ def build_lj_transferable_cache(
     max_abs_relative_displacement = 0.0
 
     out_idx = 0
-    can_batch_3d = (
-        int(dataset.coord_dim) == 3
-        and (not augment_90deg_rotations)
-        and dataset.ordering == "hilbert"
-    )
     if can_batch_3d:
         for file_idx in np.unique(dataset.sample_id_to_file_index):
             sample_ids = np.nonzero(dataset.sample_id_to_file_index == file_idx)[0].astype(np.int64, copy=False)
             if sample_ids.size == 0:
                 continue
             local_ids = dataset.sample_id_to_local_index[sample_ids]
-            coords_all = dataset._coords_by_file[int(file_idx)][local_ids]
+            coords_file = dataset._coords_by_file[int(file_idx)]
             box = dataset._box_by_file[int(file_idx)]
             if not np.all(sample_ids == np.arange(sample_ids[0], sample_ids[0] + sample_ids.size)):
                 raise RuntimeError("Expected contiguous sample ids per file in batched cache build.")
-            energies_all = _compute_lj_energy_batch(
-                coords_all,
-                box=box,
-                periodic=bool(periodic),
-                epsilon=float(lj_epsilon),
-                sigma=float(lj_sigma),
-                cutoff=None if lj_cutoff is None else float(lj_cutoff),
-                spring_constant=float(lj_spring_constant),
-                chunk_size=int(coords_all.shape[0]),
-            )
-            batch = dataset._build_batch_3d(coords_all, box)
-            max_abs_relative_displacement = max(
-                max_abs_relative_displacement,
-                float(batch["max_abs_relative_displacement"]),
-            )
+            for chunk_start in range(0, int(sample_ids.size), int(cache_build_chunk_size)):
+                chunk_end = min(chunk_start + int(cache_build_chunk_size), int(sample_ids.size))
+                local_ids_chunk = local_ids[chunk_start:chunk_end]
+                coords_chunk = coords_file[local_ids_chunk]
+                energies_chunk = _compute_lj_energy_batch(
+                    coords_chunk,
+                    box=box,
+                    periodic=bool(periodic),
+                    epsilon=float(lj_epsilon),
+                    sigma=float(lj_sigma),
+                    cutoff=None if lj_cutoff is None else float(lj_cutoff),
+                    spring_constant=float(lj_spring_constant),
+                    chunk_size=int(energy_chunk_size),
+                )
+                batch_len = int(coords_chunk.shape[0])
+                for aug_idx in range(effective_num_augmentations):
+                    shift = None
+                    rot_matrix = None
+                    if periodic:
+                        shift = (
+                            dataset.rng.uniform(low=0.0, high=1.0, size=(batch_len, 1, 3)).astype(np.float32)
+                            * box[None, None, :]
+                        )
+                        rot_matrix = _rotation_matrix_3d(
+                            int(dataset.rng.integers(0, 4)),
+                            int(dataset.rng.integers(0, 4)),
+                            int(dataset.rng.integers(0, 4)),
+                        )
+                    batch = dataset._build_batch_3d(coords_chunk, box, shift=shift, rot_matrix=rot_matrix)
+                    max_abs_relative_displacement = max(
+                        max_abs_relative_displacement,
+                        float(batch["max_abs_relative_displacement"]),
+                    )
 
-            dest_start = int(sample_ids[0])
-            dest_end = dest_start + int(sample_ids.size)
-            n = int(batch["sample_length"][0])
-            n_delta = int(batch["delta_length"][0])
-            sequence[dest_start:dest_end].fill_(int(dataset.sos_id))
-            input_idx[dest_start:dest_end].zero_()
-            target_idx[dest_start:dest_end].zero_()
-            deltas[dest_start:dest_end].zero_()
-            absolute_coords[dest_start:dest_end].zero_()
-            token_coords[dest_start:dest_end].zero_()
-            long_jump_mask[dest_start:dest_end].zero_()
+                    dest_start = out_idx
+                    dest_end = dest_start + batch_len
+                    n = int(batch["sample_length"][0])
+                    n_delta = int(batch["delta_length"][0])
+                    sequence[dest_start:dest_end].fill_(int(dataset.sos_id))
+                    input_idx[dest_start:dest_end].zero_()
+                    target_idx[dest_start:dest_end].zero_()
+                    deltas[dest_start:dest_end].zero_()
+                    absolute_coords[dest_start:dest_end].zero_()
+                    token_coords[dest_start:dest_end].zero_()
+                    long_jump_mask[dest_start:dest_end].zero_()
 
-            sequence[dest_start:dest_end, : n + 1] = torch.from_numpy(batch["sequence"])
-            input_idx[dest_start:dest_end, :n] = torch.from_numpy(batch["input_idx"])
-            target_idx[dest_start:dest_end, :n] = torch.from_numpy(batch["target_idx"])
-            deltas[dest_start:dest_end, :n_delta, :] = torch.from_numpy(batch["deltas"])
-            absolute_coords[dest_start:dest_end, : int(batch["particle_length"][0]), :] = torch.from_numpy(
-                batch["absolute_coords"]
-            )
-            token_coords[dest_start:dest_end, :n, :] = torch.from_numpy(batch["token_coords"])
-            long_jump_mask[dest_start:dest_end, :n] = torch.from_numpy(batch["long_jump_mask"])
-            box_size[dest_start:dest_end] = torch.from_numpy(batch["box_size"])
-            density[dest_start:dest_end] = torch.from_numpy(batch["density"])
-            sample_length[dest_start:dest_end] = torch.from_numpy(batch["sample_length"])
-            delta_length[dest_start:dest_end] = torch.from_numpy(batch["delta_length"])
-            particle_length[dest_start:dest_end] = torch.from_numpy(batch["particle_length"])
-            target_energy[dest_start:dest_end] = torch.from_numpy(
-                np.asarray(energies_all, dtype=np.float32)
-            )
-            out_idx = dest_end
+                    sequence[dest_start:dest_end, : n + 1] = torch.from_numpy(batch["sequence"])
+                    input_idx[dest_start:dest_end, :n] = torch.from_numpy(batch["input_idx"])
+                    target_idx[dest_start:dest_end, :n] = torch.from_numpy(batch["target_idx"])
+                    deltas[dest_start:dest_end, :n_delta, :] = torch.from_numpy(batch["deltas"])
+                    absolute_coords[dest_start:dest_end, : int(batch["particle_length"][0]), :] = torch.from_numpy(
+                        batch["absolute_coords"]
+                    )
+                    token_coords[dest_start:dest_end, :n] = torch.from_numpy(batch["token_coords"])
+                    long_jump_mask[dest_start:dest_end, :n] = torch.from_numpy(batch["long_jump_mask"])
+                    box_size[dest_start:dest_end] = torch.from_numpy(batch["box_size"])
+                    density[dest_start:dest_end] = torch.from_numpy(batch["density"])
+                    sample_length[dest_start:dest_end] = torch.from_numpy(batch["sample_length"])
+                    delta_length[dest_start:dest_end] = torch.from_numpy(batch["delta_length"])
+                    particle_length[dest_start:dest_end] = torch.from_numpy(batch["particle_length"])
+                    target_energy[dest_start:dest_end] = torch.from_numpy(
+                        np.asarray(energies_chunk, dtype=np.float32)
+                    )
+                    out_idx = dest_end
     else:
         base_target_energy = np.empty((base_n_samples,), dtype=np.float32)
         for file_idx in np.unique(dataset.sample_id_to_file_index):
@@ -1090,6 +1174,7 @@ def build_lj_transferable_cache(
                 sigma=float(lj_sigma),
                 cutoff=None if lj_cutoff is None else float(lj_cutoff),
                 spring_constant=float(lj_spring_constant),
+                chunk_size=int(energy_chunk_size),
             )
         for sample_idx in range(base_n_samples):
             for rotation_k in rotation_indices:
@@ -1132,9 +1217,13 @@ def build_lj_transferable_cache(
         "coord_dim": int(dataset.coord_dim),
         "use_long_jump_token": bool(use_long_jump_token),
         "factorized": bool(factorized),
+        "polar": bool(polar),
         "random_grid_shift": bool(random_grid_shift),
         "use_data_aug": False,
         "augment_90deg_rotations": bool(augment_90deg_rotations),
+        "num_augmentations": int(effective_num_augmentations),
+        "energy_chunk_size": int(energy_chunk_size),
+        "cache_build_chunk_size": int(cache_build_chunk_size),
         "rotation_count": int(len(rotation_indices)),
         "base_n_samples": int(base_n_samples),
         "max_abs_relative_displacement": float(max_abs_relative_displacement),
@@ -1143,7 +1232,9 @@ def build_lj_transferable_cache(
         "lj_sigma": float(lj_sigma),
         "lj_cutoff": None if lj_cutoff is None else float(lj_cutoff),
         "lj_spring_constant": float(lj_spring_constant),
-        "version": 7,
+        "periodic_box_convention": "zero_to_L",
+        "relative_anchor_convention": "first_particle_origin_chain",
+        "version": 10,
     }
 
     payload = {
@@ -1170,12 +1261,17 @@ def build_lj_transferable_cache(
         "base_n_samples": int(base_n_samples),
         "n_samples": n_samples,
         "max_particles": max_particles,
+        "max_delta_len": max_delta_len,
         "max_seq_len": max_seq_len,
         "vocab_size": int(dataset.vocab_size),
         "periodic": bool(periodic),
         "ordering": str(ordering),
         "factorized": bool(factorized),
+        "polar": bool(polar),
         "random_grid_shift": bool(random_grid_shift),
+        "num_augmentations": int(effective_num_augmentations),
+        "energy_chunk_size": int(energy_chunk_size),
+        "cache_build_chunk_size": int(cache_build_chunk_size),
         "rotation_count": int(len(rotation_indices)),
         "max_abs_relative_displacement": float(max_abs_relative_displacement),
     }

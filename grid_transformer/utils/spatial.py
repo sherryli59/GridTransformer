@@ -19,6 +19,152 @@ def wrap_min_image(dr: torch.Tensor, box_size: torch.Tensor) -> torch.Tensor:
     return dr - box_size * torch.round(dr / box_size.clamp_min(1e-8))
 
 
+def spherical_to_cartesian(coords: torch.Tensor) -> torch.Tensor:
+    """
+    Convert spherical coordinates (..., 3) -> Cartesian (..., 3).
+
+    Convention:
+      r: radius
+      theta: polar angle from +z in [0, pi]
+      phi: azimuth in the xy-plane in [-pi, pi]
+    """
+    if coords.shape[-1] != 3:
+        raise ValueError(f"spherical coords must have trailing dim 3, got {tuple(coords.shape)}")
+    r = coords[..., 0]
+    theta = coords[..., 1]
+    phi = coords[..., 2]
+    sin_theta = torch.sin(theta)
+    x = r * sin_theta * torch.cos(phi)
+    y = r * sin_theta * torch.sin(phi)
+    z = r * torch.cos(theta)
+    return torch.stack((x, y, z), dim=-1)
+
+
+def cartesian_to_spherical(coords: torch.Tensor) -> torch.Tensor:
+    """
+    Convert Cartesian coordinates (..., 3) -> spherical (..., 3).
+
+    Convention:
+      r: radius
+      theta: polar angle from +z in [0, pi]
+      phi: azimuth in the xy-plane in [-pi, pi]
+    """
+    if coords.shape[-1] != 3:
+        raise ValueError(f"cartesian coords must have trailing dim 3, got {tuple(coords.shape)}")
+    x = coords[..., 0]
+    y = coords[..., 1]
+    z = coords[..., 2]
+    r = torch.sqrt(x * x + y * y + z * z)
+    xy = torch.sqrt(x * x + y * y)
+    theta = torch.atan2(xy, z)
+    phi = torch.atan2(y, x)
+    return torch.stack((r, theta, phi), dim=-1)
+
+
+def _pad_or_trim_time(coords: torch.Tensor, seq_len: int) -> torch.Tensor:
+    if coords.shape[1] == int(seq_len):
+        return coords
+    if coords.shape[1] > int(seq_len):
+        return coords[:, : int(seq_len), :]
+    pad = torch.zeros(
+        coords.shape[0],
+        int(seq_len) - coords.shape[1],
+        coords.shape[2],
+        device=coords.device,
+        dtype=coords.dtype,
+    )
+    return torch.cat((coords, pad), dim=1)
+
+
+def _coerce_spatial_dim(coords: torch.Tensor, spatial_dim: int) -> torch.Tensor:
+    if coords.shape[-1] == int(spatial_dim):
+        return coords
+    if coords.shape[-1] > int(spatial_dim):
+        return coords[..., : int(spatial_dim)]
+    pad = torch.zeros(
+        *coords.shape[:-1],
+        int(spatial_dim) - coords.shape[-1],
+        device=coords.device,
+        dtype=coords.dtype,
+    )
+    return torch.cat((coords, pad), dim=-1)
+
+
+def build_attention_coords(
+    coords: torch.Tensor | None,
+    *,
+    seq_len: int,
+    spatial_dim: int,
+    factorized: bool = False,
+    polar: bool = False,
+) -> torch.Tensor | None:
+    """
+    Normalize geometry inputs to Cartesian [B, T, spatial_dim] for attention layers.
+
+    Accepted inputs:
+      - token-aligned Cartesian coords: [B, T, D]
+      - absolute particle coords: [B, N, D] where N == T + 1 (or (T / D) + 1 if factorized)
+      - factorized scalar streams: [B, T] or [B, T, 1]
+    """
+    if coords is None:
+        return None
+    if int(seq_len) < 0:
+        raise ValueError(f"seq_len must be non-negative, got {seq_len}")
+    if int(spatial_dim) <= 0:
+        raise ValueError(f"spatial_dim must be positive, got {spatial_dim}")
+
+    coord_dim = int(spatial_dim)
+    if coords.ndim == 3 and coords.shape[-1] != 1:
+        coords = _coerce_spatial_dim(coords, coord_dim)
+        if factorized:
+            if coords.shape[1] == int(seq_len):
+                return coords
+            if coords.shape[1] == math.ceil(int(seq_len) / coord_dim):
+                rep = torch.repeat_interleave(coords, repeats=coord_dim, dim=1)
+                return _pad_or_trim_time(rep, int(seq_len))
+            if coords.shape[1] == math.ceil(int(seq_len) / coord_dim) + 1:
+                rep = torch.repeat_interleave(coords[:, :-1, :], repeats=coord_dim, dim=1)
+                return _pad_or_trim_time(rep, int(seq_len))
+        else:
+            if coords.shape[1] == int(seq_len):
+                return coords
+            if coords.shape[1] == int(seq_len) + 1:
+                return coords[:, :-1, :]
+        return _pad_or_trim_time(coords, int(seq_len))
+
+    if coords.ndim == 3 and coords.shape[-1] == 1:
+        flat = coords.squeeze(-1)
+    elif coords.ndim == 2:
+        flat = coords
+    else:
+        raise ValueError(f"Unsupported coords shape for attention normalization: {tuple(coords.shape)}")
+
+    batch_size, flat_len = flat.shape
+    remainder = int(flat_len) % coord_dim
+    if remainder != 0:
+        pad = torch.zeros(
+            batch_size,
+            coord_dim - remainder,
+            device=flat.device,
+            dtype=flat.dtype,
+        )
+        flat = torch.cat((flat, pad), dim=1)
+
+    deltas = flat.view(batch_size, -1, coord_dim)
+    if polar:
+        if coord_dim != 3:
+            raise ValueError("polar attention reconstruction requires spatial_dim=3")
+        deltas = spherical_to_cartesian(deltas)
+
+    anchors = torch.zeros_like(deltas)
+    if deltas.shape[1] > 1:
+        anchors[:, 1:, :] = torch.cumsum(deltas[:, :-1, :], dim=1)
+
+    if factorized:
+        anchors = torch.repeat_interleave(anchors, repeats=coord_dim, dim=1)
+    return _pad_or_trim_time(anchors, int(seq_len))
+
+
 def _is_power_of_two(v: int) -> bool:
     return v > 0 and (v & (v - 1)) == 0
 

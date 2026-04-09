@@ -124,9 +124,14 @@ def parse_args() -> argparse.Namespace:
         help="Disable dedicated long-jump token and clamp out-of-window displacements instead.",
     )
     parser.add_argument(
-        "--lj_transfer_factorized",
+        "--factorized",
         action="store_true",
         help="Flatten each D-dimensional relative jump into D sequential scalar tokens.",
+    )
+    parser.add_argument(
+        "--polar",
+        action="store_true",
+        help="Use spherical (r, theta, phi) continuous targets for 3D lj_transferable training.",
     )
     parser.add_argument(
         "--lj_transfer_disable_random_shift",
@@ -300,6 +305,11 @@ def parse_args() -> argparse.Namespace:
         help="Number of Gaussian mixtures used by the continuous MDN head.",
     )
     parser.add_argument(
+        "--full_covariance",
+        action="store_true",
+        help="Use a full-covariance Gaussian mixture head instead of independent per-dimension sigmas.",
+    )
+    parser.add_argument(
         "--lambda_var",
         type=float,
         default=0.0,
@@ -397,7 +407,8 @@ def build_data_module(args: argparse.Namespace):
             local_window=args.lj_transfer_window,
             local_bins=args.lj_transfer_bins,
             use_long_jump_token=(not args.lj_transfer_no_long_jump),
-            factorized=bool(args.lj_transfer_factorized),
+            factorized=bool(args.factorized),
+            polar=bool(args.polar),
             random_grid_shift=(not args.lj_transfer_disable_random_shift),
             use_data_aug=bool(args.lj_transfer_use_data_aug),
             batch_size=args.batch_size,
@@ -414,7 +425,8 @@ def build_data_module(args: argparse.Namespace):
             "kind": "lj_transferable_ar",
             "vocab_size": int(vocab_size),
             "coord_dim": int(data_module.coord_dim or 2),
-            "factorized": bool(args.lj_transfer_factorized),
+            "factorized": bool(args.factorized),
+            "polar": bool(args.polar),
         }
     elif dataset == "lj_abs":
         data_path = args.data_dir
@@ -478,8 +490,18 @@ def main() -> None:
     if args.use_continuous_head:
         if args.dataset != "lj_transferable":
             raise ValueError("--use_continuous_head is only supported with --dataset lj_transferable.")
-        if args.lj_transfer_factorized:
-            raise ValueError("--use_continuous_head currently requires non-factorized lj_transferable training.")
+    if args.full_covariance and not args.use_continuous_head:
+        raise ValueError("--full_covariance requires --use_continuous_head.")
+    if args.polar:
+        if args.dataset != "lj_transferable":
+            raise ValueError("--polar is only supported with --dataset lj_transferable.")
+        if not args.use_continuous_head:
+            raise ValueError("--polar currently requires --use_continuous_head.")
+        if args.factorized:
+            raise ValueError(
+                "--polar with --factorized is not supported in this checkout because "
+                "spherical token-sequence conditioning is not wired."
+            )
     if float(args.lambda_var) > 0.0 and args.dataset != "lj_transferable":
         raise ValueError("--lambda_var is currently supported only with --dataset lj_transferable.")
     if float(args.lambda_var) > 0.0 and not args.lj_transfer_preprocessed_path:
@@ -563,9 +585,11 @@ def main() -> None:
                 use_density_cond=use_density_cond,
                 use_rope=use_rope,
                 rope_max_period=args.ar_rope_max_period,
-                is_factorized=bool(args.lj_transfer_factorized),
+                is_factorized=bool(args.factorized),
+                polar=bool(args.polar),
                 use_continuous_head=bool(args.use_continuous_head),
                 num_mixtures=int(args.num_mixtures),
+                full_covariance=bool(args.full_covariance),
                 lambda_var=float(args.lambda_var),
                 lj_kT=float(args.lj_kT),
                 lj_epsilon=float(args.lj_epsilon),
@@ -603,9 +627,11 @@ def main() -> None:
                 use_density_cond=use_density_cond,
                 use_rope=use_rope,
                 rope_max_period=args.ar_rope_max_period,
-                is_factorized=bool(args.lj_transfer_factorized),
+                is_factorized=bool(args.factorized),
+                polar=bool(args.polar),
                 use_continuous_head=bool(args.use_continuous_head),
                 num_mixtures=int(args.num_mixtures),
+                full_covariance=bool(args.full_covariance),
                 lambda_var=float(args.lambda_var),
                 lj_kT=float(args.lj_kT),
                 lj_epsilon=float(args.lj_epsilon),

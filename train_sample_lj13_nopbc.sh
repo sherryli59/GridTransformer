@@ -351,13 +351,9 @@ if [[ "${RUN_TRAIN}" == "1" ]]; then
     TRAIN_ARGS+=(--lj_transfer_preprocessed_path "${CACHE_PATH}")
   fi
   if [[ "${FACTORIZED}" == "1" ]]; then
-    TRAIN_ARGS+=(--lj_transfer_factorized)
+    TRAIN_ARGS+=(--factorized)
   fi
   if [[ "${USE_CONTINUOUS_HEAD}" == "1" ]]; then
-    if [[ "${FACTORIZED}" == "1" ]]; then
-      echo "USE_CONTINUOUS_HEAD=1 currently requires FACTORIZED=0." >&2
-      exit 1
-    fi
     echo "[train] enabling continuous MDN head with num_mixtures=${NUM_MIXTURES}"
     TRAIN_ARGS+=(--use_continuous_head --num_mixtures "${NUM_MIXTURES}")
   elif [[ "${USE_COORD_DEQUANT}" == "1" ]]; then

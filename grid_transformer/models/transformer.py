@@ -12,7 +12,7 @@ from ..training.ar import MDNHead, compute_log_weight_variance, mdn_loss
 from .deep_ida import DeepIDABias
 from .ida import PeriodicIDA
 from .rbf_edge_bias import RBFEdgeBias
-from ..utils.spatial import id_to_center_xyz, wrap_min_image
+from ..utils.spatial import build_attention_coords, id_to_center_xyz, wrap_min_image
 
 
 class EdgeBias(nn.Module):
@@ -174,6 +174,8 @@ class GraphormerAR(pl.LightningModule):
         is_factorized: bool = False,
         use_continuous_head: bool = False,
         num_mixtures: int = 32,
+        full_covariance: bool = False,
+        polar: bool = False,
         lambda_var: float = 0.0,
         lj_kT: float = 1.0,
         lj_epsilon: float = 1.0,
@@ -198,7 +200,6 @@ class GraphormerAR(pl.LightningModule):
         self.is_factorized = bool(is_factorized)
         self.pos_emb = nn.Embedding(4096, d_model) if self.use_pos_emb else None
         self.density_emb = nn.Linear(1, d_model) if self.use_density_cond else None
-        self.axis_emb = nn.Embedding(3, d_model) if self.is_factorized else None
 
         self.use_edge_bias = bool(use_edge_bias)
         self.use_ida_pre = bool(use_ida_pre)
@@ -228,7 +229,11 @@ class GraphormerAR(pl.LightningModule):
         self.coord_dequantize_train = bool(coord_dequantize_train)
         self.coord_dequant_width = max(float(coord_dequant_width), 0.0)
         self.use_continuous_head = bool(use_continuous_head)
+        self.full_covariance = bool(full_covariance)
+        self.polar = bool(polar)
         self.output_spatial_dim = int(ida_spatial_dim)
+        self.continuous_out_dim = 1 if self.is_factorized else self.output_spatial_dim
+        self.axis_emb = nn.Embedding(self.output_spatial_dim, d_model) if self.is_factorized else None
         self.num_mixtures = int(num_mixtures)
         self.lambda_var = float(lambda_var)
         self.lj_kT = float(lj_kT)
@@ -273,8 +278,9 @@ class GraphormerAR(pl.LightningModule):
         if self.use_continuous_head:
             self.head = MDNHead(
                 d_model=d_model,
-                spatial_dim=self.output_spatial_dim,
+                spatial_dim=self.continuous_out_dim,
                 num_mixtures=self.num_mixtures,
+                full_covariance=self.full_covariance,
             )
         else:
             self.head = nn.Linear(d_model, K)
@@ -368,6 +374,20 @@ class GraphormerAR(pl.LightningModule):
             return bias.masked_fill(~causal[:, None, :, :], float("-inf"))
         return self.edge_bias(coords, causal, box_size=box_size, torus=self.torus)
 
+    def _prepare_attention_coords(
+        self,
+        coords: Optional[torch.Tensor],
+        *,
+        seq_len: int,
+    ) -> Optional[torch.Tensor]:
+        return build_attention_coords(
+            coords,
+            seq_len=seq_len,
+            spatial_dim=self.output_spatial_dim,
+            factorized=self.is_factorized,
+            polar=self.polar,
+        )
+
     def forward(
         self,
         seq_in: torch.LongTensor,
@@ -378,6 +398,7 @@ class GraphormerAR(pl.LightningModule):
         pad_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         B, T = seq_in.shape
+        coords = self._prepare_attention_coords(coords, seq_len=T)
         if self.use_pos_emb:
             assert self.pos_emb is not None
             if T > self.pos_emb.num_embeddings:
@@ -387,9 +408,9 @@ class GraphormerAR(pl.LightningModule):
         else:
             x = self.tok_emb(seq_in)
 
-        if self.is_factorized:
+        if getattr(self, "is_factorized", False) and self.axis_emb is not None:
             assert self.axis_emb is not None
-            axis_ids = torch.arange(T, device=seq_in.device) % 3
+            axis_ids = torch.arange(T, device=seq_in.device) % self.output_spatial_dim
             x = x + self.axis_emb(axis_ids)[None, :, :]
 
         if self.use_density_cond:
@@ -479,9 +500,13 @@ class GraphormerAR(pl.LightningModule):
         else:
             seq_in = seq_in.long()
 
-        coords = batch.get("token_coords")
+        coords = batch.get("abs_coords")
+        if coords is None:
+            coords = batch.get("absolute_coords")
+        if coords is None:
+            coords = batch.get("token_coords")
         if coords is not None:
-            coords = coords.to(self.device)
+            coords = coords.to(self.device, dtype=torch.float32)
 
         box_size = batch.get("box_size")
         if box_size is not None:
@@ -495,6 +520,7 @@ class GraphormerAR(pl.LightningModule):
         if pad is not None:
             pad = pad.bool()
 
+        coords = self._prepare_attention_coords(coords, seq_len=seq_in.shape[1])
         coords = self._apply_training_coord_dequantization(coords, box_size)
         outputs = self.forward(seq_in, coords=coords, box_size=box_size, density=density, pad_mask=pad)
         if self.use_continuous_head:
@@ -502,19 +528,29 @@ class GraphormerAR(pl.LightningModule):
             if deltas is None:
                 raise KeyError("Continuous head requires batch['deltas'] targets.")
             deltas = deltas.to(self.device, dtype=torch.float32)
-            log_pi, mu, sigma = outputs
-            if deltas.shape[:2] != log_pi.shape[:2]:
+            log_pi, mu, scale_param = outputs
+            box_size_loss = box_size if self.torus else None
+            if self.is_factorized:
+                batch_size, n_predict, coord_dim = deltas.shape
+                deltas = deltas.reshape(batch_size, n_predict * coord_dim, 1)
+                if self.torus and box_size is not None:
+                    box_size_loss = (
+                        box_size.unsqueeze(1)
+                        .expand(-1, n_predict, -1)
+                        .reshape(batch_size, n_predict * coord_dim, 1)
+                    )
+            if deltas.shape[:2] != log_pi.shape[:2] or deltas.shape[-1] != mu.shape[-1]:
                 raise ValueError(
                     f"Continuous delta targets shape {tuple(deltas.shape)} does not match "
-                    f"model outputs {tuple(log_pi.shape)}. Continuous head currently requires "
-                    "non-factorized lj_transferable inputs."
+                    f"model outputs log_pi={tuple(log_pi.shape)}, mu={tuple(mu.shape)}, scale={tuple(scale_param.shape)}."
                 )
             loss, seq_nll_model, coord_count = mdn_loss(
                 log_pi,
                 mu,
-                sigma,
+                scale_param,
                 deltas,
                 pad_mask=pad,
+                box_size=box_size_loss,
             )
             seq_nll_exact = seq_nll_model.detach()
         else:

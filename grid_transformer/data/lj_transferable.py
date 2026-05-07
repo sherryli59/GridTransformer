@@ -9,7 +9,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset, Sampler
 
-from ..physics.energy import LJ
+from ..physics.energy import DoubleWellPotential, LJ
 from ..utils.spatial import spectral_argsort
 
 
@@ -123,6 +123,124 @@ def _cartesian_to_spherical_np(deltas: np.ndarray) -> np.ndarray:
     return np.stack((r, theta, phi), axis=-1).astype(np.float32, copy=False)
 
 
+def _load_codebook_artifact(codebook_path: str) -> tuple[torch.Tensor, dict[str, Any]]:
+    try:
+        codebook = torch.load(codebook_path, map_location="cpu", weights_only=False)
+    except TypeError:
+        codebook = torch.load(codebook_path, map_location="cpu")
+    metadata: dict[str, Any] = {}
+    if isinstance(codebook, dict):
+        metadata = dict(codebook.get("metadata", {}))
+        for key in ("centers", "codebook", "weight", "weights", "embeddings"):
+            if key in codebook:
+                codebook = codebook[key]
+                break
+        else:
+            raise ValueError(
+                f"Codebook dict in {codebook_path} is missing one of "
+                "'centers', 'codebook', 'weight', 'weights', or 'embeddings'."
+            )
+    codebook = torch.as_tensor(codebook, dtype=torch.float32)
+    if codebook.ndim != 2:
+        raise ValueError(f"Codebook must be rank-2 [K,D], got {tuple(codebook.shape)} from {codebook_path}")
+    if codebook.shape[0] <= 0 or codebook.shape[1] <= 0:
+        raise ValueError(f"Codebook must be non-empty, got {tuple(codebook.shape)} from {codebook_path}")
+    return codebook.contiguous(), metadata
+
+
+def _load_codebook_tensor(codebook_path: str) -> torch.Tensor:
+    codebook, _ = _load_codebook_artifact(codebook_path)
+    return codebook
+
+
+def _quantize_with_codebook(
+    deltas: np.ndarray,
+    codebook: torch.Tensor,
+) -> tuple[np.ndarray, np.ndarray]:
+    if deltas.ndim < 2:
+        raise ValueError(f"deltas must have rank >= 2 for codebook quantization, got {tuple(deltas.shape)}")
+    if deltas.shape[-1] != int(codebook.shape[1]):
+        raise ValueError(
+            f"deltas trailing dim {deltas.shape[-1]} must match codebook dim {int(codebook.shape[1])}"
+        )
+    original_shape = tuple(deltas.shape[:-1])
+    flat_diff = torch.from_numpy(np.asarray(deltas, dtype=np.float32, order="C").reshape(-1, deltas.shape[-1]))
+    distances = torch.cdist(flat_diff, codebook, p=2.0)
+    token_ids = torch.argmin(distances, dim=-1).to(torch.int64)
+    tokens_np = token_ids.view(*original_shape).cpu().numpy().astype(np.int64, copy=False)
+    long_jump_mask = np.zeros(original_shape, dtype=np.bool_)
+    return tokens_np, long_jump_mask
+
+
+def _offline_discretize_cache_tensors(
+    *,
+    deltas: torch.Tensor,
+    delta_length: torch.Tensor,
+    particle_length: torch.Tensor,
+    box_size: torch.Tensor,
+    codebook_path: str,
+    periodic: bool,
+    chunk_size: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    if deltas.ndim != 3:
+        raise ValueError(f"deltas must be [B,T,D], got {tuple(deltas.shape)}")
+    if delta_length.ndim != 1 or particle_length.ndim != 1:
+        raise ValueError("delta_length and particle_length must be rank-1.")
+    if box_size.ndim != 2:
+        raise ValueError(f"box_size must be [B,D], got {tuple(box_size.shape)}")
+    if int(chunk_size) <= 0:
+        raise ValueError(f"chunk_size must be positive, got {chunk_size}")
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    codebook = _load_codebook_tensor(codebook_path).to(device=device, dtype=torch.float32)
+    if int(codebook.shape[1]) != int(deltas.shape[-1]):
+        raise ValueError(
+            f"Codebook dim {int(codebook.shape[1])} does not match delta dim {int(deltas.shape[-1])}."
+        )
+
+    n_samples, max_delta_len, coord_dim = deltas.shape
+    discrete_ids = torch.zeros((n_samples, max_delta_len), dtype=torch.long)
+    reconstructed_coords = torch.zeros((n_samples, max_delta_len + 1, coord_dim), dtype=torch.float32)
+    reconstructed_token_coords = torch.zeros((n_samples, max_delta_len, coord_dim), dtype=torch.float32)
+
+    for start in range(0, int(n_samples), int(chunk_size)):
+        end = min(start + int(chunk_size), int(n_samples))
+        deltas_chunk = deltas[start:end].to(device=device, dtype=torch.float32, non_blocking=True)
+        delta_length_chunk = delta_length[start:end].to(device=device, dtype=torch.long, non_blocking=True)
+        particle_length_chunk = particle_length[start:end].to(device=device, dtype=torch.long, non_blocking=True)
+        box_chunk = box_size[start:end].to(device=device, dtype=torch.float32, non_blocking=True)
+
+        batch_size = deltas_chunk.shape[0]
+        valid_delta_mask = torch.arange(max_delta_len, device=device).unsqueeze(0) < delta_length_chunk.unsqueeze(1)
+
+        token_ids_chunk = torch.zeros((batch_size, max_delta_len), dtype=torch.long, device=device)
+        if bool(valid_delta_mask.any()):
+            flat_valid = deltas_chunk[valid_delta_mask]
+            distances = torch.cdist(flat_valid, codebook, p=2.0)
+            token_ids_chunk[valid_delta_mask] = torch.argmin(distances, dim=-1)
+
+        quantized_deltas_chunk = torch.zeros_like(deltas_chunk)
+        if bool(valid_delta_mask.any()):
+            quantized_deltas_chunk[valid_delta_mask] = codebook[token_ids_chunk[valid_delta_mask]]
+
+        coords_chunk = torch.zeros((batch_size, max_delta_len + 1, coord_dim), dtype=torch.float32, device=device)
+        coords_chunk[:, 1:, :] = torch.cumsum(quantized_deltas_chunk, dim=1)
+        if periodic:
+            coords_chunk = torch.remainder(coords_chunk, box_chunk.unsqueeze(1))
+
+        valid_particle_mask = torch.arange(max_delta_len + 1, device=device).unsqueeze(0) < particle_length_chunk.unsqueeze(1)
+        coords_chunk = coords_chunk * valid_particle_mask.unsqueeze(-1)
+
+        token_coord_mask = torch.arange(max_delta_len, device=device).unsqueeze(0) < delta_length_chunk.unsqueeze(1)
+        token_coords_chunk = coords_chunk[:, :-1, :] * token_coord_mask.unsqueeze(-1)
+
+        discrete_ids[start:end] = token_ids_chunk.cpu()
+        reconstructed_coords[start:end] = coords_chunk.cpu()
+        reconstructed_token_coords[start:end] = token_coords_chunk.cpu()
+
+    return discrete_ids, reconstructed_coords, reconstructed_token_coords
+
+
 def _load_h5_traj_and_box(path: str) -> tuple[np.ndarray, np.ndarray]:
     with h5py.File(path, "r") as h5f:
         if "traj" not in h5f:
@@ -214,6 +332,93 @@ def _compute_lj_energy_batch(
             energy = lj.potential(chunk)
         energies.append(energy.detach().cpu().numpy().astype(np.float32, copy=False))
     return np.concatenate(energies, axis=0)
+
+
+def _compute_dw_energy_batch(
+    coords: np.ndarray,
+    *,
+    box: np.ndarray,
+    periodic: bool,
+    a: float,
+    b: float,
+    c: float,
+    offset: float,
+    chunk_size: int = 2048,
+) -> np.ndarray:
+    coords_np = np.asarray(coords, dtype=np.float32)
+    if coords_np.ndim != 3:
+        raise ValueError(f"coords must be [B,N,D], got {tuple(coords_np.shape)}")
+    if chunk_size <= 0:
+        raise ValueError(f"chunk_size must be positive, got {chunk_size}")
+    boxlength = None
+    if periodic:
+        box_np = np.asarray(box, dtype=np.float32).reshape(-1)
+        if box_np.size != int(coords_np.shape[-1]):
+            raise ValueError(
+                f"box must have one entry per coordinate dimension, got {tuple(box_np.shape)} "
+                f"for coords dim {coords_np.shape[-1]}"
+            )
+        boxlength = torch.as_tensor(box_np, dtype=torch.float32)
+    dw = DoubleWellPotential(
+        a=float(a),
+        b=float(b),
+        c=float(c),
+        offset=float(offset),
+        dim=int(coords_np.shape[-2] * coords_np.shape[-1]),
+        n_particles=int(coords_np.shape[-2]),
+        boxlength=boxlength,
+    )
+
+    energies: list[np.ndarray] = []
+    for start in range(0, int(coords_np.shape[0]), int(chunk_size)):
+        end = min(start + int(chunk_size), int(coords_np.shape[0]))
+        chunk = torch.from_numpy(coords_np[start:end]).to(dtype=torch.float32)
+        with torch.no_grad():
+            energy = dw.potential(chunk)
+        energies.append(energy.detach().cpu().numpy().astype(np.float32, copy=False))
+    return np.concatenate(energies, axis=0)
+
+
+def _compute_target_energy_batch(
+    coords: np.ndarray,
+    *,
+    box: np.ndarray,
+    periodic: bool,
+    target_system: str,
+    lj_epsilon: float,
+    lj_sigma: float,
+    lj_cutoff: Optional[float],
+    lj_spring_constant: float,
+    dw_a: float,
+    dw_b: float,
+    dw_c: float,
+    dw_offset: float,
+    chunk_size: int = 2048,
+) -> np.ndarray:
+    system = str(target_system).lower()
+    if system == "lj":
+        return _compute_lj_energy_batch(
+            coords,
+            box=box,
+            periodic=bool(periodic),
+            epsilon=float(lj_epsilon),
+            sigma=float(lj_sigma),
+            cutoff=None if lj_cutoff is None else float(lj_cutoff),
+            spring_constant=float(lj_spring_constant),
+            chunk_size=int(chunk_size),
+        )
+    if system == "dw":
+        return _compute_dw_energy_batch(
+            coords,
+            box=box,
+            periodic=bool(periodic),
+            a=float(dw_a),
+            b=float(dw_b),
+            c=float(dw_c),
+            offset=float(dw_offset),
+            chunk_size=int(chunk_size),
+        )
+    raise ValueError(f"Unsupported target_system={target_system!r}; expected 'lj' or 'dw'.")
 
 
 def _rotation_matrix_2d(k: int) -> np.ndarray:
@@ -446,6 +651,8 @@ class LJTransferableDataset(Dataset):
         use_long_jump_token: bool = True,
         factorized: bool = False,
         polar: bool = False,
+        discrete: bool = False,
+        codebook_path: Optional[str] = None,
         random_grid_shift: bool = True,
         use_data_aug: bool = False,
         limit: Optional[int] = None,
@@ -475,6 +682,17 @@ class LJTransferableDataset(Dataset):
         self.use_data_aug = bool(use_data_aug)
         self.factorized = bool(factorized)
         self.polar = bool(polar)
+        self.discrete = bool(discrete)
+        self.codebook_path = str(codebook_path) if codebook_path is not None else None
+        self.codebook: Optional[torch.Tensor] = None
+        if self.discrete:
+            if self.factorized:
+                raise ValueError("discrete=True requires factorized=False.")
+            if self.polar:
+                raise ValueError("discrete=True is incompatible with polar=True.")
+            if self.codebook_path is None:
+                raise ValueError("discrete=True requires codebook_path.")
+            self.codebook = _load_codebook_tensor(self.codebook_path)
         if self.polar and self.factorized:
             raise ValueError(
                 "polar=True with factorized=True is not supported in this checkout because "
@@ -515,6 +733,10 @@ class LJTransferableDataset(Dataset):
                     f"All lj_transferable files must have the same coordinate dimension; "
                     f"expected {self.coord_dim}, got {dim} for {path}"
                 )
+            if self.discrete and self.codebook is not None and int(self.codebook.shape[1]) != int(dim):
+                raise ValueError(
+                    f"Discrete codebook dim {int(self.codebook.shape[1])} does not match coord dim {dim} for {path}"
+                )
 
             coords = traj
             if not self.periodic:
@@ -539,7 +761,7 @@ class LJTransferableDataset(Dataset):
             self.sample_id_to_local_index = self.sample_id_to_local_index[:lim]
             self.sample_lengths = self.sample_lengths[:lim]
 
-        self.vocab_size = int(self.tokenizer.vocab_size)
+        self.vocab_size = int(self.codebook.shape[0]) if self.discrete and self.codebook is not None else int(self.tokenizer.vocab_size)
         self.sos_id = int(self.vocab_size)
         if self.coord_dim is None:
             raise RuntimeError("Failed to infer coordinate dimension from lj_transferable inputs.")
@@ -563,6 +785,12 @@ class LJTransferableDataset(Dataset):
         if int(self.coord_dim) == 3:
             return self._space_filling_codes_3d(grid)
         raise ValueError(f"Hilbert-like ordering is only supported in 2D/3D, got dim={self.coord_dim}")
+
+    def _encode_deltas(self, deltas: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        if self.discrete:
+            assert self.codebook is not None
+            return _quantize_with_codebook(deltas, self.codebook)
+        return self.tokenizer.encode(deltas)
 
     def _grid_coords_periodic(self, coords: np.ndarray, box: np.ndarray) -> np.ndarray:
         wrapped = np.mod(coords, box[None, :])
@@ -672,7 +900,7 @@ class LJTransferableDataset(Dataset):
             raw = sorted_pos[i] - sorted_pos[i - 1]
             deltas[i - 1] = raw_delta(raw, box, periodic=self.periodic)
 
-        token_ids_np, long_jump_mask_np = self.tokenizer.encode(deltas)
+        token_ids_np, long_jump_mask_np = self._encode_deltas(deltas)
         token_ids = torch.from_numpy(token_ids_np).long()
 
         seq_len = len(token_ids_np)
@@ -785,7 +1013,7 @@ class LJTransferableDataset(Dataset):
         raw_diffs = sorted_pos[:, 1:, :] - sorted_pos[:, :-1, :]
         deltas = raw_delta(raw_diffs, box, periodic=self.periodic).astype(np.float32, copy=False)
 
-        token_ids, long_jump_mask = self.tokenizer.encode(deltas)
+        token_ids, long_jump_mask = self._encode_deltas(deltas)
         token_ids = token_ids.astype(np.int64, copy=False)
         long_jump_mask = long_jump_mask.astype(np.bool_, copy=False)
 
@@ -854,7 +1082,14 @@ class LJTransferableCachedDataset(Dataset):
     sample to match the output schema of LJTransferableDataset.
     """
 
-    def __init__(self, cache_path: str, *, limit: Optional[int] = None) -> None:
+    def __init__(
+        self,
+        cache_path: str,
+        *,
+        limit: Optional[int] = None,
+        discrete: bool = False,
+        codebook_path: Optional[str] = None,
+    ) -> None:
         try:
             payload = torch.load(cache_path, map_location="cpu", weights_only=False)
         except TypeError:
@@ -883,7 +1118,11 @@ class LJTransferableCachedDataset(Dataset):
         self.sequence_all = torch.as_tensor(payload["sequence"], dtype=torch.long)
         self.input_idx_all = torch.as_tensor(payload["input_idx"], dtype=torch.long)
         self.target_idx_all = torch.as_tensor(payload["target_idx"], dtype=torch.long)
-        self.deltas_all = torch.as_tensor(payload["deltas"], dtype=torch.float32)
+        is_discrete_cache = bool(dict(payload.get("metadata", {})).get("is_discrete", False))
+        self.deltas_all = torch.as_tensor(
+            payload["deltas"],
+            dtype=(torch.long if is_discrete_cache else torch.float32),
+        )
         self.delta_length_all = torch.as_tensor(payload["delta_length"], dtype=torch.long)
         self.token_coords_all = torch.as_tensor(payload["token_coords"], dtype=torch.float32)
         self.long_jump_mask_all = torch.as_tensor(payload["long_jump_mask"], dtype=torch.bool)
@@ -947,13 +1186,22 @@ class LJTransferableCachedDataset(Dataset):
             if self.target_energy_all is not None:
                 self.target_energy_all = self.target_energy_all[:lim]
 
-        self.vocab_size = int(payload["vocab_size"])
-        self.sos_id = int(payload["sos_id"])
         self.metadata: dict[str, Any] = dict(payload.get("metadata", {}))
         self.periodic = bool(self.metadata.get("periodic", True))
         self.coord_dim = int(self.token_coords_all.shape[-1])
         self.factorized = bool(self.metadata.get("factorized", False))
         self.polar = bool(self.metadata.get("polar", False))
+        self.discrete = bool(self.metadata.get("is_discrete", self.metadata.get("discrete", False)))
+        self.codebook_path = self.metadata.get("codebook_path")
+        self.vocab_size = int(payload["vocab_size"])
+        self.sos_id = int(payload["sos_id"])
+
+        if bool(discrete):
+            if not is_discrete_cache:
+                raise ValueError(
+                    "Dataset initialized with discrete=True, but the cache is continuous. "
+                    "Please run preprocess_lj_transferable.py with --discrete to generate an offline discrete cache."
+                )
 
     def __len__(self) -> int:
         return int(self.sample_length_all.shape[0])
@@ -961,12 +1209,17 @@ class LJTransferableCachedDataset(Dataset):
     def __getitem__(self, idx: int):
         seq_len = int(self.sample_length_all[idx].item())
         delta_len = int(self.delta_length_all[idx].item())
+        deltas_item = (
+            self.deltas_all[idx, :delta_len]
+            if self.deltas_all.ndim == 2
+            else self.deltas_all[idx, :delta_len, :]
+        )
         item = {
             "sequence": self.sequence_all[idx, : seq_len + 1],
             "input_idx": self.input_idx_all[idx, :seq_len],
             "target_idx": self.target_idx_all[idx, :seq_len],
             "seq": self.target_idx_all[idx, :seq_len],
-            "deltas": self.deltas_all[idx, :delta_len, :],
+            "deltas": deltas_item,
             "box_size": self.box_size_all[idx],
             "density": self.density_all[idx],
             "token_coords": self.token_coords_all[idx, :seq_len, :],
@@ -1003,6 +1256,8 @@ def build_lj_transferable_cache(
     use_long_jump_token: bool = True,
     factorized: bool = False,
     polar: bool = False,
+    discrete: bool = False,
+    codebook_path: Optional[str] = None,
     random_grid_shift: bool = False,
     augment_90deg_rotations: bool = False,
     num_augmentations: int = 5,
@@ -1010,10 +1265,15 @@ def build_lj_transferable_cache(
     cache_build_chunk_size: int = 16384,
     limit: Optional[int] = None,
     seed: int = 0,
+    target_system: str = "lj",
     lj_epsilon: float = 1.0,
     lj_sigma: float = 1.0,
     lj_cutoff: Optional[float] = None,
     lj_spring_constant: float = 0.5,
+    dw_a: float = 0.9,
+    dw_b: float = -4.0,
+    dw_c: float = 0.0,
+    dw_offset: float = 4.0,
 ) -> dict[str, Any]:
     """
     Precompute tokenized lj_transferable samples and store them in a .pt cache.
@@ -1032,6 +1292,8 @@ def build_lj_transferable_cache(
         use_long_jump_token=bool(use_long_jump_token),
         factorized=bool(factorized),
         polar=bool(polar),
+        discrete=False,
+        codebook_path=None,
         random_grid_shift=bool(random_grid_shift),
         limit=limit,
         seed=int(seed),
@@ -1045,6 +1307,12 @@ def build_lj_transferable_cache(
         raise ValueError(f"energy_chunk_size must be positive, got {energy_chunk_size}")
     if int(cache_build_chunk_size) <= 0:
         raise ValueError(f"cache_build_chunk_size must be positive, got {cache_build_chunk_size}")
+    if bool(discrete) and bool(factorized):
+        raise ValueError("Offline discrete cache generation requires factorized=False.")
+    if bool(discrete) and bool(polar):
+        raise ValueError("Offline discrete cache generation requires polar=False.")
+    if bool(discrete) and codebook_path is None:
+        raise ValueError("Offline discrete cache generation requires codebook_path.")
     if augment_90deg_rotations and int(dataset.coord_dim) != 2:
         raise ValueError(
             "augment_90deg_rotations=True is only supported for 2D lj_transferable data."
@@ -1097,14 +1365,19 @@ def build_lj_transferable_cache(
                 chunk_end = min(chunk_start + int(cache_build_chunk_size), int(sample_ids.size))
                 local_ids_chunk = local_ids[chunk_start:chunk_end]
                 coords_chunk = coords_file[local_ids_chunk]
-                energies_chunk = _compute_lj_energy_batch(
+                energies_chunk = _compute_target_energy_batch(
                     coords_chunk,
                     box=box,
                     periodic=bool(periodic),
-                    epsilon=float(lj_epsilon),
-                    sigma=float(lj_sigma),
-                    cutoff=None if lj_cutoff is None else float(lj_cutoff),
-                    spring_constant=float(lj_spring_constant),
+                    target_system=str(target_system),
+                    lj_epsilon=float(lj_epsilon),
+                    lj_sigma=float(lj_sigma),
+                    lj_cutoff=None if lj_cutoff is None else float(lj_cutoff),
+                    lj_spring_constant=float(lj_spring_constant),
+                    dw_a=float(dw_a),
+                    dw_b=float(dw_b),
+                    dw_c=float(dw_c),
+                    dw_offset=float(dw_offset),
                     chunk_size=int(energy_chunk_size),
                 )
                 batch_len = int(coords_chunk.shape[0])
@@ -1166,14 +1439,19 @@ def build_lj_transferable_cache(
             local_ids = dataset.sample_id_to_local_index[sample_ids]
             coords_all = dataset._coords_by_file[int(file_idx)][local_ids]
             box = dataset._box_by_file[int(file_idx)]
-            base_target_energy[sample_ids] = _compute_lj_energy_batch(
+            base_target_energy[sample_ids] = _compute_target_energy_batch(
                 coords_all,
                 box=box,
                 periodic=bool(periodic),
-                epsilon=float(lj_epsilon),
-                sigma=float(lj_sigma),
-                cutoff=None if lj_cutoff is None else float(lj_cutoff),
-                spring_constant=float(lj_spring_constant),
+                target_system=str(target_system),
+                lj_epsilon=float(lj_epsilon),
+                lj_sigma=float(lj_sigma),
+                lj_cutoff=None if lj_cutoff is None else float(lj_cutoff),
+                lj_spring_constant=float(lj_spring_constant),
+                dw_a=float(dw_a),
+                dw_b=float(dw_b),
+                dw_c=float(dw_c),
+                dw_offset=float(dw_offset),
                 chunk_size=int(energy_chunk_size),
             )
         for sample_idx in range(base_n_samples):
@@ -1206,6 +1484,40 @@ def build_lj_transferable_cache(
                 target_energy[out_idx] = float(base_target_energy[sample_idx])
                 out_idx += 1
 
+    vocab_size_value = int(dataset.vocab_size)
+    sos_id_value = int(dataset.sos_id)
+    deltas_payload: torch.Tensor = deltas
+    if bool(discrete):
+        codebook_size_value = int(_load_codebook_tensor(str(codebook_path)).shape[0])
+        discrete_ids, reconstructed_coords, reconstructed_token_coords = _offline_discretize_cache_tensors(
+            deltas=deltas,
+            delta_length=delta_length,
+            particle_length=particle_length,
+            box_size=box_size,
+            codebook_path=str(codebook_path),
+            periodic=bool(periodic),
+            chunk_size=int(cache_build_chunk_size),
+        )
+        target_idx = discrete_ids.to(dtype=torch.long)
+        input_idx = torch.full_like(target_idx, fill_value=codebook_size_value)
+        if target_idx.shape[1] > 0:
+            input_idx[:, 0] = codebook_size_value
+        if target_idx.shape[1] > 1:
+            input_idx[:, 1:] = target_idx[:, :-1]
+        sequence = torch.full(
+            (target_idx.shape[0], target_idx.shape[1] + 1),
+            fill_value=codebook_size_value,
+            dtype=torch.long,
+        )
+        sequence[:, 1:] = target_idx
+        long_jump_mask.zero_()
+        sample_length = delta_length.clone()
+        absolute_coords = reconstructed_coords
+        token_coords = reconstructed_token_coords
+        deltas_payload = discrete_ids.to(dtype=torch.long)
+        vocab_size_value = codebook_size_value
+        sos_id_value = vocab_size_value
+
     metadata = {
         "file_paths": list(dataset.file_paths),
         "periodic": bool(periodic),
@@ -1218,6 +1530,10 @@ def build_lj_transferable_cache(
         "use_long_jump_token": bool(use_long_jump_token),
         "factorized": bool(factorized),
         "polar": bool(polar),
+        "discrete": bool(discrete),
+        "is_discrete": bool(discrete),
+        "codebook_path": None if codebook_path is None else str(codebook_path),
+        "codebook_size": int(vocab_size_value) if bool(discrete) else None,
         "random_grid_shift": bool(random_grid_shift),
         "use_data_aug": False,
         "augment_90deg_rotations": bool(augment_90deg_rotations),
@@ -1228,20 +1544,25 @@ def build_lj_transferable_cache(
         "base_n_samples": int(base_n_samples),
         "max_abs_relative_displacement": float(max_abs_relative_displacement),
         "seed": int(seed),
+        "target_system": str(target_system),
         "lj_epsilon": float(lj_epsilon),
         "lj_sigma": float(lj_sigma),
         "lj_cutoff": None if lj_cutoff is None else float(lj_cutoff),
         "lj_spring_constant": float(lj_spring_constant),
+        "dw_a": float(dw_a),
+        "dw_b": float(dw_b),
+        "dw_c": float(dw_c),
+        "dw_offset": float(dw_offset),
         "periodic_box_convention": "zero_to_L",
         "relative_anchor_convention": "first_particle_origin_chain",
-        "version": 10,
+        "version": 12,
     }
 
     payload = {
         "sequence": sequence,
         "input_idx": input_idx,
         "target_idx": target_idx,
-        "deltas": deltas,
+        "deltas": deltas_payload,
         "absolute_coords": absolute_coords,
         "token_coords": token_coords,
         "long_jump_mask": long_jump_mask,
@@ -1251,8 +1572,8 @@ def build_lj_transferable_cache(
         "delta_length": delta_length,
         "particle_length": particle_length,
         "target_energy": target_energy,
-        "vocab_size": int(dataset.vocab_size),
-        "sos_id": int(dataset.sos_id),
+        "vocab_size": int(vocab_size_value),
+        "sos_id": int(sos_id_value),
         "metadata": metadata,
     }
     torch.save(payload, output_path)
@@ -1263,17 +1584,139 @@ def build_lj_transferable_cache(
         "max_particles": max_particles,
         "max_delta_len": max_delta_len,
         "max_seq_len": max_seq_len,
-        "vocab_size": int(dataset.vocab_size),
+        "vocab_size": int(vocab_size_value),
         "periodic": bool(periodic),
         "ordering": str(ordering),
         "factorized": bool(factorized),
         "polar": bool(polar),
+        "discrete": bool(discrete),
         "random_grid_shift": bool(random_grid_shift),
         "num_augmentations": int(effective_num_augmentations),
         "energy_chunk_size": int(energy_chunk_size),
         "cache_build_chunk_size": int(cache_build_chunk_size),
         "rotation_count": int(len(rotation_indices)),
         "max_abs_relative_displacement": float(max_abs_relative_displacement),
+    }
+
+
+def discretize_lj_transferable_cache(
+    *,
+    source_cache_path: str,
+    output_path: str,
+    codebook_path: str,
+    chunk_size: int = 16384,
+) -> dict[str, Any]:
+    try:
+        payload = torch.load(source_cache_path, map_location="cpu", weights_only=False)
+    except TypeError:
+        payload = torch.load(source_cache_path, map_location="cpu")
+    if not isinstance(payload, dict):
+        raise ValueError(f"Invalid cache format in {source_cache_path}: expected dict")
+
+    metadata = dict(payload.get("metadata", {}))
+    if bool(metadata.get("is_discrete", metadata.get("discrete", False))):
+        raise ValueError(
+            f"Source cache is already discrete: {source_cache_path}. "
+            "Expected a continuous cache as the codebook/discretization source."
+        )
+    if bool(metadata.get("factorized", False)):
+        raise ValueError("Offline discrete cache generation requires factorized=False.")
+    if bool(metadata.get("polar", False)):
+        raise ValueError("Offline discrete cache generation requires polar=False.")
+
+    required_keys = (
+        "sequence",
+        "input_idx",
+        "target_idx",
+        "deltas",
+        "delta_length",
+        "box_size",
+        "density",
+        "sample_length",
+        "particle_length",
+        "target_energy",
+        "long_jump_mask",
+    )
+    missing = [k for k in required_keys if k not in payload]
+    if missing:
+        raise KeyError(f"Missing keys in continuous cache {source_cache_path}: {missing}")
+
+    deltas = torch.as_tensor(payload["deltas"], dtype=torch.float32)
+    delta_length = torch.as_tensor(payload["delta_length"], dtype=torch.long)
+    particle_length = torch.as_tensor(payload["particle_length"], dtype=torch.long)
+    box_size = torch.as_tensor(payload["box_size"], dtype=torch.float32)
+    if deltas.ndim != 3:
+        raise ValueError(f"Continuous cache deltas must be [B,T,D], got {tuple(deltas.shape)}")
+
+    codebook_size_value = int(_load_codebook_tensor(str(codebook_path)).shape[0])
+    periodic = bool(metadata.get("periodic", True))
+    discrete_ids, reconstructed_coords, reconstructed_token_coords = _offline_discretize_cache_tensors(
+        deltas=deltas,
+        delta_length=delta_length,
+        particle_length=particle_length,
+        box_size=box_size,
+        codebook_path=str(codebook_path),
+        periodic=periodic,
+        chunk_size=int(chunk_size),
+    )
+
+    target_idx = discrete_ids.to(dtype=torch.long)
+    input_idx = torch.full_like(target_idx, fill_value=codebook_size_value)
+    if target_idx.shape[1] > 1:
+        input_idx[:, 1:] = target_idx[:, :-1]
+    sequence = torch.full(
+        (target_idx.shape[0], target_idx.shape[1] + 1),
+        fill_value=codebook_size_value,
+        dtype=torch.long,
+    )
+    sequence[:, 1:] = target_idx
+
+    out_metadata = dict(metadata)
+    out_metadata["discrete"] = True
+    out_metadata["is_discrete"] = True
+    out_metadata["codebook_path"] = str(codebook_path)
+    out_metadata["codebook_size"] = int(codebook_size_value)
+    out_metadata["relative_anchor_convention"] = "first_particle_origin_chain"
+    out_metadata["version"] = max(int(out_metadata.get("version", 0)), 12)
+
+    out_payload = dict(payload)
+    out_payload["sequence"] = sequence
+    out_payload["input_idx"] = input_idx
+    out_payload["target_idx"] = target_idx
+    out_payload["deltas"] = discrete_ids.to(dtype=torch.long)
+    out_payload["absolute_coords"] = reconstructed_coords
+    out_payload["token_coords"] = reconstructed_token_coords
+    out_payload["long_jump_mask"] = torch.zeros_like(target_idx, dtype=torch.bool)
+    out_payload["sample_length"] = delta_length.clone()
+    out_payload["vocab_size"] = int(codebook_size_value)
+    out_payload["sos_id"] = int(codebook_size_value)
+    out_payload["metadata"] = out_metadata
+
+    torch.save(out_payload, output_path)
+    sample_length = out_payload["sample_length"]
+    n_samples = int(sample_length.shape[0]) if hasattr(sample_length, "shape") else -1
+    max_particles = int(reconstructed_coords.shape[1])
+    max_delta_len = int(discrete_ids.shape[1])
+    return {
+        "output_path": output_path,
+        "source_cache_path": source_cache_path,
+        "n_samples": n_samples,
+        "max_particles": max_particles,
+        "max_delta_len": max_delta_len,
+        "max_seq_len": max_delta_len,
+        "vocab_size": int(codebook_size_value),
+        "periodic": periodic,
+        "ordering": str(out_metadata.get("ordering", "unknown")),
+        "factorized": False,
+        "polar": False,
+        "discrete": True,
+        "random_grid_shift": bool(out_metadata.get("random_grid_shift", False)),
+        "num_augmentations": int(out_metadata.get("num_augmentations", 1)),
+        "energy_chunk_size": int(out_metadata.get("energy_chunk_size", 0)),
+        "cache_build_chunk_size": int(chunk_size),
+        "rotation_count": int(out_metadata.get("rotation_count", 1)),
+        "base_n_samples": int(out_metadata.get("base_n_samples", n_samples)),
+        "max_abs_relative_displacement": float(out_metadata.get("max_abs_relative_displacement", 0.0)),
     }
 
 

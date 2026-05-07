@@ -219,3 +219,66 @@ class LJ(BaseDistribution):
             areas = 4 * math.pi * ((bins[:-1] + bins[1:]) / 2) ** 2 * (bins[1:] - bins[:-1])
             g_r = counts / nsamples / areas / bulk_density
         return bins, g_r
+
+
+def compute_distances(x, n_particles, n_dimensions, boxlength=None, remove_duplicates: bool = True):
+    if n_particles is not None and n_dimensions is not None:
+        x = x.reshape(-1, n_particles, n_dimensions)
+    pair_vec = x.unsqueeze(-2) - x.unsqueeze(-3)
+    if boxlength is not None:
+        pair_vec = pair_vec - torch.round(pair_vec / boxlength) * boxlength
+    distances = torch.linalg.norm(pair_vec.float(), axis=-1)
+    if remove_duplicates:
+        mask = torch.triu(
+            torch.ones((n_particles, n_particles), device=x.device, dtype=torch.bool),
+            diagonal=1,
+        )
+        distances = distances[:, mask]
+        distances = distances.reshape(-1, n_particles * (n_particles - 1) // 2)
+    return distances
+
+
+class DoubleWellPotential(torch.nn.Module):
+    def __init__(
+        self,
+        a: float = 0.9,
+        b: float = -4.0,
+        c: float = 0.0,
+        offset: float = 4.0,
+        dim: int | None = None,
+        n_particles: int | None = None,
+        boxlength=None,
+    ) -> None:
+        super().__init__()
+        if dim is None or n_particles is None:
+            raise ValueError("DoubleWellPotential requires dim and n_particles.")
+        self._dim = int(dim)
+        self._n_particles = int(n_particles)
+        self._n_dimensions = self._dim // self._n_particles
+        self._a = float(a)
+        self._b = float(b)
+        self._c = float(c)
+        self._offset = float(offset)
+        self._boxlength = boxlength
+
+    def energy(self, x):
+        x = x.contiguous()
+        dists = compute_distances(
+            x,
+            self._n_particles,
+            self._n_dimensions,
+            boxlength=self._boxlength,
+        )
+        dists = dists - self._offset
+        energies = self._a * dists**4 + self._b * dists**2 + self._c
+        return energies.sum(-1, keepdim=True)
+
+    def potential(self, x):
+        return self.energy(x).squeeze(-1)
+
+    def force(self, x):
+        x_req = x.detach().clone().requires_grad_(True)
+        with torch.enable_grad():
+            energies = self.energy(x_req)
+            forces = -torch.autograd.grad(energies, x_req, grad_outputs=torch.ones_like(energies))[0]
+        return forces

@@ -176,6 +176,8 @@ class GraphormerAR(pl.LightningModule):
         num_mixtures: int = 32,
         full_covariance: bool = False,
         polar: bool = False,
+        discrete: bool = False,
+        binned_discrete: bool = False,
         lambda_var: float = 0.0,
         lj_kT: float = 1.0,
         lj_epsilon: float = 1.0,
@@ -228,9 +230,15 @@ class GraphormerAR(pl.LightningModule):
 
         self.coord_dequantize_train = bool(coord_dequantize_train)
         self.coord_dequant_width = max(float(coord_dequant_width), 0.0)
+        self.discrete = bool(discrete)
+        self.binned_discrete = bool(binned_discrete)
         self.use_continuous_head = bool(use_continuous_head)
         self.full_covariance = bool(full_covariance)
         self.polar = bool(polar)
+        if self.discrete and self.use_continuous_head:
+            raise ValueError("discrete=True is incompatible with use_continuous_head=True.")
+        if self.discrete and self.binned_discrete:
+            raise ValueError("discrete=True is incompatible with binned_discrete=True.")
         self.output_spatial_dim = int(ida_spatial_dim)
         self.continuous_out_dim = 1 if self.is_factorized else self.output_spatial_dim
         self.axis_emb = nn.Embedding(self.output_spatial_dim, d_model) if self.is_factorized else None
@@ -523,7 +531,27 @@ class GraphormerAR(pl.LightningModule):
         coords = self._prepare_attention_coords(coords, seq_len=seq_in.shape[1])
         coords = self._apply_training_coord_dequantization(coords, box_size)
         outputs = self.forward(seq_in, coords=coords, box_size=box_size, density=density, pad_mask=pad)
-        if self.use_continuous_head:
+        if self.discrete:
+            logits = outputs
+            tok_nll = F.cross_entropy(
+                logits.reshape(-1, self.K),
+                seq.reshape(-1),
+                reduction="none",
+            ).view_as(seq).float()
+            if pad is not None:
+                tok_nll = tok_nll.masked_fill(pad, 0.0)
+                coord_count = (~pad).sum(dim=1).to(tok_nll.dtype).clamp_min(1.0)
+            else:
+                coord_count = torch.full(
+                    (seq.size(0),),
+                    fill_value=seq.size(1),
+                    device=seq.device,
+                    dtype=tok_nll.dtype,
+                )
+            seq_nll_model = tok_nll.sum(dim=1)
+            loss = (seq_nll_model / coord_count).mean()
+            seq_nll_exact = seq_nll_model.detach()
+        elif self.use_continuous_head:
             deltas = batch.get("deltas")
             if deltas is None:
                 raise KeyError("Continuous head requires batch['deltas'] targets.")

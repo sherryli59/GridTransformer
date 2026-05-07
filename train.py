@@ -134,6 +134,22 @@ def parse_args() -> argparse.Namespace:
         help="Use spherical (r, theta, phi) continuous targets for 3D lj_transferable training.",
     )
     parser.add_argument(
+        "--discrete",
+        action="store_true",
+        help="Use a learned discrete 3D codebook for lj_transferable relative-displacement targets.",
+    )
+    parser.add_argument(
+        "--binned_discrete",
+        action="store_true",
+        help="Use the windowed relative-displacement tokenizer as an explicit discrete target space without a codebook.",
+    )
+    parser.add_argument(
+        "--codebook_path",
+        type=str,
+        default="codebook.pt",
+        help="Path to the saved discrete codebook tensor used when --discrete is enabled.",
+    )
+    parser.add_argument(
         "--lj_transfer_disable_random_shift",
         action="store_true",
         help="Disable random global shift augmentation for transferable LJ tokenization.",
@@ -409,6 +425,8 @@ def build_data_module(args: argparse.Namespace):
             use_long_jump_token=(not args.lj_transfer_no_long_jump),
             factorized=bool(args.factorized),
             polar=bool(args.polar),
+            discrete=bool(args.discrete),
+            codebook_path=(str(args.codebook_path) if args.discrete else None),
             random_grid_shift=(not args.lj_transfer_disable_random_shift),
             use_data_aug=bool(args.lj_transfer_use_data_aug),
             batch_size=args.batch_size,
@@ -427,6 +445,8 @@ def build_data_module(args: argparse.Namespace):
             "coord_dim": int(data_module.coord_dim or 2),
             "factorized": bool(args.factorized),
             "polar": bool(args.polar),
+            "discrete": bool(args.discrete),
+            "binned_discrete": bool(args.binned_discrete),
         }
     elif dataset == "lj_abs":
         data_path = args.data_dir
@@ -481,6 +501,13 @@ def build_data_module(args: argparse.Namespace):
 
 def main() -> None:
     args = parse_args()
+    if args.discrete:
+        args.factorized = False
+        args.use_continuous_head = False
+        args.full_covariance = False
+    if args.binned_discrete:
+        args.use_continuous_head = False
+        args.full_covariance = False
     if args.use_rbf_bias and args.use_deep_ida:
         raise ValueError("--use_rbf_bias and --use_deep_ida are mutually exclusive.")
     if args.ar_permute_group_size <= 0:
@@ -492,6 +519,18 @@ def main() -> None:
             raise ValueError("--use_continuous_head is only supported with --dataset lj_transferable.")
     if args.full_covariance and not args.use_continuous_head:
         raise ValueError("--full_covariance requires --use_continuous_head.")
+    if args.discrete:
+        if args.dataset != "lj_transferable":
+            raise ValueError("--discrete is only supported with --dataset lj_transferable.")
+        if args.polar:
+            raise ValueError("--discrete is incompatible with --polar.")
+    if args.binned_discrete:
+        if args.dataset != "lj_transferable":
+            raise ValueError("--binned_discrete is only supported with --dataset lj_transferable.")
+        if args.discrete:
+            raise ValueError("--binned_discrete is incompatible with --discrete.")
+        if args.polar:
+            raise ValueError("--binned_discrete is incompatible with --polar.")
     if args.polar:
         if args.dataset != "lj_transferable":
             raise ValueError("--polar is only supported with --dataset lj_transferable.")
@@ -587,6 +626,8 @@ def main() -> None:
                 rope_max_period=args.ar_rope_max_period,
                 is_factorized=bool(args.factorized),
                 polar=bool(args.polar),
+                discrete=bool(args.discrete),
+                binned_discrete=bool(args.binned_discrete),
                 use_continuous_head=bool(args.use_continuous_head),
                 num_mixtures=int(args.num_mixtures),
                 full_covariance=bool(args.full_covariance),
@@ -629,6 +670,8 @@ def main() -> None:
                 rope_max_period=args.ar_rope_max_period,
                 is_factorized=bool(args.factorized),
                 polar=bool(args.polar),
+                discrete=bool(args.discrete),
+                binned_discrete=bool(args.binned_discrete),
                 use_continuous_head=bool(args.use_continuous_head),
                 num_mixtures=int(args.num_mixtures),
                 full_covariance=bool(args.full_covariance),

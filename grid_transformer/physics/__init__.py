@@ -1,3 +1,3 @@
-from .energy import BaseDistribution, LJ
+from .energy import BaseDistribution, DoubleWellPotential, LJ
 
-__all__ = ["BaseDistribution", "LJ"]
+__all__ = ["BaseDistribution", "LJ", "DoubleWellPotential"]

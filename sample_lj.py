@@ -10,7 +10,7 @@ import torch
 import torch.nn.functional as F
 
 from grid_transformer.data.lj_abs_dataset import AbsoluteCoordinateTokenizer
-from grid_transformer.data.lj_transferable import RelativeDeltaTokenizer
+from grid_transformer.data.lj_transferable import RelativeDeltaTokenizer, _load_codebook_tensor
 from grid_transformer.models.ar_registry import AR_ARCH_CHOICES, load_ar_checkpoint
 from grid_transformer.utils.spatial import spherical_to_cartesian
 
@@ -356,7 +356,9 @@ def autoregressive_relative_delta_sample(
     n_particles: int,
     box_lengths: Sequence[float],
     nsamples: int,
-    tokenizer: RelativeDeltaTokenizer,
+    tokenizer: Optional[RelativeDeltaTokenizer] = None,
+    codebook: Optional[torch.Tensor] = None,
+    discrete: bool = False,
     sample_mode: str = "multinomial",
     temperature: float = 0.7,
     top_k: Optional[int] = None,
@@ -375,31 +377,47 @@ def autoregressive_relative_delta_sample(
         raise ValueError(f"nsamples must be positive, got {nsamples}")
     if float(continuous_sigma_floor) < 0.0:
         raise ValueError(f"continuous_sigma_floor must be >= 0, got {continuous_sigma_floor}")
+    if discrete and use_continuous_head:
+        raise ValueError("discrete=True is incompatible with use_continuous_head=True.")
 
     device = next(model.parameters()).device
     K = int(model.K)
-    if int(tokenizer.vocab_size) != K:
-        base_vocab = int(tokenizer.base_vocab_size)
-        hint = ""
-        if base_vocab == K and tokenizer.use_long_jump_token:
-            hint = (
-                " Set `--relative_no_long_jump` to match this checkpoint, or sample with a "
-                "checkpoint trained with a long-jump token."
-            )
-        elif base_vocab + 1 == K and (not tokenizer.use_long_jump_token):
-            hint = (
-                " This checkpoint appears to expect a long-jump token. Remove "
-                "`--relative_no_long_jump`."
-            )
-        raise ValueError(
-            f"Tokenizer vocab ({tokenizer.vocab_size}) does not match model K ({K}).{hint} "
-            "Also ensure the checkpoint was trained with `--dataset lj_transferable` before "
-            "using `--mode relative`."
-        )
     if model.sos_id is None:
         raise ValueError("Checkpoint has no sos_id; cannot run autoregressive sampling.")
     sos_id = int(model.sos_id)
-    coord_dim = int(tokenizer.dim)
+    if discrete:
+        if codebook is None:
+            raise ValueError("discrete=True requires a codebook tensor.")
+        codebook = torch.as_tensor(codebook, dtype=torch.float32, device=device)
+        if codebook.ndim != 2:
+            raise ValueError(f"codebook must be rank-2 [K,D], got {tuple(codebook.shape)}")
+        if int(codebook.shape[0]) != K:
+            raise ValueError(f"Codebook size {int(codebook.shape[0])} does not match model K ({K}).")
+        coord_dim = int(codebook.shape[1])
+        factorized = False
+    else:
+        if tokenizer is None:
+            raise ValueError("Non-discrete relative sampling requires a tokenizer.")
+        if int(tokenizer.vocab_size) != K:
+            base_vocab = int(tokenizer.base_vocab_size)
+            hint = ""
+            if base_vocab == K and tokenizer.use_long_jump_token:
+                hint = (
+                    " Set `--relative_no_long_jump` to match this checkpoint, or sample with a "
+                    "checkpoint trained with a long-jump token."
+                )
+            elif base_vocab + 1 == K and (not tokenizer.use_long_jump_token):
+                hint = (
+                    " This checkpoint appears to expect a long-jump token. Remove "
+                    "`--relative_no_long_jump`."
+                )
+            raise ValueError(
+                f"Tokenizer vocab ({tokenizer.vocab_size}) does not match model K ({K}).{hint} "
+                "Also ensure the checkpoint was trained with `--dataset lj_transferable` before "
+                "using `--mode relative`."
+            )
+        coord_dim = int(tokenizer.dim)
+        factorized = bool(getattr(tokenizer, "factorized", False))
     box_np = np.asarray(box_lengths, dtype=np.float32).reshape(-1)
     if box_np.size != coord_dim:
         raise ValueError(f"box_lengths must have length {coord_dim}, got {box_np.size}")
@@ -415,7 +433,6 @@ def autoregressive_relative_delta_sample(
     box_size = torch.from_numpy(box_np).to(device=device, dtype=torch.float32).unsqueeze(0).expand(nsamples, -1)
 
     n_predict_particles = n_particles - 1
-    factorized = bool(getattr(tokenizer, "factorized", False))
     if polar and factorized:
         raise ValueError(
             "Polar continuous sampling with factorized token conditioning is not supported in this checkout."
@@ -507,6 +524,7 @@ def autoregressive_relative_delta_sample(
                 delta_cart_t = spherical_to_cartesian(delta_model_t)
                 delta_context_t = delta_cart_t
 
+            assert tokenizer is not None
             nxt = _encode_relative_delta_context(delta_context_t, tokenizer)
             seq_out[:, t] = nxt
             assert logp_continuous is not None
@@ -527,6 +545,27 @@ def autoregressive_relative_delta_sample(
                     raw_pos = _wrap_positions_0_to_L(raw_pos, box_size)
                 deltas[:, t, :] = delta_cart_t
                 x_base[:, t + 1, :] = raw_pos
+        elif discrete:
+            logits = outputs[:, -1, :]
+            log_probs = _sampling_log_probs(logits, temperature=temperature, top_k=top_k)
+            if sample_mode == "argmax":
+                nxt = log_probs.argmax(dim=-1)
+            elif sample_mode == "multinomial":
+                probs = torch.exp(log_probs)
+                nxt = torch.multinomial(probs, num_samples=1, generator=gen).squeeze(1)
+            else:
+                raise ValueError(f"Unknown sample_mode '{sample_mode}'")
+
+            seq_out[:, t] = nxt
+            logp_discrete += log_probs.gather(1, nxt.unsqueeze(1)).squeeze(1)
+
+            assert codebook is not None
+            delta_t = codebook.index_select(0, nxt).to(dtype=torch.float32)
+            raw_pos = x_base[:, t, :] + delta_t
+            if periodic:
+                raw_pos = _wrap_positions_0_to_L(raw_pos, box_size)
+            deltas[:, t, :] = delta_t
+            x_base[:, t + 1, :] = raw_pos
         else:
             logits = outputs[:, -1, :]
             log_probs = _sampling_log_probs(logits, temperature=temperature, top_k=top_k)
@@ -544,6 +583,7 @@ def autoregressive_relative_delta_sample(
             if factorized:
                 if t % coord_dim == coord_dim - 1:
                     particle_tokens = seq_out[:, t - coord_dim + 1 : t + 1]
+                    assert tokenizer is not None
                     delta_t = tokenizer.decode(particle_tokens).squeeze(1).to(device=device, dtype=torch.float32)
                     p_idx = (t // coord_dim) + 1
                     raw_pos = x_base[:, p_idx - 1, :] + delta_t
@@ -552,6 +592,7 @@ def autoregressive_relative_delta_sample(
                     deltas[:, p_idx - 1, :] = delta_t
                     x_base[:, p_idx, :] = raw_pos
             else:
+                assert tokenizer is not None
                 delta_t = tokenizer.decode(nxt).to(device=device, dtype=torch.float32)
                 raw_pos = x_base[:, t, :] + delta_t
                 if periodic:
@@ -730,6 +771,22 @@ def parse_args() -> argparse.Namespace:
         help="Interpret continuous relative outputs as spherical coordinates and convert them back to Cartesian for geometry.",
     )
     ap.add_argument(
+        "--discrete",
+        action="store_true",
+        help="Use a learned discrete 3D codebook for relative-displacement sampling.",
+    )
+    ap.add_argument(
+        "--binned_discrete",
+        action="store_true",
+        help="Use the windowed relative-displacement tokenizer as an explicit discrete target space without a codebook.",
+    )
+    ap.add_argument(
+        "--codebook_path",
+        type=str,
+        default="codebook.pt",
+        help="Path to the saved discrete codebook tensor used when --discrete is enabled.",
+    )
+    ap.add_argument(
         "--use_continuous_head",
         action="store_true",
         help="Force continuous-head relative sampling. If omitted, checkpoint metadata is used.",
@@ -770,6 +827,13 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    if args.discrete:
+        args.factorized = False
+        args.use_continuous_head = False
+        args.full_covariance = False
+    if args.binned_discrete:
+        args.use_continuous_head = False
+        args.full_covariance = False
     if float(args.temperature) <= 0.0:
         raise ValueError(f"--temperature must be > 0, got {args.temperature}")
 
@@ -784,6 +848,20 @@ def main() -> None:
         ar_arch=str(args.ar_arch),
         use_ida=bool(args.use_ida),
     )
+    ckpt_uses_discrete = bool(getattr(model, "discrete", False))
+    ckpt_uses_binned_discrete = bool(getattr(model, "binned_discrete", False))
+    if args.discrete and (not ckpt_uses_discrete):
+        raise ValueError("Checkpoint was not trained with a discrete codebook head.")
+    if ckpt_uses_discrete and (not args.discrete):
+        raise ValueError(
+            "Checkpoint was trained with a discrete codebook head. Re-run with --discrete and --codebook_path."
+        )
+    discrete = bool(args.discrete)
+    if args.binned_discrete and (not ckpt_uses_binned_discrete):
+        raise ValueError("Checkpoint was not trained with binned discrete relative targets.")
+    if args.discrete and ckpt_uses_binned_discrete:
+        raise ValueError("Checkpoint uses binned discrete targets, not a codebook. Re-run with --binned_discrete.")
+    binned_discrete = bool(args.binned_discrete) or ckpt_uses_binned_discrete
     ckpt_uses_continuous_head = bool(getattr(model, "use_continuous_head", False))
     if args.use_continuous_head and (not ckpt_uses_continuous_head):
         raise ValueError("Checkpoint was not trained with a continuous head.")
@@ -797,12 +875,26 @@ def main() -> None:
         raise ValueError("Checkpoint was not trained with polar continuous targets.")
     polar = bool(args.polar) or ckpt_uses_polar
     K = int(model.K)
+    if discrete and args.mode != "relative":
+        raise ValueError("Discrete codebook sampling is only supported with --mode relative.")
+    if binned_discrete and args.mode != "relative":
+        raise ValueError("Binned discrete sampling is only supported with --mode relative.")
     if use_continuous_head and args.mode != "relative":
         raise ValueError("Continuous-head sampling is only supported with --mode relative.")
     if full_covariance and (not use_continuous_head):
         raise ValueError("Full-covariance sampling currently requires a continuous-head relative checkpoint.")
     if polar and (not use_continuous_head):
         raise ValueError("Polar sampling currently requires a continuous-head relative checkpoint.")
+    if discrete and use_continuous_head:
+        raise ValueError("Discrete codebook sampling is incompatible with continuous-head sampling.")
+    if discrete and polar:
+        raise ValueError("Discrete codebook sampling is incompatible with polar sampling.")
+    if binned_discrete and discrete:
+        raise ValueError("Binned discrete sampling is incompatible with codebook discrete sampling.")
+    if binned_discrete and use_continuous_head:
+        raise ValueError("Binned discrete sampling is incompatible with continuous-head sampling.")
+    if binned_discrete and polar:
+        raise ValueError("Binned discrete sampling is incompatible with polar sampling.")
     periodic = bool(args.periodic) if args.periodic is not None else bool(getattr(model, "torus", True))
     inferred_coord_dim = args.coord_dim
     if inferred_coord_dim is None:
@@ -899,32 +991,47 @@ def main() -> None:
         print(f"Mean logp_base:     {out['logp_base'].mean().item():.6f}")
         return
 
-    requested_factorized = bool(args.factorized)
-    requested_use_long_jump = not bool(args.relative_no_long_jump)
-    resolved_factorized, resolved_use_long_jump = _infer_relative_tokenizer_settings(
-        K=K,
-        bins=int(args.relative_bins),
-        coord_dim=coord_dim,
-        requested_factorized=requested_factorized,
-        requested_use_long_jump=requested_use_long_jump,
-    )
-    if resolved_factorized != requested_factorized:
-        print(
-            f"Note: overriding factorized={requested_factorized} with factorized={resolved_factorized} "
-            f"to match checkpoint vocab K={K}."
+    tokenizer: Optional[RelativeDeltaTokenizer] = None
+    codebook: Optional[torch.Tensor] = None
+    resolved_factorized = False
+    resolved_use_long_jump = False
+    if discrete:
+        codebook = _load_codebook_tensor(args.codebook_path).to(device=device, dtype=torch.float32)
+        if int(codebook.shape[0]) != K:
+            raise ValueError(
+                f"Codebook size {int(codebook.shape[0])} does not match checkpoint vocabulary K={K}."
+            )
+        if int(codebook.shape[1]) != coord_dim:
+            raise ValueError(
+                f"Codebook vector dim {int(codebook.shape[1])} does not match coord_dim={coord_dim}."
+            )
+    else:
+        requested_factorized = bool(args.factorized)
+        requested_use_long_jump = not bool(args.relative_no_long_jump)
+        resolved_factorized, resolved_use_long_jump = _infer_relative_tokenizer_settings(
+            K=K,
+            bins=int(args.relative_bins),
+            coord_dim=coord_dim,
+            requested_factorized=requested_factorized,
+            requested_use_long_jump=requested_use_long_jump,
         )
-    if resolved_use_long_jump != requested_use_long_jump:
-        print(
-            f"Note: overriding use_long_jump={requested_use_long_jump} with use_long_jump={resolved_use_long_jump} "
-            f"to match checkpoint vocab K={K}."
+        if resolved_factorized != requested_factorized:
+            print(
+                f"Note: overriding factorized={requested_factorized} with factorized={resolved_factorized} "
+                f"to match checkpoint vocab K={K}."
+            )
+        if resolved_use_long_jump != requested_use_long_jump:
+            print(
+                f"Note: overriding use_long_jump={requested_use_long_jump} with use_long_jump={resolved_use_long_jump} "
+                f"to match checkpoint vocab K={K}."
+            )
+        tokenizer = RelativeDeltaTokenizer(
+            window=float(args.relative_window),
+            bins=int(args.relative_bins),
+            dim=coord_dim,
+            use_long_jump_token=bool(resolved_use_long_jump),
+            factorized=bool(resolved_factorized),
         )
-    tokenizer = RelativeDeltaTokenizer(
-        window=float(args.relative_window),
-        bins=int(args.relative_bins),
-        dim=coord_dim,
-        use_long_jump_token=bool(resolved_use_long_jump),
-        factorized=bool(resolved_factorized),
-    )
 
     if args.mode == "abs":
         abs_bins = int(args.abs_bins) if args.abs_bins is not None else int(K)
@@ -982,6 +1089,57 @@ def main() -> None:
         print(f"Mean logp_discrete: {out['logp_discrete'].mean().item():.6f}")
         return
 
+    save_each_batch = os.environ.get("SAMPLE_SAVE_EACH_BATCH", "0") == "1"
+
+    def save_relative_chunks(chunks_to_save):
+        out = {
+            "token_ids": torch.cat([c["token_ids"] for c in chunks_to_save], dim=0),
+            "x_base": torch.cat([c["x_base"] for c in chunks_to_save], dim=0),
+            "deltas": torch.cat([c["deltas"] for c in chunks_to_save], dim=0),
+            "density": chunks_to_save[0]["density"],
+        }
+        if use_continuous_head:
+            out["logp_continuous"] = torch.cat([c["logp_continuous"] for c in chunks_to_save], dim=0)
+        else:
+            out["logp_discrete"] = torch.cat([c["logp_discrete"] for c in chunks_to_save], dim=0)
+
+        os.makedirs(os.path.dirname(os.path.abspath(args.save)), exist_ok=True)
+        save_kwargs = dict(
+            mode=np.array(args.mode),
+            token_ids=out["token_ids"].cpu().numpy().astype(np.int32),
+            x_base=out["x_base"].cpu().numpy().astype(np.float32),
+            deltas=out["deltas"].cpu().numpy().astype(np.float32),
+            rho=np.array(float(out["density"].item()), dtype=np.float32),
+            K=np.array(K, dtype=np.int32),
+            N=np.array(target_n, dtype=np.int32),
+            L=np.array(box_lengths, dtype=np.float32),
+            window=np.array(float(args.relative_window), dtype=np.float32),
+            bins=np.array(int(args.relative_bins), dtype=np.int32),
+            use_long_jump=np.array(int(bool(resolved_use_long_jump)), dtype=np.int32),
+            factorized=np.array(int(bool(resolved_factorized)), dtype=np.int32),
+            discrete=np.array(int(discrete), dtype=np.int32),
+            binned_discrete=np.array(int(binned_discrete), dtype=np.int32),
+            periodic=np.array(int(periodic), dtype=np.int32),
+            box_convention=np.array("zero_to_L"),
+            relative_anchor_convention=np.array("first_particle_origin_chain"),
+            temperature=np.array(args.temperature, dtype=np.float32),
+            sample_mode=np.array(args.sample_mode),
+            top_k=np.array(-1 if args.top_k is None else int(args.top_k), dtype=np.int32),
+            ar_arch=np.array(resolved_arch),
+            use_continuous_head=np.array(int(use_continuous_head), dtype=np.int32),
+            full_covariance=np.array(int(full_covariance), dtype=np.int32),
+            polar=np.array(int(polar), dtype=np.int32),
+            continuous_sigma_floor=np.array(float(args.continuous_sigma_floor), dtype=np.float32),
+        )
+        if discrete:
+            save_kwargs["codebook_path"] = np.array(str(args.codebook_path))
+        if use_continuous_head:
+            save_kwargs["logp_continuous"] = out["logp_continuous"].cpu().numpy().astype(np.float32)
+        else:
+            save_kwargs["logp_discrete"] = out["logp_discrete"].cpu().numpy().astype(np.float32)
+        np.savez(args.save, **save_kwargs)
+        return out
+
     while done < total:
         bsz = min(chunk, total - done)
         out_chunk = autoregressive_relative_delta_sample(
@@ -990,6 +1148,8 @@ def main() -> None:
             box_lengths=box_lengths,
             nsamples=bsz,
             tokenizer=tokenizer,
+            codebook=codebook,
+            discrete=discrete,
             sample_mode=args.sample_mode,
             temperature=float(args.temperature),
             top_k=args.top_k,
@@ -1003,54 +1163,16 @@ def main() -> None:
         )
         chunks.append(out_chunk)
         done += bsz
+        if save_each_batch:
+            save_relative_chunks(chunks)
+            print(f"Saved incremental batch to {args.save} ({done}/{total} samples)", flush=True)
 
-    out = {
-        "token_ids": torch.cat([c["token_ids"] for c in chunks], dim=0),
-        "x_base": torch.cat([c["x_base"] for c in chunks], dim=0),
-        "deltas": torch.cat([c["deltas"] for c in chunks], dim=0),
-        "density": chunks[0]["density"],
-    }
-    if use_continuous_head:
-        out["logp_continuous"] = torch.cat([c["logp_continuous"] for c in chunks], dim=0)
-    else:
-        out["logp_discrete"] = torch.cat([c["logp_discrete"] for c in chunks], dim=0)
-
-    os.makedirs(os.path.dirname(os.path.abspath(args.save)), exist_ok=True)
-    save_kwargs = dict(
-        mode=np.array(args.mode),
-        token_ids=out["token_ids"].cpu().numpy().astype(np.int32),
-        x_base=out["x_base"].cpu().numpy().astype(np.float32),
-        deltas=out["deltas"].cpu().numpy().astype(np.float32),
-        rho=np.array(float(out["density"].item()), dtype=np.float32),
-        K=np.array(K, dtype=np.int32),
-        N=np.array(target_n, dtype=np.int32),
-        L=np.array(box_lengths, dtype=np.float32),
-        window=np.array(float(args.relative_window), dtype=np.float32),
-        bins=np.array(int(args.relative_bins), dtype=np.int32),
-        use_long_jump=np.array(int(bool(resolved_use_long_jump)), dtype=np.int32),
-        factorized=np.array(int(bool(resolved_factorized)), dtype=np.int32),
-        periodic=np.array(int(periodic), dtype=np.int32),
-        box_convention=np.array("zero_to_L"),
-        relative_anchor_convention=np.array("first_particle_origin_chain"),
-        temperature=np.array(args.temperature, dtype=np.float32),
-        sample_mode=np.array(args.sample_mode),
-        top_k=np.array(-1 if args.top_k is None else int(args.top_k), dtype=np.int32),
-        ar_arch=np.array(resolved_arch),
-        use_continuous_head=np.array(int(use_continuous_head), dtype=np.int32),
-        full_covariance=np.array(int(full_covariance), dtype=np.int32),
-        polar=np.array(int(polar), dtype=np.int32),
-        continuous_sigma_floor=np.array(float(args.continuous_sigma_floor), dtype=np.float32),
-    )
-    if use_continuous_head:
-        save_kwargs["logp_continuous"] = out["logp_continuous"].cpu().numpy().astype(np.float32)
-    else:
-        save_kwargs["logp_discrete"] = out["logp_discrete"].cpu().numpy().astype(np.float32)
-    np.savez(args.save, **save_kwargs)
+    out = save_relative_chunks(chunks)
 
     print(
         f"Saved {args.save} (mode=relative, nsamples={args.nsamples}, N={target_n}, "
         f"K={K}, bins={args.relative_bins}, window={args.relative_window}, factorized={bool(resolved_factorized)}, "
-        f"continuous_head={use_continuous_head}, full_covariance={full_covariance}, polar={polar}, sigma_floor={float(args.continuous_sigma_floor):.4f}, "
+        f"discrete={discrete}, binned_discrete={binned_discrete}, continuous_head={use_continuous_head}, full_covariance={full_covariance}, polar={polar}, sigma_floor={float(args.continuous_sigma_floor):.4f}, "
         f"periodic={periodic}, ar_arch={resolved_arch})"
     )
     if use_continuous_head:

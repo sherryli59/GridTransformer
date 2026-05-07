@@ -6,9 +6,9 @@ PYTHON_BIN="${PYTHON_BIN:-python}"
 PREPROCESS_SCRIPT="${ROOT_DIR}/scripts/preprocess_lj_transferable.py"
 CODEBOOK_SCRIPT="${ROOT_DIR}/scripts/generate_codebook.py"
 
-DATA_H5="${DATA_H5:-/mnt/ssd/mcmc/lj_mcmc_sweep/lj_rho0.5_nopbc_N13_T1.0.h5}"
+DATA_H5="${DATA_H5:-/mnt/ssd/mcmc/lj_mcmc_sweep_3d/lj3d_L3_rho1.0_N27_T1.0.h5}"
 DATE="$(date +%m%d)"
-CKPT_ROOT="${CKPT_ROOT:-${CKPT_DIR:-${ROOT_DIR}/lj13_nopbc_${DATE}}}"
+CKPT_ROOT="${CKPT_ROOT:-${CKPT_DIR:-${ROOT_DIR}/lj_ckpts_lj27_pbc_${DATE}}}"
 RUN_SUBDIR="${RUN_SUBDIR:-}"
 RUN_DIR="${RUN_DIR:-}"
 RESUME_FROM="${RESUME_FROM:-}"
@@ -23,7 +23,7 @@ USE_CONTINUOUS_HEAD="${USE_CONTINUOUS_HEAD:-1}"
 DISCRETE="${DISCRETE:-0}"
 BINNED_DISCRETE="${BINNED_DISCRETE:-0}"
 CODEBOOK_PATH="${CODEBOOK_PATH:-${ROOT_DIR}/codebook.pt}"
-CODEBOOK_SIZE="${CODEBOOK_SIZE:-12288}"
+CODEBOOK_SIZE="${CODEBOOK_SIZE:-4096}"
 NUM_MIXTURES="${NUM_MIXTURES:-64}"
 FULL_COVARIANCE="${FULL_COVARIANCE:-1}"
 PREPROCESS_RANDOM_SHIFT="${PREPROCESS_RANDOM_SHIFT:-0}"
@@ -36,12 +36,12 @@ LJ_EPSILON="${LJ_EPSILON:-1.0}"
 LJ_SIGMA="${LJ_SIGMA:-1.0}"
 LJ_CUTOFF="${LJ_CUTOFF:-}"
 LJ_SPRING_CONSTANT="${LJ_SPRING_CONSTANT:-0.5}"
-PBC="${PBC:-0}"
+PBC="${PBC:-1}"
 
 SEED="${SEED:-0}"
 ORDERING="${ORDERING:-hilbert}"
 HILBERT_RESOLUTION="${HILBERT_RESOLUTION:-64}"
-WINDOW="${WINDOW:-3.0}"
+WINDOW="${WINDOW:-1.5}"
 BINS="${BINS:-64}"
 USE_COORD_DEQUANT="${USE_COORD_DEQUANT:-0}"
 
@@ -83,7 +83,7 @@ if [[ "${FULL_COVARIANCE}" == "1" ]] && [[ "${USE_CONTINUOUS_HEAD}" != "1" ]]; t
   exit 1
 fi
 
-EPOCHS="${EPOCHS:-500}"
+EPOCHS="${EPOCHS:-400}"
 BATCH_SIZE="${BATCH_SIZE:-512}"
 LR="${LR:-1e-3}"
 NUM_WORKERS="${NUM_WORKERS:-0}"
@@ -168,8 +168,8 @@ if [[ "${DIM}" != "3" ]]; then
   echo "Expected fully 3D data, but traj dim=${DIM} in ${DATA_H5}" >&2
   exit 1
 fi
-if [[ "${PBC}" != "0" ]]; then
-  echo "This script is for nonperiodic 3D data. Set PBC=0." >&2
+if [[ "${PBC}" != "1" ]]; then
+  echo "This script is for periodic 3D data. Set PBC=1." >&2
   exit 1
 fi
 
@@ -250,11 +250,11 @@ if [[ -z "${RUN_DIR}" ]]; then
 fi
 
 CKPT_DIR="${RUN_DIR}"
-CACHE_PATH="${CACHE_PATH:-${CKPT_DIR}/lj13_nopbc_hilbert_cache.pt}"
-DISCRETE_CACHE_PATH="${DISCRETE_CACHE_PATH:-${CKPT_DIR}/lj13_nopbc_hilbert_cache_discrete.pt}"
+CACHE_PATH="${CACHE_PATH:-${CKPT_DIR}/lj27_pbc_hilbert_cache.pt}"
+DISCRETE_CACHE_PATH="${DISCRETE_CACHE_PATH:-${CKPT_DIR}/lj27_pbc_hilbert_cache_discrete.pt}"
 CODEBOOK_SOURCE_CACHE="${CODEBOOK_SOURCE_CACHE:-${CKPT_DIR}/codebook_source_cache.pt}"
 BEST_CKPT="${BEST_CKPT:-${CKPT_DIR}/best.ckpt}"
-SAMPLE_OUT="${SAMPLE_OUT:-${CKPT_DIR}/samples_lj13_nopbc.npz}"
+SAMPLE_OUT="${SAMPLE_OUT:-${CKPT_DIR}/samples_lj27_pbc.npz}"
 TRAIN_LOG="${TRAIN_LOG:-${CKPT_DIR}/train_relative.log}"
 TRAIN_PID_FILE="${TRAIN_PID_FILE:-${CKPT_DIR}/train_relative.pid}"
 
@@ -336,7 +336,7 @@ write_reproduce_script() {
     for var_name in "${vars[@]}"; do
       printf 'export %s=%q\n' "${var_name}" "${!var_name}"
     done
-    printf '\nbash %q\n' "${ROOT_DIR}/train_sample_lj13_nopbc.sh"
+    printf '\nbash %q\n' "${ROOT_DIR}/train_sample_lj27_pbc.sh"
   } > "${reproduce_path}"
   chmod +x "${reproduce_path}"
   echo "[run] wrote reproduce script: ${reproduce_path}"
@@ -453,7 +453,7 @@ build_continuous_cache() {
   local preprocess_args=(
     --data_h5 "${DATA_H5}"
     --output "${output_path}"
-    --no-periodic
+    --periodic
     --ordering "${ORDERING}"
     --hilbert_resolution "${HILBERT_RESOLUTION}"
     --window "${WINDOW}"
@@ -507,7 +507,7 @@ if [[ "${RUN_PREPROCESS}" == "1" ]]; then
   fi
 
   if [[ "${DISCRETE}" == "1" ]]; then
-    if [[ -f "${CODEBOOK_PATH}" ]] && codebook_matches_settings "${CODEBOOK_PATH}" 0 "${CODEBOOK_SIZE}" "${ORDERING}" "${HILBERT_RESOLUTION}" "${DIM}"; then
+    if [[ -f "${CODEBOOK_PATH}" ]] && codebook_matches_settings "${CODEBOOK_PATH}" 1 "${CODEBOOK_SIZE}" "${ORDERING}" "${HILBERT_RESOLUTION}" "${DIM}"; then
       echo "[codebook] existing codebook matches run settings, skipping: ${CODEBOOK_PATH}"
     else
       echo "[codebook] ${CACHE_PATH} -> ${CODEBOOK_PATH} (k=${CODEBOOK_SIZE})"
@@ -546,12 +546,11 @@ if [[ "${RUN_TRAIN}" == "1" ]]; then
   TRAIN_ARGS=(
     --dataset lj_transferable
     --data_dir "${DATA_H5}"
-    --no-lj_transfer_periodic
+    --lj_transfer_periodic
     --lj_transfer_ordering "${ORDERING}"
     --lj_transfer_hilbert_resolution "${HILBERT_RESOLUTION}"
     --lj_transfer_window "${WINDOW}"
     --lj_transfer_bins "${BINS}"
-    --lj_transfer_disable_random_shift
     --epochs "${EPOCHS}"
     --batch_size "${BATCH_SIZE}"
     --lr "${LR}"
@@ -570,7 +569,7 @@ if [[ "${RUN_TRAIN}" == "1" ]]; then
     --lj_boxlength "${BOX_LENGTH}"
   )
   if [[ "${TRAIN_DATA_AUG}" == "1" ]]; then
-    echo "[train] using nonperiodic on-the-fly augmentation"
+    echo "[train] using periodic on-the-fly augmentation"
     TRAIN_ARGS+=(--lj_transfer_use_data_aug)
   else
     TRAIN_CACHE_PATH="${CACHE_PATH}"
@@ -605,6 +604,9 @@ if [[ "${RUN_TRAIN}" == "1" ]]; then
   fi
   if [[ -n "${RESUME_FROM}" ]]; then
     TRAIN_ARGS+=(--resume_from "${RESUME_FROM}")
+  fi
+  if [[ "${PBC}" == "1" ]]; then
+    TRAIN_ARGS+=(--lj_periodic)
   fi
   if [[ -n "${LJ_CUTOFF}" ]]; then
     TRAIN_ARGS+=(--lj_cutoff "${LJ_CUTOFF}")
@@ -641,7 +643,7 @@ if [[ "${RUN_SAMPLE}" == "1" ]]; then
     --relative_bins "${BINS}"
     --nsamples "${SAMPLE_NSAMPLES}"
     --sample_batch_size "${SAMPLE_BATCH_SIZE}"
-    --no-periodic
+    --periodic
     --ar_arch "${AR_ARCH}"
     --save "${SAMPLE_OUT}"
   )

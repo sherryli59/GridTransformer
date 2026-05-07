@@ -368,6 +368,8 @@ class LJTransferableDataModule(pl.LightningDataModule):
         use_long_jump_token: bool = True,
         factorized: bool = False,
         polar: bool = False,
+        discrete: bool = False,
+        codebook_path: Optional[str] = None,
         random_grid_shift: bool = True,
         use_data_aug: bool = False,
         batch_size: int = 128,
@@ -393,6 +395,8 @@ class LJTransferableDataModule(pl.LightningDataModule):
         self.use_long_jump_token = bool(use_long_jump_token)
         self.factorized = bool(factorized)
         self.polar = bool(polar)
+        self.discrete = bool(discrete)
+        self.codebook_path = codebook_path
         self.random_grid_shift = bool(random_grid_shift)
         self.use_data_aug = bool(use_data_aug)
         self.batch_size = batch_size
@@ -414,6 +418,12 @@ class LJTransferableDataModule(pl.LightningDataModule):
                 "preprocessed_path is set, but use_data_aug=True. "
                 "Right-angle rotation augmentation requires on-the-fly lj_transferable tokenization."
             )
+        if self.discrete and self.factorized:
+            raise ValueError("discrete=True requires factorized=False.")
+        if self.discrete and self.polar:
+            raise ValueError("discrete=True is incompatible with polar=True.")
+        if self.discrete and self.preprocessed_path is None and not self.codebook_path:
+            raise ValueError("discrete=True without a preprocessed cache requires codebook_path.")
         if (not self.periodic) and self.random_grid_shift:
             raise ValueError(
                 "random_grid_shift=True is unsupported for nonperiodic lj_transferable training."
@@ -426,6 +436,8 @@ class LJTransferableDataModule(pl.LightningDataModule):
                 self._train_ds = LJTransferableCachedDataset(
                     cache_path=self.preprocessed_path,
                     limit=self.train_limit,
+                    discrete=self.discrete,
+                    codebook_path=self.codebook_path,
                 )
                 cached_periodic = bool(getattr(self._train_ds, "periodic", True))
                 if cached_periodic != self.periodic:
@@ -464,6 +476,8 @@ class LJTransferableDataModule(pl.LightningDataModule):
                 use_long_jump_token=self.use_long_jump_token,
                 factorized=self.factorized,
                 polar=self.polar,
+                discrete=self.discrete,
+                codebook_path=self.codebook_path,
                 random_grid_shift=self.random_grid_shift,
                 use_data_aug=self.use_data_aug,
                 limit=self.train_limit,

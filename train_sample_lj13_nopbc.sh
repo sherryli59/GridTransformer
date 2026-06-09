@@ -41,7 +41,8 @@ PBC="${PBC:-0}"
 SEED="${SEED:-0}"
 ORDERING="${ORDERING:-hilbert}"
 HILBERT_RESOLUTION="${HILBERT_RESOLUTION:-64}"
-WINDOW="${WINDOW:-3.0}"
+WINDOW="${WINDOW:-3.0}"   # token/displacement window W (sigma) for the AR tokenizer
+SWIN_WINDOW="${SWIN_WINDOW:-8}"   # Swin attention window size (cells, int); distinct from WINDOW
 BINS="${BINS:-64}"
 USE_COORD_DEQUANT="${USE_COORD_DEQUANT:-0}"
 
@@ -456,7 +457,7 @@ build_continuous_cache() {
     --no-periodic
     --ordering "${ORDERING}"
     --hilbert_resolution "${HILBERT_RESOLUTION}"
-    --window "${WINDOW}"
+    --window "${SWIN_WINDOW}"
     --bins "${BINS}"
     --lj_epsilon "${LJ_EPSILON}"
     --lj_sigma "${LJ_SIGMA}"

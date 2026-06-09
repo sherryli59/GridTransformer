@@ -100,6 +100,60 @@ def _hilbert3d_encode(x: np.ndarray, y: np.ndarray, z: np.ndarray, bits: int) ->
     return code
 
 
+def _hilbert3d_decode(code: np.ndarray, bits: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Inverse of :func:`_hilbert3d_encode` (Skilling's TransposeToAxes).
+
+    Maps a 1D Hilbert index back to (x, y, z) grid coordinates. Vectorized over an
+    arbitrary-shaped ``code`` array. Round-trips exactly with the encoder for all
+    bit depths (verified in tests/test_hilbert3d_roundtrip.py).
+    """
+    code_arr = np.asarray(code, dtype=np.int64)
+    if bits <= 0:
+        zero = np.zeros_like(code_arr, dtype=np.uint64)
+        return zero.copy(), zero.copy(), zero.copy()
+
+    c = code_arr.astype(np.uint64)
+    X0 = np.zeros_like(c)
+    X1 = np.zeros_like(c)
+    X2 = np.zeros_like(c)
+
+    # De-interleave the transposed bits (inverse of encode step 3).
+    for b in range(bits):
+        X0 |= ((c >> np.uint64(3 * b + 2)) & np.uint64(1)) << np.uint64(b)
+        X1 |= ((c >> np.uint64(3 * b + 1)) & np.uint64(1)) << np.uint64(b)
+        X2 |= ((c >> np.uint64(3 * b)) & np.uint64(1)) << np.uint64(b)
+
+    # Gray decode: t = X[n-1] >> 1; for i=n-1..1: X[i]^=X[i-1]; X[0]^=t.
+    t = X2 >> np.uint64(1)
+    X2 ^= X1
+    X1 ^= X0
+    X0 ^= t
+
+    # Undo excess work: Q from 2 up to <2^bits, axis index i from n-1 down to 0.
+    N = np.uint64(1) << np.uint64(bits)
+    Q = np.uint64(2)
+    while Q != N:
+        P = Q - np.uint64(1)
+        for i in (2, 1, 0):
+            Xi = X2 if i == 2 else (X1 if i == 1 else X0)
+            cond = (Xi & Q) != 0
+            if i == 0:
+                # Xi is X0; the off-branch is a no-op (t == 0), so only the swap matters.
+                X0 = np.where(cond, X0 ^ P, X0)
+            else:
+                tt = (X0 ^ Xi) & P
+                X0 = np.where(cond, X0 ^ P, X0 ^ tt)
+                Xi_new = np.where(cond, Xi, Xi ^ tt)
+                if i == 2:
+                    X2 = Xi_new
+                else:
+                    X1 = Xi_new
+        Q <<= np.uint64(1)
+
+    return X0, X1, X2
+
+
 def min_image_delta(delta: np.ndarray, box: np.ndarray) -> np.ndarray:
     return delta - box * np.round(delta / np.maximum(box, 1e-8))
 
@@ -108,6 +162,138 @@ def raw_delta(delta: np.ndarray, box: np.ndarray, *, periodic: bool) -> np.ndarr
     if periodic:
         return min_image_delta(delta, box)
     return delta
+
+
+def _rail_relative_from_codes(
+    cond_codes: np.ndarray,
+    anchor_pos: np.ndarray,
+    box: np.ndarray,
+    resolution: int,
+    offsets: np.ndarray,
+    *,
+    periodic: bool,
+) -> np.ndarray:
+    """Decode the Hilbert "curve rail" relative to each conditioning particle.
+
+    Shared core for both the single-sample and batched dataset paths so the two can
+    never diverge.
+
+    Args:
+        cond_codes: Hilbert index of each conditioning particle, any shape ``[...]``.
+        anchor_pos: that particle's position, shape ``[..., 3]`` (same leading dims).
+        box:        box lengths ``[3]``.
+        resolution: grid resolution R (power of two).
+        offsets:    K positive Hilbert index offsets ``[K]``.
+
+    Returns:
+        ``[..., K, 3]`` min-image vectors from each particle to the future curve cells.
+    """
+    R = int(resolution)
+    bits = int(round(math.log2(R)))  # resolution is a power of two
+    offs = np.asarray(offsets, dtype=np.int64)
+    base = np.asarray(cond_codes, dtype=np.int64)[..., None]  # [..., 1]
+    widx = np.clip(base + offs, 0, R ** 3 - 1)                # [..., K]
+    wx, wy, wz = _hilbert3d_decode(widx.reshape(-1), bits=bits)
+    wcells = np.stack([wx, wy, wz], axis=-1).astype(np.float64).reshape(*widx.shape, 3)
+    cell_size = np.asarray(box, dtype=np.float64) / float(R)
+    wcoords = (wcells + 0.5) * cell_size                      # curve cell centers, box frame
+    rel = wcoords - np.asarray(anchor_pos, dtype=np.float64)[..., None, :]
+    if periodic:
+        rel = min_image_delta(rel, np.asarray(box, dtype=np.float64))
+    return rel.astype(np.float32)
+
+
+def fixed_template_waypoints(
+    pred_indices: np.ndarray,
+    n_particles: int,
+    resolution: int,
+    box: np.ndarray,
+    *,
+    k: int,
+    window_scale: float = 1.0,
+    periodic: bool,
+    reference: str = "absolute",
+) -> np.ndarray:
+    """Sample-INDEPENDENT "fixed template" curve rail.
+
+    The rail for predicting particle ``j`` (1..N-1) depends only on (L->R, N, j), never
+    on the actual/generated particle positions, so it cannot drift with the model's own
+    samples (kills autoregressive exposure bias). Each particle index has an expected
+    Hilbert index ``window_mean[j] = j * X`` with ``X = R**3 // N`` (uniform spacing on
+    the curve at the system density). We place ``k`` DETERMINISTIC evenly-spaced indices
+    across the window ``[j*X - window_scale*X, j*X + window_scale*X]``, decode them to
+    box-frame cell centers, and express them as vectors:
+
+      reference == "absolute": cell center min-imaged to the box origin (~particle 0).
+                               A positional anchor; needs fixed-phase data.
+      reference == "prev_step": cell center minus decode((j-1)*X) center; the expected
+                               curve step (translation-invariant).
+
+    Args:
+        pred_indices: particle indices being predicted, shape ``[M]`` (values in 1..N-1).
+        n_particles:  N (sets X = R**3 // N).
+        resolution:   grid resolution R (power of two).
+        box:          box lengths ``[3]``.
+        k:            number of waypoints per particle.
+        window_scale: half-window in units of X.
+        reference:    "absolute" or "prev_step".
+
+    Returns:
+        ``[M, k, 3]`` float32 waypoint vectors.
+    """
+    R = int(resolution)
+    bits = int(round(math.log2(R)))
+    total = R ** 3
+    X = max(1, total // int(n_particles))
+    j = np.asarray(pred_indices, dtype=np.float64).reshape(-1)          # [M]
+    centers = j[:, None] * X                                            # [M, 1]
+    # k deterministic evenly-spaced offsets across [-window_scale*X, +window_scale*X].
+    # K=1 special case: place the single waypoint one step AHEAD at (j+1)·X so it
+    # provides a true forward lookahead rather than the anchor decode(j·X) itself.
+    if int(k) == 1:
+        frac = np.ones((1,), dtype=np.float64)
+    else:
+        frac = np.linspace(-1.0, 1.0, int(k), dtype=np.float64)
+    idx = centers + frac[None, :] * (float(window_scale) * X)          # [M, k]
+    idx = np.clip(np.rint(idx), 0, total - 1).astype(np.int64)
+    wx, wy, wz = _hilbert3d_decode(idx.reshape(-1), bits=bits)
+    cell_size = np.asarray(box, dtype=np.float64) / float(R)
+    wcoords = (np.stack([wx, wy, wz], axis=-1).astype(np.float64).reshape(*idx.shape, 3) + 0.5) * cell_size
+    box64 = np.asarray(box, dtype=np.float64)
+    if reference == "absolute":
+        rel = wcoords  # relative to the box origin (particle 0 frame)
+    elif reference == "prev_step":
+        prev_idx = np.clip(np.rint((j - 1.0) * X), 0, total - 1).astype(np.int64)
+        px, py, pz = _hilbert3d_decode(prev_idx, bits=bits)
+        prev = (np.stack([px, py, pz], axis=-1).astype(np.float64) + 0.5) * cell_size  # [M,3]
+        rel = wcoords - prev[:, None, :]
+    else:
+        raise ValueError(f"reference must be 'absolute' or 'prev_step', got {reference!r}")
+    if periodic:
+        rel = min_image_delta(rel, box64)
+    return rel.astype(np.float32)
+
+
+def fixed_template_anchors(
+    pred_indices: np.ndarray,
+    n_particles: int,
+    resolution: int,
+    box: np.ndarray,
+) -> np.ndarray:
+    """Per-particle absolute anchor positions ``decode(j * X)`` (box frame, [0, L)).
+
+    ``X = R**3 // N``. Used as the reference for the rail-anchored RESIDUAL target:
+    ``residual_j = pos_j - anchor_j`` (instead of the drifting ``pos_j - pos_{j-1}``).
+    Returns ``[M, 3]`` float64 cell-center positions for each ``pred_indices`` entry.
+    """
+    R = int(resolution)
+    bits = int(round(math.log2(R)))
+    total = R ** 3
+    X = max(1, total // int(n_particles))
+    idx = np.clip(np.rint(np.asarray(pred_indices, dtype=np.float64) * X), 0, total - 1).astype(np.int64)
+    ax, ay, az = _hilbert3d_decode(idx, bits=bits)
+    cell_size = np.asarray(box, dtype=np.float64) / float(R)
+    return (np.stack([ax, ay, az], axis=-1).astype(np.float64) + 0.5) * cell_size  # [M, 3]
 
 
 def _cartesian_to_spherical_np(deltas: np.ndarray) -> np.ndarray:
@@ -285,6 +471,15 @@ def _repeat_factorized_token_coords(
 ) -> np.ndarray:
     axis_to_repeat = 1 if token_coords.ndim == 3 else 0
     return np.repeat(token_coords, int(coord_dim), axis=axis_to_repeat)
+
+
+def _repeat_factorized_curve_waypoints(
+    curve_waypoints: np.ndarray,
+    *,
+    coord_dim: int,
+) -> np.ndarray:
+    axis_to_repeat = 1 if curve_waypoints.ndim == 4 else 0
+    return np.repeat(curve_waypoints, int(coord_dim), axis=axis_to_repeat)
 
 
 def _compute_lj_energy_batch(
@@ -624,6 +819,13 @@ class RelativeDeltaTokenizer:
         return deltas.view(*token_ids.shape, int(self.dim))
 
 
+# Default "curve rail" look-ahead offsets, in Hilbert *index* units (1-to-1 with
+# arc length via cell_size). K=6, log-uniform; validated on L=10 ρ=1 data to bracket
+# ~84% of consecutive arc-gaps and localize the true next particle to ~0.57σ median.
+# Index offsets are ~box-size invariant at fixed cell-size & density (R³/N ≈ const).
+DEFAULT_CURVE_RAIL_OFFSETS: Tuple[int, ...] = (64, 215, 724, 2435, 8192, 27554)
+
+
 class LJTransferableDataset(Dataset):
     """
     Lennard-Jones trajectories tokenized as ordered local relative moves.
@@ -644,6 +846,7 @@ class LJTransferableDataset(Dataset):
         h5_path: Optional[str] = None,
         periodic: bool = True,
         hilbert_resolution: int = 128,
+        cell_size: Optional[float] = None,
         ordering: str = "hilbert",
         spectral_sigma: float = 1.0,
         local_window: float = 3.0,
@@ -657,6 +860,13 @@ class LJTransferableDataset(Dataset):
         use_data_aug: bool = False,
         limit: Optional[int] = None,
         seed: int = 0,
+        use_curve_rail: bool = False,
+        curve_rail_offsets: Optional[Sequence[int]] = None,
+        curve_rail_mode: str = "lookahead",
+        curve_rail_window: float = 1.0,
+        curve_rail_k: int = 8,
+        curve_rail_reference: str = "absolute",
+        curve_rail_residual_target: bool = False,
     ) -> None:
         self.file_paths = _normalize_file_paths(file_paths, h5_path=h5_path)
         self.periodic = bool(periodic)
@@ -671,6 +881,14 @@ class LJTransferableDataset(Dataset):
             raise ValueError(
                 f"hilbert_resolution must be a power of two, got {self.hilbert_resolution}"
             )
+        # Constant physical cell size: when set, the Hilbert grid resolution is chosen
+        # PER BOX as the next power of two of (L / cell_size), so the cell size (and
+        # thus the curve's local granularity relative to particles) stays ~constant
+        # across box lengths instead of the cell COUNT. Pow-2 rounding makes it exact
+        # only up to an octave.
+        self.cell_size = None if cell_size is None else float(cell_size)
+        if self.cell_size is not None and self.cell_size <= 0.0:
+            raise ValueError(f"cell_size must be > 0, got {self.cell_size}")
         self.tokenizer = RelativeDeltaTokenizer(
             window=float(local_window),
             bins=int(local_bins),
@@ -705,6 +923,37 @@ class LJTransferableDataset(Dataset):
                 "ordering."
             )
         self.rng = np.random.default_rng(int(seed))
+
+        # Optional "curve rail" (GPS-guide) look-ahead conditioning. Off by default so
+        # existing datasets are byte-for-byte unchanged. Only meaningful for 3D periodic
+        # Hilbert ordering (the LJ-transferable regime).
+        self.use_curve_rail = bool(use_curve_rail)
+        self.curve_rail_mode = str(curve_rail_mode).strip().lower()
+        if self.curve_rail_mode not in ("lookahead", "fixed_template"):
+            raise ValueError(f"curve_rail_mode must be 'lookahead' or 'fixed_template', got {curve_rail_mode!r}")
+        self.curve_rail_window = float(curve_rail_window)
+        self.curve_rail_reference = str(curve_rail_reference).strip().lower()
+        self.curve_rail_residual_target = bool(curve_rail_residual_target)
+        if self.curve_rail_residual_target and self.curve_rail_mode != "fixed_template":
+            raise ValueError("curve_rail_residual_target=True requires curve_rail_mode='fixed_template'.")
+        offsets = DEFAULT_CURVE_RAIL_OFFSETS if curve_rail_offsets is None else curve_rail_offsets
+        offsets_arr = np.asarray(sorted(set(int(o) for o in offsets)), dtype=np.int64)
+        # K (waypoint count): in lookahead mode it equals the number of offsets; in
+        # fixed_template mode it is an independent count of window samples.
+        self.curve_rail_k = int(offsets_arr.size) if self.curve_rail_mode == "lookahead" else int(curve_rail_k)
+        if self.use_curve_rail:
+            if self.curve_rail_mode == "lookahead" and (offsets_arr.size == 0 or np.any(offsets_arr <= 0)):
+                raise ValueError(f"curve_rail_offsets must be positive integers, got {offsets}")
+            if self.curve_rail_mode == "fixed_template" and self.curve_rail_k <= 0:
+                raise ValueError(f"curve_rail_k must be positive, got {self.curve_rail_k}")
+            if self.ordering != "hilbert":
+                raise ValueError("use_curve_rail=True requires ordering='hilbert'.")
+            if bool(factorized) and self.curve_rail_mode != "fixed_template":
+                raise ValueError(
+                    "use_curve_rail=True with factorized=True is only supported for "
+                    "curve_rail_mode='fixed_template'."
+                )
+        self.curve_rail_offsets = offsets_arr
 
         self._coords_by_file: list[np.ndarray] = []
         self._box_by_file: list[np.ndarray] = []
@@ -769,21 +1018,32 @@ class LJTransferableDataset(Dataset):
     def __len__(self) -> int:
         return int(self.sample_id_to_file_index.shape[0])
 
-    def _space_filling_codes_2d(self, grid: np.ndarray) -> np.ndarray:
+    def _resolution_for_box(self, box: Optional[np.ndarray]) -> int:
+        """Grid resolution (cells per axis) for a box. Constant cell size when
+        self.cell_size is set: R = next_pow2(round(max(L)/cell_size)); else the
+        fixed global resolution (constant cell count)."""
+        if self.cell_size is None or box is None:
+            return int(self.hilbert_resolution)
+        L = float(np.max(np.asarray(box, dtype=np.float64)))
+        n = max(2, int(round(L / self.cell_size)))
+        return int(1 << int(math.ceil(math.log2(n))))  # next power of two
+
+    def _space_filling_codes_2d(self, grid: np.ndarray, resolution: int) -> np.ndarray:
         h = np.empty(grid.shape[0], dtype=np.int64)
         for i in range(grid.shape[0]):
-            h[i] = _hilbert_xy2d(self.hilbert_resolution, int(grid[i, 0]), int(grid[i, 1]))
+            h[i] = _hilbert_xy2d(int(resolution), int(grid[i, 0]), int(grid[i, 1]))
         return h
 
-    def _space_filling_codes_3d(self, grid: np.ndarray) -> np.ndarray:
-        bits = int(math.ceil(math.log2(self.hilbert_resolution)))
+    def _space_filling_codes_3d(self, grid: np.ndarray, resolution: int) -> np.ndarray:
+        bits = int(math.ceil(math.log2(int(resolution))))
         return _hilbert3d_encode(grid[..., 0], grid[..., 1], grid[..., 2], bits=bits)
 
-    def _space_filling_codes(self, grid: np.ndarray) -> np.ndarray:
+    def _space_filling_codes(self, grid: np.ndarray, resolution: Optional[int] = None) -> np.ndarray:
+        R = int(self.hilbert_resolution if resolution is None else resolution)
         if int(self.coord_dim) == 2:
-            return self._space_filling_codes_2d(grid)
+            return self._space_filling_codes_2d(grid, R)
         if int(self.coord_dim) == 3:
-            return self._space_filling_codes_3d(grid)
+            return self._space_filling_codes_3d(grid, R)
         raise ValueError(f"Hilbert-like ordering is only supported in 2D/3D, got dim={self.coord_dim}")
 
     def _encode_deltas(self, deltas: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -793,25 +1053,28 @@ class LJTransferableDataset(Dataset):
         return self.tokenizer.encode(deltas)
 
     def _grid_coords_periodic(self, coords: np.ndarray, box: np.ndarray) -> np.ndarray:
+        R = self._resolution_for_box(box)
         wrapped = np.mod(coords, box[None, :])
-        scaled = (wrapped / np.maximum(box[None, :], 1e-8)) * float(self.hilbert_resolution)
+        scaled = (wrapped / np.maximum(box[None, :], 1e-8)) * float(R)
         grid = np.floor(scaled).astype(np.int64)
-        return np.clip(grid, 0, self.hilbert_resolution - 1)
+        return np.clip(grid, 0, R - 1)
 
     def _grid_coords_nonperiodic(self, coords: np.ndarray) -> np.ndarray:
+        R = int(self.hilbert_resolution)  # nonperiodic uses the fixed global resolution
         extent = np.max(np.abs(coords), axis=-2, keepdims=True)
         extent = np.maximum(extent, 1e-8)
         shifted = (coords / (2.0 * extent)) + 0.5
-        grid = np.floor(shifted * float(self.hilbert_resolution)).astype(np.int64)
-        return np.clip(grid, 0, self.hilbert_resolution - 1)
+        grid = np.floor(shifted * float(R)).astype(np.int64)
+        return np.clip(grid, 0, R - 1)
 
     def _hilbert_sort_periodic(self, coords: np.ndarray, box: np.ndarray) -> np.ndarray:
+        R = self._resolution_for_box(box)
         grid = self._grid_coords_periodic(coords, box)
-        return np.argsort(self._space_filling_codes(grid), kind="stable")
+        return np.argsort(self._space_filling_codes(grid, R), kind="stable")
 
     def _hilbert_sort_nonperiodic(self, coords: np.ndarray) -> np.ndarray:
         grid = self._grid_coords_nonperiodic(coords)
-        return np.argsort(self._space_filling_codes(grid), kind="stable")
+        return np.argsort(self._space_filling_codes(grid, int(self.hilbert_resolution)), kind="stable")
 
     def _spectral_sort_periodic(self, coords: np.ndarray, box: np.ndarray) -> np.ndarray:
         coords_t = torch.from_numpy(coords).to(dtype=torch.float32).unsqueeze(0)
@@ -845,6 +1108,55 @@ class LJTransferableDataset(Dataset):
         if sign_score < 0.0:
             u2 = -u2
         return torch.argsort(u2).cpu().numpy().astype(np.int64, copy=False)
+
+    def _curve_waypoints_3d(
+        self,
+        sorted_pos: np.ndarray,
+        box: np.ndarray,
+        resolution: int,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Look-ahead "curve rail" (GPS guide) for 3D periodic Hilbert ordering.
+
+        For each conditioning particle j (0..N-2), returns the K future Hilbert-curve
+        cell centers at index offsets ``self.curve_rail_offsets`` ahead of particle j's
+        own cell, expressed as min-image vectors *relative to particle j*. These depend
+        only on deterministic curve geometry (particle j's cell + grid resolution), never
+        on where future particles actually sit -> causal-safe and reproducible at
+        generation time.
+
+        Returns:
+            waypoints: [N-1, K, 3] float32 relative vectors (particle j -> curve cell).
+            arclen:    [K] float32 Hilbert arc lengths (offset * cell_size).
+        """
+        R = int(resolution)
+        K = int(self.curve_rail_k)
+        n = int(sorted_pos.shape[0])
+        cell_size = np.asarray(box, dtype=np.float64) / float(R)
+
+        if self.curve_rail_mode == "fixed_template":
+            X = max(1, (R ** 3) // int(n))
+            arclen = np.full((K,), float(self.curve_rail_window * X * float(np.mean(cell_size))), dtype=np.float32)
+            if n < 2:
+                return np.zeros((max(0, n - 1), K, 3), dtype=np.float32), arclen
+            # waypoints for predicting particles 1..N-1 (sample-INDEPENDENT template).
+            pred = np.arange(1, n, dtype=np.int64)
+            rel = fixed_template_waypoints(
+                pred, n, R, box, k=K, window_scale=self.curve_rail_window,
+                periodic=self.periodic, reference=self.curve_rail_reference,
+            )  # [N-1, K, 3]
+            return rel, arclen
+
+        offs = self.curve_rail_offsets
+        arclen = (offs.astype(np.float64) * float(np.mean(cell_size))).astype(np.float32)
+        if n < 2:
+            return np.zeros((max(0, n - 1), K, 3), dtype=np.float32), arclen
+
+        grid = self._grid_coords_periodic(sorted_pos, box)
+        codes = self._space_filling_codes_3d(grid, R)  # ascending (already Hilbert-sorted)
+        rel = _rail_relative_from_codes(
+            codes[:-1], sorted_pos[:-1], box, R, offs, periodic=self.periodic
+        )  # [N-1, K, 3]
+        return rel, arclen
 
     def _build_item_from_index(
         self,
@@ -895,10 +1207,17 @@ class LJTransferableDataset(Dataset):
         sorted_pos = shifted[order]
 
         n_predict = n_particles - 1
-        deltas = np.empty((n_predict, int(self.coord_dim)), dtype=np.float32)
-        for i in range(1, n_particles):
-            raw = sorted_pos[i] - sorted_pos[i - 1]
-            deltas[i - 1] = raw_delta(raw, box, periodic=self.periodic)
+        if self.use_curve_rail and self.curve_rail_residual_target and int(self.coord_dim) == 3 and n_particles >= 2:
+            # Rail-anchored RESIDUAL target: pos_j - decode(j*X), so each particle is
+            # absolutely pinned to its template cell (no drifting prev-particle reference).
+            R_anchor = self._resolution_for_box(box) if self.periodic else int(self.hilbert_resolution)
+            anchors = fixed_template_anchors(np.arange(1, n_particles), n_particles, R_anchor, box)  # [N-1,3]
+            deltas = raw_delta(sorted_pos[1:] - anchors, box, periodic=self.periodic).astype(np.float32, copy=False)
+        else:
+            deltas = np.empty((n_predict, int(self.coord_dim)), dtype=np.float32)
+            for i in range(1, n_particles):
+                raw = sorted_pos[i] - sorted_pos[i - 1]
+                deltas[i - 1] = raw_delta(raw, box, periodic=self.periodic)
 
         token_ids_np, long_jump_mask_np = self._encode_deltas(deltas)
         token_ids = torch.from_numpy(token_ids_np).long()
@@ -934,7 +1253,7 @@ class LJTransferableDataset(Dataset):
         max_abs_relative_displacement = float(np.max(np.abs(deltas))) if deltas.size > 0 else 0.0
 
         absolute_coords_t = torch.from_numpy(sorted_pos.astype(np.float32, copy=False))
-        return {
+        item: dict[str, Any] = {
             "sequence": sequence,
             "input_idx": input_idx,
             "target_idx": target_idx,
@@ -951,7 +1270,18 @@ class LJTransferableDataset(Dataset):
             "sos_id": torch.tensor(self.sos_id, dtype=torch.long),
             "vocab_size": torch.tensor(self.vocab_size, dtype=torch.long),
             "periodic": torch.tensor(self.periodic, dtype=torch.bool),
-        }, max_abs_relative_displacement
+        }
+
+        if self.use_curve_rail and int(self.coord_dim) == 3:
+            R = self._resolution_for_box(box) if self.periodic else int(self.hilbert_resolution)
+            waypoints_np, arclen_np = self._curve_waypoints_3d(sorted_pos, box, R)
+            # Align to the N-1 conditioning tokens (same axis as token_coords/target_idx).
+            if self.tokenizer.factorized:
+                waypoints_np = _repeat_factorized_curve_waypoints(waypoints_np, coord_dim=self.coord_dim)
+            item["curve_waypoints"] = torch.from_numpy(waypoints_np)          # [N-1, K, D]
+            item["curve_arclen"] = torch.from_numpy(arclen_np)                # [K]
+
+        return item, max_abs_relative_displacement
 
     def _build_batch_3d(
         self,
@@ -1004,14 +1334,24 @@ class LJTransferableDataset(Dataset):
 
         if self.periodic:
             grid = self._grid_coords_periodic(shifted, box)
+            R = self._resolution_for_box(box)
         else:
             grid = self._grid_coords_nonperiodic(shifted)
-        h_codes = self._space_filling_codes_3d(grid)
+            R = int(self.hilbert_resolution)
+        h_codes = self._space_filling_codes_3d(grid, R)
         order = np.argsort(h_codes, axis=-1, kind="stable")
         sorted_pos = np.take_along_axis(shifted, order[..., None], axis=1)
 
-        raw_diffs = sorted_pos[:, 1:, :] - sorted_pos[:, :-1, :]
-        deltas = raw_delta(raw_diffs, box, periodic=self.periodic).astype(np.float32, copy=False)
+        if self.use_curve_rail and self.curve_rail_residual_target and n_particles >= 2:
+            # Rail-anchored RESIDUAL target (see _build_item_from_index); anchors are
+            # sample-independent so broadcast across the batch.
+            anchors = fixed_template_anchors(np.arange(1, n_particles), n_particles, R, box)  # [N-1,3]
+            deltas = raw_delta(
+                sorted_pos[:, 1:, :] - anchors[None], box, periodic=self.periodic
+            ).astype(np.float32, copy=False)
+        else:
+            raw_diffs = sorted_pos[:, 1:, :] - sorted_pos[:, :-1, :]
+            deltas = raw_delta(raw_diffs, box, periodic=self.periodic).astype(np.float32, copy=False)
 
         token_ids, long_jump_mask = self._encode_deltas(deltas)
         token_ids = token_ids.astype(np.int64, copy=False)
@@ -1053,7 +1393,7 @@ class LJTransferableDataset(Dataset):
             float(np.max(np.abs(deltas))) if deltas.size > 0 else 0.0
         )
 
-        return {
+        out: dict[str, np.ndarray] = {
             "sequence": sequence,
             "input_idx": input_idx,
             "target_idx": target_idx,
@@ -1068,6 +1408,46 @@ class LJTransferableDataset(Dataset):
             "particle_length": np.full((batch_size,), int(n_particles), dtype=np.int64),
             "max_abs_relative_displacement": np.array(max_abs_relative_displacement, dtype=np.float32),
         }
+
+        if self.use_curve_rail:
+            cell_size = np.asarray(box, dtype=np.float64) / float(R)
+            if self.curve_rail_mode == "fixed_template":
+                # Sample-INDEPENDENT template: identical for every config (depends only on
+                # N, R, j), so broadcast one [N-1, K, 3] template across the batch.
+                X = max(1, (R ** 3) // int(n_particles))
+                pred = np.arange(1, n_particles, dtype=np.int64)
+                tmpl = fixed_template_waypoints(
+                    pred, n_particles, R, box, k=int(self.curve_rail_k),
+                    window_scale=self.curve_rail_window, periodic=self.periodic,
+                    reference=self.curve_rail_reference,
+                )  # [N-1, K, 3]
+                out["curve_waypoints"] = np.broadcast_to(
+                    tmpl[None], (batch_size,) + tmpl.shape
+                ).copy()
+                if self.tokenizer.factorized:
+                    out["curve_waypoints"] = _repeat_factorized_curve_waypoints(
+                        out["curve_waypoints"], coord_dim=self.coord_dim
+                    )
+                out["curve_arclen"] = np.full(
+                    (int(self.curve_rail_k),),
+                    float(self.curve_rail_window * X * float(np.mean(cell_size))),
+                    dtype=np.float32,
+                )
+            else:
+                sorted_codes = np.take_along_axis(h_codes, order, axis=1)  # [B, N] ascending
+                out["curve_waypoints"] = _rail_relative_from_codes(
+                    sorted_codes[:, :-1], sorted_pos[:, :-1, :], box, R, self.curve_rail_offsets,
+                    periodic=self.periodic,
+                )  # [B, N-1, K, 3]
+                if self.tokenizer.factorized:
+                    out["curve_waypoints"] = _repeat_factorized_curve_waypoints(
+                        out["curve_waypoints"], coord_dim=self.coord_dim
+                    )
+                out["curve_arclen"] = (
+                    self.curve_rail_offsets.astype(np.float64) * float(np.mean(cell_size))
+                ).astype(np.float32)
+
+        return out
 
     def __getitem__(self, idx: int):
         item, _ = self._build_item_from_index(idx)
@@ -1139,6 +1519,12 @@ class LJTransferableCachedDataset(Dataset):
         self.target_energy_all = None
         if "target_energy" in payload:
             self.target_energy_all = torch.as_tensor(payload["target_energy"], dtype=torch.float32)
+        self.metadata: dict[str, Any] = dict(payload.get("metadata", {}))
+        self.curve_rail_mode = str(self.metadata.get("curve_rail_mode", "lookahead") or "lookahead")
+        # Optional curve-rail look-ahead scaffold (absent in pre-v13 caches).
+        self.curve_waypoints_all = None
+        if "curve_waypoints" in payload:
+            self.curve_waypoints_all = torch.as_tensor(payload["curve_waypoints"], dtype=torch.float32)
 
         if self.sample_length_all.ndim != 1:
             raise ValueError(f"sample_length must be rank-1, got {tuple(self.sample_length_all.shape)}")
@@ -1165,6 +1551,10 @@ class LJTransferableCachedDataset(Dataset):
             raise ValueError(
                 f"target_energy has first dim {self.target_energy_all.shape[0]} but expected {n_samples}"
             )
+        if self.curve_waypoints_all is not None and self.curve_waypoints_all.shape[0] != n_samples:
+            raise ValueError(
+                f"curve_waypoints has first dim {self.curve_waypoints_all.shape[0]} but expected {n_samples}"
+            )
 
         self.sample_lengths = self.sample_length_all.numpy().astype(np.int64, copy=False)
         if limit is not None:
@@ -1185,13 +1575,34 @@ class LJTransferableCachedDataset(Dataset):
                 self.absolute_coords_all = self.absolute_coords_all[:lim]
             if self.target_energy_all is not None:
                 self.target_energy_all = self.target_energy_all[:lim]
+            if self.curve_waypoints_all is not None:
+                self.curve_waypoints_all = self.curve_waypoints_all[:lim]
 
-        self.metadata: dict[str, Any] = dict(payload.get("metadata", {}))
         self.periodic = bool(self.metadata.get("periodic", True))
+        # Curve-rail geometry (so the sampler can recompute the rail at generation time).
+        self.hilbert_resolution = int(self.metadata.get("hilbert_resolution", 128))
+        _cs = self.metadata.get("cell_size", None)
+        self.cell_size = None if _cs is None else float(_cs)
+        _rail_offs = self.metadata.get("curve_rail_offsets", None)
+        self.curve_rail_offsets = (
+            np.asarray(_rail_offs, dtype=np.int64) if _rail_offs is not None else None
+        )
+        self.curve_rail_window = float(self.metadata.get("curve_rail_window", 1.0) or 1.0)
+        self.curve_rail_reference = str(self.metadata.get("curve_rail_reference", "absolute") or "absolute")
+        self.curve_rail_residual_target = bool(self.metadata.get("curve_rail_residual_target", False))
+        _ck = self.metadata.get("curve_rail_k", None)
+        self.curve_rail_k = (
+            int(_ck) if _ck is not None
+            else (int(self.curve_waypoints_all.shape[2]) if self.curve_waypoints_all is not None else 0)
+        )
         self.coord_dim = int(self.token_coords_all.shape[-1])
         self.factorized = bool(self.metadata.get("factorized", False))
         self.polar = bool(self.metadata.get("polar", False))
         self.discrete = bool(self.metadata.get("is_discrete", self.metadata.get("discrete", False)))
+        self.use_curve_rail = bool(self.metadata.get("use_curve_rail", False)) and (
+            self.curve_waypoints_all is not None or self.curve_rail_mode == "fixed_template"
+        )
+        self._fixed_curve_waypoints_cache: dict[tuple[Any, ...], torch.Tensor] = {}
         self.codebook_path = self.metadata.get("codebook_path")
         self.vocab_size = int(payload["vocab_size"])
         self.sos_id = int(payload["sos_id"])
@@ -1205,6 +1616,54 @@ class LJTransferableCachedDataset(Dataset):
 
     def __len__(self) -> int:
         return int(self.sample_length_all.shape[0])
+
+    def _resolution_for_box(self, box: np.ndarray) -> int:
+        if self.cell_size is None:
+            return int(self.hilbert_resolution)
+        L = float(np.max(np.asarray(box, dtype=np.float64)))
+        n = max(2, int(round(L / self.cell_size)))
+        return int(1 << int(math.ceil(math.log2(n))))
+
+    def _fixed_template_curve_waypoints_for_sample(
+        self,
+        *,
+        box: torch.Tensor,
+        particle_len: int,
+        seq_len: int,
+    ) -> torch.Tensor:
+        box_np = box.detach().cpu().numpy().astype(np.float32, copy=False)
+        box_key = tuple(round(float(x), 8) for x in box_np.reshape(-1))
+        key = (
+            int(particle_len),
+            int(seq_len),
+            box_key,
+            int(self.curve_rail_k),
+            float(self.curve_rail_window),
+            str(self.curve_rail_reference),
+            bool(self.factorized),
+            int(self.coord_dim),
+            int(self._resolution_for_box(box_np)),
+        )
+        cached = self._fixed_curve_waypoints_cache.get(key)
+        if cached is not None:
+            return cached
+        n_particles = int(particle_len)
+        R = int(key[-1])
+        waypoints_np = fixed_template_waypoints(
+            np.arange(1, n_particles, dtype=np.int64),
+            n_particles,
+            R,
+            box_np,
+            k=int(self.curve_rail_k),
+            window_scale=float(self.curve_rail_window),
+            periodic=bool(self.periodic),
+            reference=str(self.curve_rail_reference),
+        )
+        if self.factorized:
+            waypoints_np = _repeat_factorized_curve_waypoints(waypoints_np, coord_dim=int(self.coord_dim))
+        waypoints = torch.from_numpy(waypoints_np).to(dtype=torch.float32)[:seq_len]
+        self._fixed_curve_waypoints_cache[key] = waypoints
+        return waypoints
 
     def __getitem__(self, idx: int):
         seq_len = int(self.sample_length_all[idx].item())
@@ -1239,6 +1698,17 @@ class LJTransferableCachedDataset(Dataset):
             item["abs_coords"] = abs_coords
         if self.target_energy_all is not None:
             item["target_energy"] = self.target_energy_all[idx]
+        if self.curve_waypoints_all is not None:
+            item["curve_waypoints"] = self.curve_waypoints_all[idx, :seq_len]
+        elif self.use_curve_rail and self.curve_rail_mode == "fixed_template":
+            particle_len = int(self.particle_length_all[idx].item())
+            if particle_len <= 0:
+                particle_len = int(self.absolute_coords_all.shape[1]) if self.absolute_coords_all is not None else seq_len + 1
+            item["curve_waypoints"] = self._fixed_template_curve_waypoints_for_sample(
+                box=self.box_size_all[idx],
+                particle_len=particle_len,
+                seq_len=seq_len,
+            )
         return item
 
 
@@ -1260,11 +1730,19 @@ def build_lj_transferable_cache(
     codebook_path: Optional[str] = None,
     random_grid_shift: bool = False,
     augment_90deg_rotations: bool = False,
+    augment_torus_shift: bool = True,
     num_augmentations: int = 5,
     energy_chunk_size: int = 2048,
     cache_build_chunk_size: int = 16384,
     limit: Optional[int] = None,
     seed: int = 0,
+    use_curve_rail: bool = False,
+    curve_rail_offsets: Optional[Sequence[int]] = None,
+    curve_rail_mode: str = "lookahead",
+    curve_rail_window: float = 1.0,
+    curve_rail_k: int = 8,
+    curve_rail_reference: str = "absolute",
+    curve_rail_residual_target: bool = False,
     target_system: str = "lj",
     lj_epsilon: float = 1.0,
     lj_sigma: float = 1.0,
@@ -1297,6 +1775,13 @@ def build_lj_transferable_cache(
         random_grid_shift=bool(random_grid_shift),
         limit=limit,
         seed=int(seed),
+        use_curve_rail=bool(use_curve_rail),
+        curve_rail_offsets=curve_rail_offsets,
+        curve_rail_mode=str(curve_rail_mode),
+        curve_rail_window=float(curve_rail_window),
+        curve_rail_k=int(curve_rail_k),
+        curve_rail_reference=str(curve_rail_reference),
+        curve_rail_residual_target=bool(curve_rail_residual_target),
     )
     base_n_samples = len(dataset)
     if base_n_samples <= 0:
@@ -1348,6 +1833,14 @@ def build_lj_transferable_cache(
     delta_length = torch.empty((n_samples,), dtype=torch.long)
     particle_length = torch.empty((n_samples,), dtype=torch.long)
     target_energy = torch.empty((n_samples,), dtype=torch.float32)
+    use_rail = bool(use_curve_rail)
+    rail_k = int(dataset.curve_rail_k) if use_rail else 0
+    compact_fixed_template_rail = bool(use_rail and dataset.curve_rail_mode == "fixed_template")
+    curve_waypoints = (
+        torch.zeros((n_samples, max_seq_len, rail_k, int(dataset.coord_dim)), dtype=torch.float32)
+        if use_rail and not compact_fixed_template_rail
+        else None
+    )
     max_abs_relative_displacement = 0.0
 
     out_idx = 0
@@ -1384,7 +1877,14 @@ def build_lj_transferable_cache(
                 for aug_idx in range(effective_num_augmentations):
                     shift = None
                     rot_matrix = None
-                    if periodic:
+                    if periodic and augment_torus_shift:
+                        # Both batched augmentations are gated by ``augment_torus_shift``
+                        # (default on, preserving prior behavior). The continuous torus
+                        # shift and the random 90-degree rotation are legit symmetries for
+                        # normal LJ training, but both move particles to *different* Hilbert
+                        # cells/indices, which destroys the exact, evenly-spaced cell
+                        # alignment of toy data (e.g. the Hilbert-rail toy). Turn the flag
+                        # off to keep cell-aligned data verbatim.
                         shift = (
                             dataset.rng.uniform(low=0.0, high=1.0, size=(batch_len, 1, 3)).astype(np.float32)
                             * box[None, None, :]
@@ -1420,6 +1920,8 @@ def build_lj_transferable_cache(
                         batch["absolute_coords"]
                     )
                     token_coords[dest_start:dest_end, :n] = torch.from_numpy(batch["token_coords"])
+                    if curve_waypoints is not None:
+                        curve_waypoints[dest_start:dest_end, :n] = torch.from_numpy(batch["curve_waypoints"])
                     long_jump_mask[dest_start:dest_end, :n] = torch.from_numpy(batch["long_jump_mask"])
                     box_size[dest_start:dest_end] = torch.from_numpy(batch["box_size"])
                     density[dest_start:dest_end] = torch.from_numpy(batch["density"])
@@ -1475,6 +1977,8 @@ def build_lj_transferable_cache(
                 particle_len = int(item["particle_length"].item())
                 absolute_coords[out_idx, :particle_len, :] = item["absolute_coords"]
                 token_coords[out_idx, :n, :] = item["token_coords"]
+                if curve_waypoints is not None:
+                    curve_waypoints[out_idx, :n] = item["curve_waypoints"]
                 long_jump_mask[out_idx, :n] = item["long_jump_mask"]
                 box_size[out_idx] = item["box_size"]
                 density[out_idx] = item["density"]
@@ -1555,7 +2059,19 @@ def build_lj_transferable_cache(
         "dw_offset": float(dw_offset),
         "periodic_box_convention": "zero_to_L",
         "relative_anchor_convention": "first_particle_origin_chain",
-        "version": 12,
+        "use_curve_rail": bool(use_rail),
+        "curve_rail_offsets": dataset.curve_rail_offsets.tolist() if use_rail else None,
+        "curve_rail_mode": str(dataset.curve_rail_mode) if use_rail else None,
+        "curve_rail_window": float(dataset.curve_rail_window) if use_rail else None,
+        "curve_rail_k": int(dataset.curve_rail_k) if use_rail else None,
+        "curve_rail_reference": str(dataset.curve_rail_reference) if use_rail else None,
+        "curve_rail_residual_target": bool(dataset.curve_rail_residual_target) if use_rail else False,
+        "curve_rail_storage": (
+            "fixed_template_generated" if compact_fixed_template_rail
+            else ("per_sample" if use_rail else None)
+        ),
+        "cell_size": None if dataset.cell_size is None else float(dataset.cell_size),
+        "version": 14,
     }
 
     payload = {
@@ -1576,6 +2092,8 @@ def build_lj_transferable_cache(
         "sos_id": int(sos_id_value),
         "metadata": metadata,
     }
+    if curve_waypoints is not None:
+        payload["curve_waypoints"] = curve_waypoints
     torch.save(payload, output_path)
     return {
         "output_path": output_path,

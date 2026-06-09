@@ -91,7 +91,16 @@ def parse_args() -> argparse.Namespace:
         "--lj_transfer_hilbert_resolution",
         type=int,
         default=128,
-        help="Hilbert sorting resolution for lj_transferable (used when --lj_transfer_ordering=hilbert).",
+        help="Hilbert sorting resolution (cells/axis) for lj_transferable; gives a CONSTANT cell "
+        "COUNT (cell size = L/R varies with box). Ignored when --lj_transfer_cell_size is set.",
+    )
+    parser.add_argument(
+        "--lj_transfer_cell_size",
+        type=float,
+        default=None,
+        help="Constant physical Hilbert cell size (sigma units). When set, resolution is chosen "
+        "PER BOX as next_pow2(L/cell_size), holding cell size ~constant across box lengths "
+        "(more recursion in larger boxes) instead of a constant cell count.",
     )
     parser.add_argument(
         "--lj_transfer_ordering",
@@ -118,6 +127,37 @@ def parse_args() -> argparse.Namespace:
         default=64,
         help="Number of bins per axis for lj_transferable displacement tokenization.",
     )
+    parser.add_argument(
+        "--lj_transfer_use_curve_rail",
+        action="store_true",
+        default=False,
+        help="Enable the Hilbert curve-rail (GPS-guide) look-ahead conditioning "
+        "(3D periodic Hilbert ordering, --ar_arch standard only). Requires the cache "
+        "to be built with the same flag.",
+    )
+    parser.add_argument(
+        "--lj_transfer_curve_rail_offsets",
+        type=int,
+        nargs="+",
+        default=None,
+        help="Custom Hilbert index offsets for curve rail lookahead mode.",
+    )
+    parser.add_argument(
+        "--lj_transfer_curve_rail_mode",
+        type=str,
+        choices=("lookahead", "fixed_template"),
+        default="lookahead",
+        help="Curve-rail geometry mode for on-the-fly lj_transferable training.",
+    )
+    parser.add_argument("--lj_transfer_curve_rail_window", type=float, default=1.0)
+    parser.add_argument("--lj_transfer_curve_rail_k", type=int, default=8)
+    parser.add_argument(
+        "--lj_transfer_curve_rail_reference",
+        type=str,
+        choices=("absolute", "prev_step"),
+        default="absolute",
+    )
+    parser.add_argument("--lj_transfer_curve_rail_residual_target", action="store_true")
     parser.add_argument(
         "--lj_transfer_no_long_jump",
         action="store_true",
@@ -315,6 +355,13 @@ def parse_args() -> argparse.Namespace:
         help="Use a continuous MDN output head for lj_transferable autoregressive training.",
     )
     parser.add_argument(
+        "--continuous_input",
+        action="store_true",
+        help="Feed the CONTINUOUS previous displacement as autoregressive input instead of the "
+        "quantized discrete token (removes tokenizer bin-crossing drift; --ar_arch standard + "
+        "--use_continuous_head, non-factorized, non-polar).",
+    )
+    parser.add_argument(
         "--num_mixtures",
         type=int,
         default=32,
@@ -418,6 +465,7 @@ def build_data_module(args: argparse.Namespace):
             data_path=data_path,
             periodic=bool(args.lj_transfer_periodic),
             hilbert_resolution=args.lj_transfer_hilbert_resolution,
+            cell_size=args.lj_transfer_cell_size,
             ordering=args.lj_transfer_ordering,
             spectral_sigma=args.lj_transfer_spectral_sigma,
             local_window=args.lj_transfer_window,
@@ -434,6 +482,13 @@ def build_data_module(args: argparse.Namespace):
             num_workers=args.num_workers,
             train_limit=args.train_limit,
             preprocessed_path=args.lj_transfer_preprocessed_path,
+            use_curve_rail=bool(args.lj_transfer_use_curve_rail),
+            curve_rail_offsets=args.lj_transfer_curve_rail_offsets,
+            curve_rail_mode=str(args.lj_transfer_curve_rail_mode),
+            curve_rail_window=float(args.lj_transfer_curve_rail_window),
+            curve_rail_k=int(args.lj_transfer_curve_rail_k),
+            curve_rail_reference=str(args.lj_transfer_curve_rail_reference),
+            curve_rail_residual_target=bool(args.lj_transfer_curve_rail_residual_target),
         )
         data_module.setup("fit")
         vocab_size = data_module.vocab_size
@@ -519,6 +574,8 @@ def main() -> None:
             raise ValueError("--use_continuous_head is only supported with --dataset lj_transferable.")
     if args.full_covariance and not args.use_continuous_head:
         raise ValueError("--full_covariance requires --use_continuous_head.")
+    if args.continuous_input and not args.use_continuous_head:
+        raise ValueError("--continuous_input currently requires --use_continuous_head.")
     if args.discrete:
         if args.dataset != "lj_transferable":
             raise ValueError("--discrete is only supported with --dataset lj_transferable.")
@@ -601,6 +658,20 @@ def main() -> None:
         if float(args.coord_dequant_width) > 0.0:
             coord_dequant_width = float(args.coord_dequant_width)
         ar_arch = resolve_ar_arch(args.ar_arch, use_ida=bool(args.use_ida))
+        use_curve_rail = bool(getattr(data_module, "use_curve_rail", False))
+        curve_rail_k = int(getattr(data_module, "curve_rail_k", 0))
+        curve_rail_offsets = getattr(data_module, "curve_rail_offsets_eff", None)
+        curve_rail_resolution = int(getattr(data_module, "hilbert_resolution_eff", 128))
+        curve_rail_cell_size = getattr(data_module, "cell_size_eff", None)
+        curve_rail_mode = str(getattr(data_module, "curve_rail_mode_eff", "lookahead"))
+        curve_rail_window = float(getattr(data_module, "curve_rail_window_eff", 1.0))
+        curve_rail_reference = str(getattr(data_module, "curve_rail_reference_eff", "absolute"))
+        curve_rail_residual_target = bool(getattr(data_module, "curve_rail_residual_target_eff", False))
+        if use_curve_rail and ar_arch != "standard":
+            raise ValueError(
+                "Curve-rail conditioning is currently supported only with --ar_arch standard, "
+                f"got resolved ar_arch={ar_arch!r}."
+            )
         if ar_arch == "ida":
             spatial_dim = int(model_info.get("coord_dim", args.ar_ida_spatial_dim))
             lit_module = GraphormerARIDA(
@@ -673,6 +744,7 @@ def main() -> None:
                 discrete=bool(args.discrete),
                 binned_discrete=bool(args.binned_discrete),
                 use_continuous_head=bool(args.use_continuous_head),
+                continuous_input=bool(args.continuous_input),
                 num_mixtures=int(args.num_mixtures),
                 full_covariance=bool(args.full_covariance),
                 lambda_var=float(args.lambda_var),
@@ -683,6 +755,15 @@ def main() -> None:
                 lj_spring_constant=float(args.lj_spring_constant),
                 lj_boxlength=float(args.lj_boxlength),
                 lj_periodic=bool(args.lj_periodic),
+                use_curve_rail=use_curve_rail,
+                curve_rail_k=(curve_rail_k if use_curve_rail else 6),
+                curve_rail_offsets=(curve_rail_offsets if use_curve_rail else None),
+                hilbert_resolution=curve_rail_resolution,
+                cell_size=curve_rail_cell_size,
+                curve_rail_mode=curve_rail_mode,
+                curve_rail_window=curve_rail_window,
+                curve_rail_reference=curve_rail_reference,
+                curve_rail_residual_target=curve_rail_residual_target,
             )
         elif ar_arch == "vanilla":
             if args.use_continuous_head:

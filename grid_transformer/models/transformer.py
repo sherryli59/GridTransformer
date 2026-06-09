@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from typing import Optional
+from typing import Optional, Sequence, Tuple
 
 import pytorch_lightning as pl
 import torch
@@ -9,6 +9,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from ..training.ar import MDNHead, compute_log_weight_variance, mdn_loss
+from .curve_rail import CurveRailAttention
 from .deep_ida import DeepIDABias
 from .ida import PeriodicIDA
 from .rbf_edge_bias import RBFEdgeBias
@@ -173,6 +174,7 @@ class GraphormerAR(pl.LightningModule):
         rope_max_period: float = 10000.0,
         is_factorized: bool = False,
         use_continuous_head: bool = False,
+        continuous_input: bool = False,
         num_mixtures: int = 32,
         full_covariance: bool = False,
         polar: bool = False,
@@ -186,6 +188,18 @@ class GraphormerAR(pl.LightningModule):
         lj_spring_constant: float = 0.5,
         lj_boxlength: float = 10.0,
         lj_periodic: bool = False,
+        use_curve_rail: bool = False,
+        curve_rail_k: int = 6,
+        curve_rail_n_rbf: int = 32,
+        curve_rail_max_dist: float = 4.0,
+        curve_rail_hidden: int = 64,
+        curve_rail_offsets: Optional[Sequence[int]] = None,
+        hilbert_resolution: int = 128,
+        cell_size: Optional[float] = None,
+        curve_rail_mode: str = "lookahead",
+        curve_rail_window: float = 1.0,
+        curve_rail_reference: str = "absolute",
+        curve_rail_residual_target: bool = False,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -242,6 +256,19 @@ class GraphormerAR(pl.LightningModule):
         self.output_spatial_dim = int(ida_spatial_dim)
         self.continuous_out_dim = 1 if self.is_factorized else self.output_spatial_dim
         self.axis_emb = nn.Embedding(self.output_spatial_dim, d_model) if self.is_factorized else None
+        # Continuous input feedback: project the (continuous) previous displacement into the
+        # residual stream instead of relying on the QUANTIZED discrete token. This removes
+        # the tokenizer bin-crossing cascade in autoregressive generation (the discrete
+        # input token flips across a bin under tiny drift -> adjacent under-trained token).
+        self.continuous_input = bool(continuous_input)
+        if self.continuous_input:
+            if self.is_factorized:
+                raise ValueError("continuous_input is not supported with is_factorized=True.")
+            if self.polar:
+                raise ValueError("continuous_input is not supported with polar=True.")
+            self.delta_in_proj = nn.Linear(self.output_spatial_dim, d_model)
+        else:
+            self.delta_in_proj = None
         self.num_mixtures = int(num_mixtures)
         self.lambda_var = float(lambda_var)
         self.lj_kT = float(lj_kT)
@@ -254,6 +281,35 @@ class GraphormerAR(pl.LightningModule):
             )
         else:
             self.ida_pre = None
+
+        # Optional "curve rail" (GPS-guide) cross-attention: one instance applied once
+        # before the transformer blocks, separate from the neighborhood edge bias/IDA.
+        self.use_curve_rail = bool(use_curve_rail)
+        # Geometry needed to recompute the rail at generation time (carried in the
+        # checkpoint via save_hyperparameters). offsets default to the dataset default.
+        if curve_rail_offsets is None:
+            from ..data.lj_transferable import DEFAULT_CURVE_RAIL_OFFSETS
+            self.curve_rail_offsets: Tuple[int, ...] = tuple(int(o) for o in DEFAULT_CURVE_RAIL_OFFSETS)
+        else:
+            self.curve_rail_offsets = tuple(int(o) for o in curve_rail_offsets)
+        self.hilbert_resolution = int(hilbert_resolution)
+        self.cell_size = float(cell_size) if cell_size is not None else None
+        self.curve_rail_mode = str(curve_rail_mode)
+        self.curve_rail_window = float(curve_rail_window)
+        self.curve_rail_reference = str(curve_rail_reference)
+        self.curve_rail_residual_target = bool(curve_rail_residual_target)
+        if self.use_curve_rail:
+            self.rail_attn = CurveRailAttention(
+                d_model=d_model,
+                n_head=n_head,
+                n_rail=int(curve_rail_k),
+                n_rbf=int(curve_rail_n_rbf),
+                max_dist=float(curve_rail_max_dist),
+                hidden_dim=int(curve_rail_hidden),
+                dropout=dropout,
+            )
+        else:
+            self.rail_attn = None
         self.id_coord_mode = id_coord_mode
         self.cell_grid_size = int(cell_grid_size) if cell_grid_size is not None else None
 
@@ -404,10 +460,30 @@ class GraphormerAR(pl.LightningModule):
         box_size: Optional[torch.Tensor] = None,
         density: Optional[torch.Tensor] = None,
         pad_mask: Optional[torch.Tensor] = None,
+        curve_waypoints: Optional[torch.Tensor] = None,
+        input_deltas: Optional[torch.Tensor] = None,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         B, T = seq_in.shape
         coords = self._prepare_attention_coords(coords, seq_len=T)
-        if self.use_pos_emb:
+        if self.continuous_input:
+            # Token content comes from the CONTINUOUS previous displacement; position 0 keeps
+            # the (SOS) token embedding so the start of sequence is still marked.
+            if input_deltas is None:
+                raise ValueError("continuous_input=True requires input_deltas in forward().")
+            if input_deltas.shape[:2] != (B, T) or input_deltas.shape[-1] != self.output_spatial_dim:
+                raise ValueError(
+                    f"input_deltas must be [B,T,{self.output_spatial_dim}], got {tuple(input_deltas.shape)}"
+                )
+            assert self.delta_in_proj is not None
+            cont = self.delta_in_proj(input_deltas.to(dtype=self.delta_in_proj.weight.dtype))
+            sos_e = self.tok_emb(seq_in[:, :1])  # [B,1,d] reuse the SOS token embedding
+            x = torch.cat([sos_e, cont[:, 1:, :]], dim=1)
+            if self.use_pos_emb:
+                assert self.pos_emb is not None
+                if T > self.pos_emb.num_embeddings:
+                    raise ValueError(f"Sequence length {T} exceeds max position embeddings {self.pos_emb.num_embeddings}")
+                x = x + self.pos_emb(torch.arange(T, device=seq_in.device))[None, :, :]
+        elif self.use_pos_emb:
             assert self.pos_emb is not None
             if T > self.pos_emb.num_embeddings:
                 raise ValueError(f"Sequence length {T} exceeds max position embeddings {self.pos_emb.num_embeddings}")
@@ -465,6 +541,13 @@ class GraphormerAR(pl.LightningModule):
                 torus=self.torus,
             )
 
+        if self.use_curve_rail and self.rail_attn is not None and curve_waypoints is not None:
+            if curve_waypoints.shape[:2] != (B, T):
+                raise ValueError(
+                    f"curve_waypoints [B,T] {tuple(curve_waypoints.shape[:2])} must match seq_in {(B, T)}"
+                )
+            x = self.rail_attn(x, curve_waypoints.to(dtype=x.dtype))
+
         bias = self._causal_bias(B, T, coords, box_size, x.device, x.dtype)
         for blk in self.blocks:
             x = x + blk["attn"](blk["ln1"](x), bias, key_padding_mask=pad_mask)
@@ -483,13 +566,21 @@ class GraphormerAR(pl.LightningModule):
         pad_mask: Optional[torch.Tensor] = None,
         seq_in: Optional[torch.LongTensor] = None,
         logits: Optional[torch.Tensor] = None,
+        curve_waypoints: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         if self.use_continuous_head:
             raise NotImplementedError("nll() is only implemented for the discrete classification head.")
         if seq_in is None:
             seq_in = self._shift_with_sos(seq)
         if logits is None:
-            logits = self.forward(seq_in, coords=coords, box_size=box_size, density=density, pad_mask=pad_mask)
+            logits = self.forward(
+                seq_in,
+                coords=coords,
+                box_size=box_size,
+                density=density,
+                pad_mask=pad_mask,
+                curve_waypoints=curve_waypoints,
+            )
         logp = F.log_softmax(logits, dim=-1)
         tok_logp = logp.gather(-1, seq.unsqueeze(-1)).squeeze(-1)
         if pad_mask is not None:
@@ -528,9 +619,30 @@ class GraphormerAR(pl.LightningModule):
         if pad is not None:
             pad = pad.bool()
 
+        curve_waypoints = batch.get("curve_waypoints")
+        if curve_waypoints is not None:
+            curve_waypoints = curve_waypoints.to(self.device, dtype=torch.float32)
+
         coords = self._prepare_attention_coords(coords, seq_len=seq_in.shape[1])
         coords = self._apply_training_coord_dequantization(coords, box_size)
-        outputs = self.forward(seq_in, coords=coords, box_size=box_size, density=density, pad_mask=pad)
+        input_deltas = None
+        if self.continuous_input:
+            tgt_deltas = batch.get("deltas")
+            if tgt_deltas is None:
+                raise KeyError("continuous_input=True requires batch['deltas'].")
+            tgt_deltas = tgt_deltas.to(self.device, dtype=torch.float32)
+            # Shift so position 0 = SOS (zeros), position t = delta_{t-1} (continuous feedback).
+            zero = torch.zeros_like(tgt_deltas[:, :1, :])
+            input_deltas = torch.cat([zero, tgt_deltas[:, :-1, :]], dim=1)
+        outputs = self.forward(
+            seq_in,
+            coords=coords,
+            box_size=box_size,
+            density=density,
+            pad_mask=pad,
+            curve_waypoints=curve_waypoints,
+            input_deltas=input_deltas,
+        )
         if self.discrete:
             logits = outputs
             tok_nll = F.cross_entropy(

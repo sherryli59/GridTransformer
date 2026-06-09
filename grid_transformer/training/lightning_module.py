@@ -361,6 +361,7 @@ class LJTransferableDataModule(pl.LightningDataModule):
         data_path: str | Sequence[str] = "/mnt/ssd/mcmc/lj_N16_T1.h5",
         periodic: bool = True,
         hilbert_resolution: int = 128,
+        cell_size: Optional[float] = None,
         ordering: str = "hilbert",
         spectral_sigma: float = 1.0,
         local_window: float = 3.0,
@@ -379,11 +380,19 @@ class LJTransferableDataModule(pl.LightningDataModule):
         train_limit: Optional[int] = None,
         drop_last: bool = False,
         preprocessed_path: Optional[str] = None,
+        use_curve_rail: bool = False,
+        curve_rail_offsets: Optional[Sequence[int]] = None,
+        curve_rail_mode: str = "lookahead",
+        curve_rail_window: float = 1.0,
+        curve_rail_k: int = 8,
+        curve_rail_reference: str = "absolute",
+        curve_rail_residual_target: bool = False,
     ) -> None:
         super().__init__()
         self.data_path = data_path
         self.periodic = bool(periodic)
         self.hilbert_resolution = int(hilbert_resolution)
+        self.cell_size = None if cell_size is None else float(cell_size)
         self.ordering = str(ordering).strip().lower()
         if self.ordering not in ("hilbert", "spectral"):
             raise ValueError(f"ordering must be 'hilbert' or 'spectral', got {ordering!r}")
@@ -406,6 +415,13 @@ class LJTransferableDataModule(pl.LightningDataModule):
         self.train_limit = train_limit
         self.drop_last = bool(drop_last)
         self.preprocessed_path = preprocessed_path
+        self.use_curve_rail = bool(use_curve_rail)
+        self.curve_rail_offsets = curve_rail_offsets
+        self.curve_rail_mode = str(curve_rail_mode)
+        self.curve_rail_window = float(curve_rail_window)
+        self.curve_rail_k_cfg = int(curve_rail_k)
+        self.curve_rail_reference = str(curve_rail_reference)
+        self.curve_rail_residual_target = bool(curve_rail_residual_target)
         if self.preprocessed_path is not None and self.random_grid_shift:
             warnings.warn(
                 "preprocessed_path is set, but random_grid_shift=True. "
@@ -457,6 +473,14 @@ class LJTransferableDataModule(pl.LightningDataModule):
                         "Cached lj_transferable polar setting does not match the datamodule: "
                         f"cache polar={cached_polar}, requested polar={self.polar}."
                     )
+                cached_rail = bool(getattr(self._train_ds, "use_curve_rail", False))
+                if self.use_curve_rail and not cached_rail:
+                    raise ValueError(
+                        "use_curve_rail=True but the cache has no curve-rail geometry. "
+                        "Rebuild the cache with use_curve_rail=True (RUN_PREPROCESS)."
+                    )
+                # Reflect what the cache actually provides so the model is configured to match.
+                self.use_curve_rail = cached_rail
                 return
             data_paths: str | Sequence[str]
             data_paths = self.data_path
@@ -469,6 +493,7 @@ class LJTransferableDataModule(pl.LightningDataModule):
                 file_paths=data_paths,
                 periodic=self.periodic,
                 hilbert_resolution=self.hilbert_resolution,
+                cell_size=self.cell_size,
                 ordering=self.ordering,
                 spectral_sigma=self.spectral_sigma,
                 local_window=self.local_window,
@@ -482,6 +507,13 @@ class LJTransferableDataModule(pl.LightningDataModule):
                 use_data_aug=self.use_data_aug,
                 limit=self.train_limit,
                 seed=self.seed,
+                use_curve_rail=self.use_curve_rail,
+                curve_rail_offsets=self.curve_rail_offsets,
+                curve_rail_mode=self.curve_rail_mode,
+                curve_rail_window=self.curve_rail_window,
+                curve_rail_k=self.curve_rail_k_cfg,
+                curve_rail_reference=self.curve_rail_reference,
+                curve_rail_residual_target=self.curve_rail_residual_target,
             )
 
     @property
@@ -541,6 +573,67 @@ class LJTransferableDataModule(pl.LightningDataModule):
         if self._train_ds is None:
             return None
         return int(getattr(self._train_ds, "coord_dim", 2))
+
+    @property
+    def curve_rail_k(self) -> int:
+        """Number of rail waypoints K actually provided by the active dataset."""
+        if self._train_ds is None or not self.use_curve_rail:
+            return 0
+        k = getattr(self._train_ds, "curve_rail_k", None)
+        if k is not None:
+            return int(k)
+        wp = getattr(self._train_ds, "curve_waypoints_all", None)  # cached dataset
+        if wp is not None:
+            return int(wp.shape[2])
+        offs = getattr(self._train_ds, "curve_rail_offsets", None)  # on-the-fly dataset
+        return int(len(offs)) if offs is not None else 0
+
+    @property
+    def curve_rail_offsets_eff(self):
+        """Hilbert index offsets actually used by the active dataset (or None)."""
+        if self._train_ds is None or not self.use_curve_rail:
+            return None
+        offs = getattr(self._train_ds, "curve_rail_offsets", None)
+        if offs is None:
+            return None
+        return [int(o) for o in offs]
+
+    @property
+    def hilbert_resolution_eff(self) -> int:
+        if self._train_ds is None:
+            return 128
+        return int(getattr(self._train_ds, "hilbert_resolution", 128))
+
+    @property
+    def cell_size_eff(self):
+        if self._train_ds is None:
+            return None
+        cs = getattr(self._train_ds, "cell_size", None)
+        return None if cs is None else float(cs)
+
+    @property
+    def curve_rail_mode_eff(self) -> str:
+        if self._train_ds is None:
+            return self.curve_rail_mode
+        return str(getattr(self._train_ds, "curve_rail_mode", self.curve_rail_mode))
+
+    @property
+    def curve_rail_window_eff(self) -> float:
+        if self._train_ds is None:
+            return self.curve_rail_window
+        return float(getattr(self._train_ds, "curve_rail_window", self.curve_rail_window))
+
+    @property
+    def curve_rail_reference_eff(self) -> str:
+        if self._train_ds is None:
+            return self.curve_rail_reference
+        return str(getattr(self._train_ds, "curve_rail_reference", self.curve_rail_reference))
+
+    @property
+    def curve_rail_residual_target_eff(self) -> bool:
+        if self._train_ds is None:
+            return self.curve_rail_residual_target
+        return bool(getattr(self._train_ds, "curve_rail_residual_target", self.curve_rail_residual_target))
 
     def train_dataloader(self) -> DataLoader:
         if self._train_ds is None:

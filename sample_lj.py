@@ -10,7 +10,14 @@ import torch
 import torch.nn.functional as F
 
 from grid_transformer.data.lj_abs_dataset import AbsoluteCoordinateTokenizer
-from grid_transformer.data.lj_transferable import RelativeDeltaTokenizer, _load_codebook_tensor
+from grid_transformer.data.lj_transferable import (
+    RelativeDeltaTokenizer,
+    _hilbert3d_encode,
+    _load_codebook_tensor,
+    _rail_relative_from_codes,
+    fixed_template_waypoints,
+    fixed_template_anchors,
+)
 from grid_transformer.models.ar_registry import AR_ARCH_CHOICES, load_ar_checkpoint
 from grid_transformer.utils.spatial import spherical_to_cartesian
 
@@ -349,6 +356,54 @@ def autoregressive_unique_hilbert_sample(
     }
 
 
+def _rail_resolution_for_box(
+    box_np: np.ndarray,
+    hilbert_resolution: int,
+    cell_size: Optional[float],
+) -> int:
+    """Grid resolution R used to interpret the curve rail at sampling time.
+
+    Mirrors ``LJTransferableDataset._resolution_for_box``: a fixed global
+    resolution when ``cell_size`` is None (the cache-build path), else the next
+    power of two of ``max(L)/cell_size`` so the physical cell size is held constant
+    across box sizes.
+    """
+    if cell_size is None:
+        return int(hilbert_resolution)
+    L = float(np.max(np.asarray(box_np, dtype=np.float64)))
+    n = max(2, int(round(L / float(cell_size))))
+    return int(1 << int(math.ceil(math.log2(n))))
+
+
+def _compute_rail_waypoints_batch(
+    anchor_pos: np.ndarray,
+    box_np: np.ndarray,
+    resolution: int,
+    offsets: np.ndarray,
+    *,
+    periodic: bool,
+) -> np.ndarray:
+    """Curve-rail look-ahead for a batch of anchor particles (one per sample).
+
+    ``anchor_pos`` is ``[B, 3]`` in the box frame. Returns ``[B, K, 3]`` float32
+    min-image vectors from each anchor to its K future Hilbert-curve cell centers.
+    This reproduces ``LJTransferableDataset._curve_waypoints_3d`` step-for-step
+    (grid bucketing -> Hilbert encode -> rail decode) so the rail the sampler feeds
+    the model is identical to what the model saw at training time.
+    """
+    R = int(resolution)
+    bits = int(math.ceil(math.log2(R)))
+    box64 = np.asarray(box_np, dtype=np.float64).reshape(-1)
+    wrapped = np.mod(anchor_pos, box64[None, :])
+    scaled = (wrapped / np.maximum(box64[None, :], 1e-8)) * float(R)
+    grid = np.clip(np.floor(scaled).astype(np.int64), 0, R - 1)
+    codes = _hilbert3d_encode(grid[..., 0], grid[..., 1], grid[..., 2], bits=bits)
+    rel = _rail_relative_from_codes(
+        codes, anchor_pos, box64, R, np.asarray(offsets, dtype=np.int64), periodic=periodic
+    )
+    return rel  # [B, K, 3] float32
+
+
 @torch.no_grad()
 def autoregressive_relative_delta_sample(
     model: torch.nn.Module,
@@ -370,6 +425,16 @@ def autoregressive_relative_delta_sample(
     continuous_sigma_floor: float = 0.0,
     polar: bool = False,
     full_covariance: bool = False,
+    use_curve_rail: bool = False,
+    curve_rail_offsets: Optional[Sequence[int]] = None,
+    hilbert_resolution: int = 128,
+    cell_size: Optional[float] = None,
+    curve_rail_mode: str = "lookahead",
+    curve_rail_window: float = 1.0,
+    curve_rail_k: int = 8,
+    curve_rail_reference: str = "absolute",
+    curve_rail_residual_target: bool = False,
+    continuous_input: bool = False,
 ) -> dict[str, torch.Tensor]:
     if n_particles <= 1:
         raise ValueError(f"n_particles must be > 1, got {n_particles}")
@@ -452,6 +517,80 @@ def autoregressive_relative_delta_sample(
     logp_discrete = torch.zeros((nsamples,), dtype=torch.float32, device=device)
     logp_continuous = torch.zeros((nsamples,), dtype=torch.float32, device=device) if use_continuous_head else None
 
+    # Continuous input feedback: feed the exact predicted displacement (no quantization).
+    cont_input = bool(continuous_input)
+    if cont_input and not use_continuous_head:
+        raise ValueError("continuous_input=True requires a continuous-head checkpoint.")
+    if cont_input and factorized:
+        raise ValueError("continuous_input=True is not supported with factorized tokenization.")
+    input_deltas_buf = (
+        torch.zeros((nsamples, n_predict_tokens, coord_dim), dtype=torch.float32, device=device)
+        if cont_input else None
+    )
+
+    # --- Curve-rail (GPS-guide) scaffold ---------------------------------------
+    # The rail is deterministic curve geometry, so we recompute it at generation
+    # time from each anchor particle's Hilbert cell and feed it to the model,
+    # exactly as the dataset precomputed it at training time.
+    rail_waypoints = None
+    rail_offsets_arr = None
+    rail_resolution = None
+    rail_is_fixed = False
+    rail_anchors = None
+    rail_residual = False
+    if use_curve_rail:
+        rail_is_fixed = str(curve_rail_mode) == "fixed_template"
+        if factorized and not rail_is_fixed:
+            raise ValueError(
+                "Curve-rail sampling with factorized tokenization is only supported for "
+                "curve_rail_mode='fixed_template'."
+            )
+        if factorized and bool(curve_rail_residual_target):
+            raise ValueError(
+                "curve_rail_residual_target=True is not supported with factorized tokenization."
+            )
+        if coord_dim != 3:
+            raise ValueError(f"Curve-rail sampling requires 3D coordinates, got coord_dim={coord_dim}.")
+        if not periodic:
+            raise ValueError("Curve-rail sampling requires periodic geometry.")
+        rail_resolution = _rail_resolution_for_box(box_np, hilbert_resolution, cell_size)
+        if rail_is_fixed:
+            # Sample-INDEPENDENT template: identical for every generated config (depends
+            # only on N, R, particle index). Precompute the whole buffer ONCE; the rail
+            # never sees the generated positions, so it cannot drift / compound errors.
+            pred = np.arange(1, n_particles, dtype=np.int64)  # predicting particles 1..N-1
+            tmpl = fixed_template_waypoints(
+                pred, n_particles, int(rail_resolution), box_np, k=int(curve_rail_k),
+                window_scale=float(curve_rail_window), periodic=periodic,
+                reference=str(curve_rail_reference),
+            )  # [N-1, K, 3]
+            tmpl_t = torch.from_numpy(tmpl).to(device=device, dtype=torch.float32)
+            rail_waypoints = tmpl_t.unsqueeze(0).expand(nsamples, -1, -1, -1).contiguous()
+            if factorized:
+                rail_waypoints = torch.repeat_interleave(rail_waypoints, repeats=coord_dim, dim=1)
+            rail_residual = bool(curve_rail_residual_target)
+            if rail_residual:
+                # Per-particle absolute anchors decode(j*X); position is reconstructed as
+                # pos_j = anchor_j + predicted_residual (no dependence on prev particle).
+                anchors_np = fixed_template_anchors(
+                    np.arange(0, n_particles), n_particles, int(rail_resolution), box_np
+                )  # [N, 3] box frame
+                rail_anchors = torch.from_numpy(anchors_np).to(device=device, dtype=torch.float32)
+                # Start particle 0 at its anchor (matches training sorted_pos[0] ~ decode(0)).
+                x_base[:, 0, :] = _wrap_positions_0_to_L(
+                    rail_anchors[0].unsqueeze(0).expand(nsamples, -1), box_size
+                )
+        else:
+            if curve_rail_offsets is None:
+                raise ValueError("lookahead rail requires curve_rail_offsets (Hilbert index offsets).")
+            rail_offsets_arr = np.asarray(curve_rail_offsets, dtype=np.int64).reshape(-1)
+            if rail_offsets_arr.size == 0:
+                raise ValueError("curve_rail_offsets must be non-empty.")
+            rail_K = int(rail_offsets_arr.shape[0])
+            rail_waypoints = torch.zeros(
+                (nsamples, n_predict_tokens, rail_K, coord_dim), dtype=torch.float32, device=device
+            )
+
     for t in range(n_predict_tokens):
         if factorized:
             anchor_ids = torch.arange(t + 1, device=device) // coord_dim
@@ -459,11 +598,31 @@ def autoregressive_relative_delta_sample(
         else:
             coords_in = x_base[:, : t + 1, :].clone()
 
+        rail_kwargs: dict[str, torch.Tensor] = {}
+        if use_curve_rail:
+            assert rail_waypoints is not None
+            if not rail_is_fixed:
+                # lookahead: token position t conditions on particle t (predicting t+1);
+                # particle t's position is already known at the start of this step.
+                assert rail_offsets_arr is not None
+                anchor_np = x_base[:, t, :].detach().cpu().numpy().astype(np.float64)
+                rel = _compute_rail_waypoints_batch(
+                    anchor_np, box_np, int(rail_resolution), rail_offsets_arr, periodic=periodic
+                )
+                rail_waypoints[:, t] = torch.from_numpy(rel).to(device=device, dtype=torch.float32)
+            # fixed_template: rail_waypoints was fully precomputed (position-independent).
+            rail_kwargs["curve_waypoints"] = rail_waypoints[:, : t + 1]
+
+        if cont_input:
+            assert input_deltas_buf is not None
+            rail_kwargs["input_deltas"] = input_deltas_buf[:, : t + 1]
+
         outputs = model(
             seq_in[:, : t + 1],
             coords=coords_in,
             box_size=box_size,
             density=density_tensor,
+            **rail_kwargs,
         )
 
         if use_continuous_head:
@@ -524,6 +683,12 @@ def autoregressive_relative_delta_sample(
                 delta_cart_t = spherical_to_cartesian(delta_model_t)
                 delta_context_t = delta_cart_t
 
+            # Continuous feedback: store the EXACT predicted displacement (model space, =
+            # training delta space) for the next step's input, bypassing quantization.
+            if cont_input and (t + 1) < n_predict_tokens:
+                assert input_deltas_buf is not None
+                input_deltas_buf[:, t + 1] = delta_model_t.detach()
+
             assert tokenizer is not None
             nxt = _encode_relative_delta_context(delta_context_t, tokenizer)
             seq_out[:, t] = nxt
@@ -540,7 +705,12 @@ def autoregressive_relative_delta_sample(
                         raw_pos = _wrap_positions_0_to_L(raw_pos, box_size)
                     x_base[:, p_idx + 1, :] = raw_pos
             else:
-                raw_pos = x_base[:, t, :] + delta_cart_t
+                if rail_residual:
+                    assert rail_anchors is not None
+                    # delta_cart_t is the residual to the rail anchor of particle t+1.
+                    raw_pos = rail_anchors[t + 1].unsqueeze(0) + delta_cart_t
+                else:
+                    raw_pos = x_base[:, t, :] + delta_cart_t
                 if periodic:
                     raw_pos = _wrap_positions_0_to_L(raw_pos, box_size)
                 deltas[:, t, :] = delta_cart_t
@@ -874,6 +1044,23 @@ def main() -> None:
     if args.polar and (not ckpt_uses_polar):
         raise ValueError("Checkpoint was not trained with polar continuous targets.")
     polar = bool(args.polar) or ckpt_uses_polar
+    # Curve-rail (GPS-guide) scaffold: detect from the checkpoint and recover the
+    # geometry (offsets, grid resolution) carried in the model hparams.
+    ckpt_uses_curve_rail = bool(getattr(model, "use_curve_rail", False))
+    curve_rail_offsets = list(getattr(model, "curve_rail_offsets", []) or [])
+    curve_rail_resolution = int(getattr(model, "hilbert_resolution", 128))
+    curve_rail_cell_size = getattr(model, "cell_size", None)
+    curve_rail_mode = str(getattr(model, "curve_rail_mode", "lookahead"))
+    curve_rail_window = float(getattr(model, "curve_rail_window", 1.0))
+    curve_rail_reference = str(getattr(model, "curve_rail_reference", "absolute"))
+    curve_rail_residual_target = bool(getattr(model, "curve_rail_residual_target", False))
+    ckpt_continuous_input = bool(getattr(model, "continuous_input", False))
+    curve_rail_k = int(getattr(getattr(model, "hparams", object()), "curve_rail_k", 0)) or len(curve_rail_offsets)
+    if ckpt_uses_curve_rail and curve_rail_mode == "lookahead" and not curve_rail_offsets:
+        raise ValueError(
+            "Checkpoint reports lookahead curve-rail but carries no curve_rail_offsets; "
+            "re-train with the updated model so the rail geometry is saved."
+        )
     K = int(model.K)
     if discrete and args.mode != "relative":
         raise ValueError("Discrete codebook sampling is only supported with --mode relative.")
@@ -1160,6 +1347,16 @@ def main() -> None:
             continuous_sigma_floor=float(args.continuous_sigma_floor),
             polar=polar,
             full_covariance=full_covariance,
+            use_curve_rail=ckpt_uses_curve_rail,
+            curve_rail_offsets=(curve_rail_offsets if ckpt_uses_curve_rail else None),
+            hilbert_resolution=curve_rail_resolution,
+            cell_size=curve_rail_cell_size,
+            curve_rail_mode=curve_rail_mode,
+            curve_rail_window=curve_rail_window,
+            curve_rail_k=curve_rail_k,
+            curve_rail_reference=curve_rail_reference,
+            curve_rail_residual_target=curve_rail_residual_target,
+            continuous_input=ckpt_continuous_input,
         )
         chunks.append(out_chunk)
         done += bsz

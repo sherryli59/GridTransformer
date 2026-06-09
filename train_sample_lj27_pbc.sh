@@ -17,17 +17,29 @@ RUN_PREPROCESS="${RUN_PREPROCESS:-1}"
 RUN_TRAIN="${RUN_TRAIN:-1}"
 RUN_SAMPLE="${RUN_SAMPLE:-1}"
 TRAIN_DATA_AUG="${TRAIN_DATA_AUG:-0}"
+NUM_AUGMENTATIONS_WAS_SET="${NUM_AUGMENTATIONS+x}"
 FACTORIZED="${FACTORIZED:-0}"
 POLAR="${POLAR:-0}"
 USE_CONTINUOUS_HEAD="${USE_CONTINUOUS_HEAD:-1}"
+CONTINUOUS_INPUT="${CONTINUOUS_INPUT:-0}"
 DISCRETE="${DISCRETE:-0}"
 BINNED_DISCRETE="${BINNED_DISCRETE:-0}"
 CODEBOOK_PATH="${CODEBOOK_PATH:-${ROOT_DIR}/codebook.pt}"
 CODEBOOK_SIZE="${CODEBOOK_SIZE:-4096}"
 NUM_MIXTURES="${NUM_MIXTURES:-64}"
 FULL_COVARIANCE="${FULL_COVARIANCE:-1}"
+USE_CURVE_RAIL="${USE_CURVE_RAIL:-0}"
+CURVE_RAIL_OFFSETS="${CURVE_RAIL_OFFSETS:-}"
+CURVE_RAIL_MODE="${CURVE_RAIL_MODE:-fixed_template}"
+CURVE_RAIL_WINDOW="${CURVE_RAIL_WINDOW:-1.0}"
+CURVE_RAIL_K="${CURVE_RAIL_K:-8}"
+CURVE_RAIL_REFERENCE="${CURVE_RAIL_REFERENCE:-absolute}"
+CURVE_RAIL_RESIDUAL_TARGET="${CURVE_RAIL_RESIDUAL_TARGET:-0}"
 PREPROCESS_RANDOM_SHIFT="${PREPROCESS_RANDOM_SHIFT:-0}"
 NUM_AUGMENTATIONS="${NUM_AUGMENTATIONS:-5}"
+if [[ "${USE_CURVE_RAIL}" == "1" ]] && [[ -z "${NUM_AUGMENTATIONS_WAS_SET}" ]]; then
+  NUM_AUGMENTATIONS=1
+fi
 ENERGY_CHUNK_SIZE="${ENERGY_CHUNK_SIZE:-2048}"
 CACHE_BUILD_CHUNK_SIZE="${CACHE_BUILD_CHUNK_SIZE:-16384}"
 LAMBDA_VAR="${LAMBDA_VAR:-0.0}"
@@ -41,9 +53,11 @@ PBC="${PBC:-1}"
 SEED="${SEED:-0}"
 ORDERING="${ORDERING:-hilbert}"
 HILBERT_RESOLUTION="${HILBERT_RESOLUTION:-64}"
-WINDOW="${WINDOW:-1.5}"
+WINDOW="${WINDOW:-3.0}"   # token/displacement window W (sigma) for the AR tokenizer
+SWIN_WINDOW="${SWIN_WINDOW:-8}"   # Swin attention window size (cells, int); distinct from WINDOW
 BINS="${BINS:-64}"
 USE_COORD_DEQUANT="${USE_COORD_DEQUANT:-0}"
+AR_ARCH="${AR_ARCH:-standard}"
 
 # Exact bin width for optional coordinate dequantization noise (2 * W / B).
 DEQUANT_WIDTH=$(awk "BEGIN {print 2.0 * ${WINDOW} / ${BINS}}")
@@ -55,6 +69,7 @@ fi
 if [[ "${BINNED_DISCRETE}" == "1" ]]; then
   USE_CONTINUOUS_HEAD=0
   FULL_COVARIANCE=0
+  CONTINUOUS_INPUT=0
 fi
 if [[ "${USE_CONTINUOUS_HEAD}" == "1" ]]; then
   echo "[train] continuous head enabled; skipping coord_dequant_width"
@@ -82,6 +97,18 @@ if [[ "${FULL_COVARIANCE}" == "1" ]] && [[ "${USE_CONTINUOUS_HEAD}" != "1" ]]; t
   echo "FULL_COVARIANCE=1 requires USE_CONTINUOUS_HEAD=1." >&2
   exit 1
 fi
+if [[ "${CONTINUOUS_INPUT}" == "1" ]] && [[ "${USE_CONTINUOUS_HEAD}" != "1" ]]; then
+  echo "CONTINUOUS_INPUT=1 requires USE_CONTINUOUS_HEAD=1." >&2
+  exit 1
+fi
+if [[ "${CONTINUOUS_INPUT}" == "1" ]] && [[ "${FACTORIZED}" == "1" ]]; then
+  echo "CONTINUOUS_INPUT=1 is incompatible with FACTORIZED=1." >&2
+  exit 1
+fi
+if [[ "${CONTINUOUS_INPUT}" == "1" ]] && [[ "${POLAR}" == "1" ]]; then
+  echo "CONTINUOUS_INPUT=1 is incompatible with POLAR=1." >&2
+  exit 1
+fi
 
 EPOCHS="${EPOCHS:-400}"
 BATCH_SIZE="${BATCH_SIZE:-512}"
@@ -90,7 +117,6 @@ NUM_WORKERS="${NUM_WORKERS:-0}"
 MODEL_DIM="${MODEL_DIM:-512}"
 MODEL_HEADS="${MODEL_HEADS:-4}"
 MODEL_DEPTH="${MODEL_DEPTH:-4}"
-AR_ARCH="${AR_ARCH:-standard}"
 
 SAMPLE_NSAMPLES="${SAMPLE_NSAMPLES:-1024}"
 SAMPLE_BATCH_SIZE="${SAMPLE_BATCH_SIZE:-512}"
@@ -172,6 +198,24 @@ if [[ "${PBC}" != "1" ]]; then
   echo "This script is for periodic 3D data. Set PBC=1." >&2
   exit 1
 fi
+if [[ "${USE_CURVE_RAIL}" == "1" ]]; then
+  if [[ "${ORDERING}" != "hilbert" ]]; then
+    echo "USE_CURVE_RAIL=1 requires ORDERING=hilbert." >&2
+    exit 1
+  fi
+  if [[ "${AR_ARCH}" != "standard" ]]; then
+    echo "USE_CURVE_RAIL=1 requires AR_ARCH=standard." >&2
+    exit 1
+  fi
+  if [[ "${CURVE_RAIL_MODE}" != "lookahead" ]] && [[ "${CURVE_RAIL_MODE}" != "fixed_template" ]]; then
+    echo "CURVE_RAIL_MODE must be lookahead or fixed_template, got ${CURVE_RAIL_MODE}." >&2
+    exit 1
+  fi
+  if [[ "${FACTORIZED}" == "1" ]] && [[ "${CURVE_RAIL_MODE}" != "fixed_template" ]]; then
+    echo "USE_CURVE_RAIL=1 with FACTORIZED=1 requires CURVE_RAIL_MODE=fixed_template." >&2
+    exit 1
+  fi
+fi
 
 HEAD_TAG="discrete"
 if [[ "${USE_CONTINUOUS_HEAD}" == "1" ]]; then
@@ -186,8 +230,17 @@ fi
 if [[ "${POLAR}" == "1" ]]; then
   HEAD_TAG="${HEAD_TAG}_polar"
 fi
+if [[ "${FACTORIZED}" == "1" ]]; then
+  HEAD_TAG="${HEAD_TAG}_factorized"
+fi
+if [[ "${CONTINUOUS_INPUT}" == "1" ]]; then
+  HEAD_TAG="${HEAD_TAG}_continput"
+fi
 if [[ "${FULL_COVARIANCE}" == "1" ]]; then
   HEAD_TAG="${HEAD_TAG}_fullcov"
+fi
+if [[ "${USE_CURVE_RAIL}" == "1" ]]; then
+  HEAD_TAG="${HEAD_TAG}_rail_${CURVE_RAIL_MODE}"
 fi
 
 if [[ -z "${RUN_SUBDIR}" ]]; then
@@ -208,12 +261,20 @@ if [[ -z "${RUN_SUBDIR}" ]]; then
         "${FACTORIZED}" \
         "${POLAR}" \
         "${USE_CONTINUOUS_HEAD}" \
+        "${CONTINUOUS_INPUT}" \
         "${DISCRETE}" \
         "${BINNED_DISCRETE}" \
         "${CODEBOOK_PATH}" \
         "${CODEBOOK_SIZE}" \
         "${NUM_MIXTURES}" \
         "${FULL_COVARIANCE}" \
+        "${USE_CURVE_RAIL}" \
+        "${CURVE_RAIL_OFFSETS}" \
+        "${CURVE_RAIL_MODE}" \
+        "${CURVE_RAIL_WINDOW}" \
+        "${CURVE_RAIL_K}" \
+        "${CURVE_RAIL_REFERENCE}" \
+        "${CURVE_RAIL_RESIDUAL_TARGET}" \
         "${PREPROCESS_RANDOM_SHIFT}" \
         "${NUM_AUGMENTATIONS}" \
         "${ENERGY_CHUNK_SIZE}" \
@@ -285,12 +346,20 @@ write_reproduce_script() {
     FACTORIZED
     POLAR
     USE_CONTINUOUS_HEAD
+    CONTINUOUS_INPUT
     DISCRETE
     BINNED_DISCRETE
     CODEBOOK_PATH
     CODEBOOK_SIZE
     NUM_MIXTURES
     FULL_COVARIANCE
+    USE_CURVE_RAIL
+    CURVE_RAIL_OFFSETS
+    CURVE_RAIL_MODE
+    CURVE_RAIL_WINDOW
+    CURVE_RAIL_K
+    CURVE_RAIL_REFERENCE
+    CURVE_RAIL_RESIDUAL_TARGET
     PREPROCESS_RANDOM_SHIFT
     NUM_AUGMENTATIONS
     ENERGY_CHUNK_SIZE
@@ -408,6 +477,68 @@ raise SystemExit(0 if is_discrete else 1)
 PY
 }
 
+continuous_cache_matches_settings() {
+  "${PYTHON_BIN}" - "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}" "${11}" "${12}" "${13}" "${14}" <<'PY'
+import math
+import sys
+import torch
+
+(
+    cache_path,
+    want_factorized,
+    want_polar,
+    want_ordering,
+    want_hilbert_resolution,
+    want_window,
+    want_bins,
+    want_use_curve_rail,
+    want_curve_rail_mode,
+    want_curve_rail_window,
+    want_curve_rail_k,
+    want_curve_rail_reference,
+    want_curve_rail_residual_target,
+    want_periodic,
+) = sys.argv[1:]
+want_factorized = bool(int(want_factorized))
+want_polar = bool(int(want_polar))
+want_hilbert_resolution = int(want_hilbert_resolution)
+want_window = float(want_window)
+want_bins = int(want_bins)
+want_use_curve_rail = bool(int(want_use_curve_rail))
+want_curve_rail_window = float(want_curve_rail_window)
+want_curve_rail_k = int(want_curve_rail_k)
+want_curve_rail_residual_target = bool(int(want_curve_rail_residual_target))
+want_periodic = bool(int(want_periodic))
+
+try:
+    payload = torch.load(cache_path, map_location="cpu", weights_only=False)
+except TypeError:
+    payload = torch.load(cache_path, map_location="cpu")
+metadata = dict(payload.get("metadata", {}))
+
+ok = True
+ok = ok and (not bool(metadata.get("is_discrete", metadata.get("discrete", False))))
+ok = ok and bool(metadata.get("periodic", False)) == want_periodic
+ok = ok and bool(metadata.get("factorized", False)) == want_factorized
+ok = ok and bool(metadata.get("polar", False)) == want_polar
+ok = ok and str(metadata.get("ordering")) == str(want_ordering)
+ok = ok and int(metadata.get("hilbert_resolution", -1)) == want_hilbert_resolution
+ok = ok and math.isclose(float(metadata.get("local_window", float("nan"))), want_window, rel_tol=0.0, abs_tol=1e-9)
+ok = ok and int(metadata.get("local_bins", -1)) == want_bins
+ok = ok and bool(metadata.get("use_curve_rail", False)) == want_use_curve_rail
+if want_use_curve_rail:
+    ok = ok and str(metadata.get("curve_rail_mode")) == str(want_curve_rail_mode)
+    ok = ok and math.isclose(float(metadata.get("curve_rail_window", float("nan"))), want_curve_rail_window, rel_tol=0.0, abs_tol=1e-9)
+    ok = ok and int(metadata.get("curve_rail_k", -1)) == want_curve_rail_k
+    ok = ok and str(metadata.get("curve_rail_reference")) == str(want_curve_rail_reference)
+    ok = ok and bool(metadata.get("curve_rail_residual_target", False)) == want_curve_rail_residual_target
+    if str(want_curve_rail_mode) == "fixed_template":
+        ok = ok and str(metadata.get("curve_rail_storage")) == "fixed_template_generated"
+
+raise SystemExit(0 if ok else 1)
+PY
+}
+
 codebook_matches_settings() {
   "${PYTHON_BIN}" - "$1" "$2" "$3" "$4" "$5" "$6" <<'PY'
 import sys
@@ -478,6 +609,22 @@ build_continuous_cache() {
   if [[ "${PREPROCESS_RANDOM_SHIFT}" == "1" ]]; then
     preprocess_args+=(--random_shift)
   fi
+  if [[ "${USE_CURVE_RAIL}" == "1" ]]; then
+    preprocess_args+=(
+      --use_curve_rail
+      --curve_rail_mode "${CURVE_RAIL_MODE}"
+      --curve_rail_window "${CURVE_RAIL_WINDOW}"
+      --curve_rail_k "${CURVE_RAIL_K}"
+      --curve_rail_reference "${CURVE_RAIL_REFERENCE}"
+    )
+    if [[ "${CURVE_RAIL_RESIDUAL_TARGET}" == "1" ]]; then
+      preprocess_args+=(--curve_rail_residual_target)
+    fi
+    if [[ -n "${CURVE_RAIL_OFFSETS}" ]]; then
+      read -r -a CURVE_RAIL_OFFSETS_ARR <<< "${CURVE_RAIL_OFFSETS}"
+      preprocess_args+=(--curve_rail_offsets "${CURVE_RAIL_OFFSETS_ARR[@]}")
+    fi
+  fi
   "${PYTHON_BIN}" "${PREPROCESS_SCRIPT}" "${preprocess_args[@]}"
 }
 
@@ -498,6 +645,24 @@ build_discrete_cache_from_source() {
 if [[ "${RUN_PREPROCESS}" == "1" ]]; then
   if [[ -f "${CACHE_PATH}" ]] && cache_is_discrete "${CACHE_PATH}"; then
     echo "[preprocess] existing cache is discrete, rebuilding continuous cache: ${CACHE_PATH}"
+    rm -f "${CACHE_PATH}"
+  fi
+  if [[ -f "${CACHE_PATH}" ]] && ! continuous_cache_matches_settings \
+    "${CACHE_PATH}" \
+    "${FACTORIZED}" \
+    "${POLAR}" \
+    "${ORDERING}" \
+    "${HILBERT_RESOLUTION}" \
+    "${WINDOW}" \
+    "${BINS}" \
+    "${USE_CURVE_RAIL}" \
+    "${CURVE_RAIL_MODE}" \
+    "${CURVE_RAIL_WINDOW}" \
+    "${CURVE_RAIL_K}" \
+    "${CURVE_RAIL_REFERENCE}" \
+    "${CURVE_RAIL_RESIDUAL_TARGET}" \
+    "${PBC}"; then
+    echo "[preprocess] existing cache metadata does not match requested settings, rebuilding: ${CACHE_PATH}"
     rm -f "${CACHE_PATH}"
   fi
   if [[ -f "${CACHE_PATH}" ]]; then
@@ -596,11 +761,30 @@ if [[ "${RUN_TRAIN}" == "1" ]]; then
   if [[ "${USE_CONTINUOUS_HEAD}" == "1" ]]; then
     echo "[train] enabling continuous MDN head with num_mixtures=${NUM_MIXTURES}"
     TRAIN_ARGS+=(--use_continuous_head --num_mixtures "${NUM_MIXTURES}")
+    if [[ "${CONTINUOUS_INPUT}" == "1" ]]; then
+      TRAIN_ARGS+=(--continuous_input)
+    fi
     if [[ "${FULL_COVARIANCE}" == "1" ]]; then
       TRAIN_ARGS+=(--full_covariance)
     fi
   elif [[ "${USE_COORD_DEQUANT}" == "1" ]]; then
     TRAIN_ARGS+=(--coord_dequant_width "${DEQUANT_WIDTH}")
+  fi
+  if [[ "${USE_CURVE_RAIL}" == "1" ]]; then
+    TRAIN_ARGS+=(
+      --lj_transfer_use_curve_rail
+      --lj_transfer_curve_rail_mode "${CURVE_RAIL_MODE}"
+      --lj_transfer_curve_rail_window "${CURVE_RAIL_WINDOW}"
+      --lj_transfer_curve_rail_k "${CURVE_RAIL_K}"
+      --lj_transfer_curve_rail_reference "${CURVE_RAIL_REFERENCE}"
+    )
+    if [[ "${CURVE_RAIL_RESIDUAL_TARGET}" == "1" ]]; then
+      TRAIN_ARGS+=(--lj_transfer_curve_rail_residual_target)
+    fi
+    if [[ -n "${CURVE_RAIL_OFFSETS}" ]]; then
+      read -r -a CURVE_RAIL_OFFSETS_ARR <<< "${CURVE_RAIL_OFFSETS}"
+      TRAIN_ARGS+=(--lj_transfer_curve_rail_offsets "${CURVE_RAIL_OFFSETS_ARR[@]}")
+    fi
   fi
   if [[ -n "${RESUME_FROM}" ]]; then
     TRAIN_ARGS+=(--resume_from "${RESUME_FROM}")

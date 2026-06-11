@@ -959,7 +959,7 @@ def autoregressive_absolute_coordinate_sample(
     }
 
 
-def parse_args() -> argparse.Namespace:
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description="Sample LJ base states from a GraphormerAR checkpoint.")
     ap.add_argument("--ckpt", type=str, required=True, help="Path to GraphormerAR checkpoint.")
     ap.add_argument("--save", type=str, default="lj_samples/out.npz", help="Output NPZ path.")
@@ -1082,10 +1082,69 @@ def parse_args() -> argparse.Namespace:
         "--use_ida",
         dest="use_ida",
         action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Legacy alias used only when --ar_arch=auto. True=>ida, False=>standard.",
+        default=None,
+        help="Legacy alias used only when --ar_arch=auto. True=>ida, False=>standard; "
+        "unset (default) lets auto infer the architecture from checkpoint metadata.",
     )
-    return ap.parse_args()
+    ap.add_argument(
+        "--cell_size",
+        type=float,
+        default=None,
+        help="Override the checkpoint's rail/arc cell size: the Hilbert resolution becomes "
+        "next_pow2(max(L)/cell_size) per box, holding the physical cell constant across "
+        "box sizes (size transfer). Needed for checkpoints trained without "
+        "--lj_transfer_cell_size, which store cell_size=None and would pin R at the "
+        "training resolution.",
+    )
+    ap.add_argument(
+        "--hilbert_resolution",
+        type=int,
+        default=None,
+        help="Override the checkpoint's Hilbert grid resolution directly "
+        "(used when --cell_size is not set).",
+    )
+    return ap
+
+
+def parse_args() -> argparse.Namespace:
+    return build_parser().parse_args()
+
+
+def _effective_rail_geometry(model, cli_resolution, cli_cell_size):
+    """Rail/arc geometry for sampling: CLI overrides win over checkpoint hparams.
+
+    Returns (hilbert_resolution: int, cell_size: Optional[float]).
+    """
+    resolution = (
+        int(cli_resolution)
+        if cli_resolution is not None
+        else int(getattr(model, "hilbert_resolution", 128))
+    )
+    cell_size = (
+        float(cli_cell_size) if cli_cell_size is not None else getattr(model, "cell_size", None)
+    )
+    return resolution, cell_size
+
+
+def _infer_coord_dim(model, cli_coord_dim) -> int:
+    """Coordinate dimension: explicit CLI wins; otherwise read checkpoint hparams.
+
+    The standard GraphormerAR stores the dimension as ``ida_spatial_dim``; the legacy
+    IDA arch stores ``spatial_dim``. No silent fallback: if neither key exists, demand
+    an explicit --coord_dim (an earlier version fell back to 2 and 3D rail/arc
+    checkpoints silently sampled 2D).
+    """
+    if cli_coord_dim is not None:
+        return int(cli_coord_dim)
+    hparams = getattr(model, "hparams", None)
+    for key in ("ida_spatial_dim", "spatial_dim"):
+        value = getattr(hparams, key, None)
+        if value is not None:
+            return int(value)
+    raise ValueError(
+        "Could not infer coord_dim from checkpoint hparams (no ida_spatial_dim/spatial_dim); "
+        "pass --coord_dim explicitly."
+    )
 
 
 def main() -> None:
@@ -1109,7 +1168,7 @@ def main() -> None:
         args.ckpt,
         device,
         ar_arch=str(args.ar_arch),
-        use_ida=bool(args.use_ida),
+        use_ida=args.use_ida,
     )
     ckpt_uses_discrete = bool(getattr(model, "discrete", False))
     ckpt_uses_binned_discrete = bool(getattr(model, "binned_discrete", False))
@@ -1141,8 +1200,9 @@ def main() -> None:
     # geometry (offsets, grid resolution) carried in the model hparams.
     ckpt_uses_curve_rail = bool(getattr(model, "use_curve_rail", False))
     curve_rail_offsets = list(getattr(model, "curve_rail_offsets", []) or [])
-    curve_rail_resolution = int(getattr(model, "hilbert_resolution", 128))
-    curve_rail_cell_size = getattr(model, "cell_size", None)
+    curve_rail_resolution, curve_rail_cell_size = _effective_rail_geometry(
+        model, args.hilbert_resolution, args.cell_size
+    )
     curve_rail_mode = str(getattr(model, "curve_rail_mode", "lookahead"))
     curve_rail_window = float(getattr(model, "curve_rail_window", 1.0))
     curve_rail_reference = str(getattr(model, "curve_rail_reference", "absolute"))
@@ -1177,10 +1237,7 @@ def main() -> None:
     if binned_discrete and polar:
         raise ValueError("Binned discrete sampling is incompatible with polar sampling.")
     periodic = bool(args.periodic) if args.periodic is not None else bool(getattr(model, "torus", True))
-    inferred_coord_dim = args.coord_dim
-    if inferred_coord_dim is None:
-        inferred_coord_dim = getattr(getattr(model, "hparams", None), "spatial_dim", None)
-    coord_dim = int(inferred_coord_dim) if inferred_coord_dim is not None else 2
+    coord_dim = _infer_coord_dim(model, args.coord_dim)
     if coord_dim not in (2, 3):
         raise ValueError(f"Sampling currently supports coord_dim 2 or 3, got {coord_dim}")
     if coord_dim == 3:

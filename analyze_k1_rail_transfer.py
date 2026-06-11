@@ -23,6 +23,7 @@ from grid_transformer.data.lj_transferable import (
     fixed_template_waypoints,
     min_image_delta,
     _hilbert3d_encode,
+    _hilbert3d_decode,
     _hilbert_bits,
 )
 
@@ -109,3 +110,102 @@ def cartesian_delta_targets(configs: np.ndarray, L: float, R: int) -> np.ndarray
         d = min_image_delta(sp[1:] - sp[:-1], box)
         out.append(d)
     return np.concatenate(out, axis=0)
+
+
+def raw_cell_inbox_fraction(N: int, R: int) -> float:
+    """Fraction of K=1 waypoints whose RAW decoded Hilbert cell lies fully in [0, R).
+
+    Detects exact (non-power-of-two) R curve-length leakage. With bits=ceil(log2(R)) the
+    Hilbert curve fills a 2**bits cube; decode((j+1)*X) can land on cells outside the
+    physical [0, R) grid even though the model-visible (min-imaged) waypoint always appears
+    in-box. Use this — not in_box_fraction on min-imaged waypoints — as the exact-R
+    disqualifier. For power-of-two R this is always 1.0.
+    """
+    total = R ** 3
+    X = max(1, total // int(N))
+    bits = _hilbert_bits(R)
+    j = np.arange(1, N, dtype=np.float64)            # predicting particles 1..N-1
+    idx = np.clip(np.rint((j + 1.0) * X), 0, total - 1).astype(np.int64)  # (j+1)*X
+    cx, cy, cz = _hilbert3d_decode(idx, bits=bits)
+    cells = np.stack([cx, cy, cz], axis=-1)
+    inside = np.all(cells < R, axis=-1)              # cells are >= 0 by construction
+    return float(np.mean(inside))
+
+
+def tile_to(arr: np.ndarray, n: int) -> np.ndarray:
+    """Tile rows of arr up to at least n rows (for KS power on small waypoint sets)."""
+    if len(arr) >= n:
+        return arr
+    reps = int(math.ceil(n / max(1, len(arr))))
+    return np.tile(arr, (reps, 1))[:n]
+
+
+def _ks_max(a: np.ndarray, b: np.ndarray) -> float:
+    """Max per-axis KS statistic between two [*,3] sets."""
+    return max(float(ks_2samp(a[:, d], b[:, d]).statistic) for d in range(3))
+
+
+def main(args) -> None:
+    os.makedirs(args.out_dir, exist_ok=True)
+    MIN_SAMPLES = 300
+
+    for strategy in ("pow2", "exact"):
+        print(f"\n{'='*68}\nStrategy: {strategy}\n{'='*68}")
+        rails, deltas, meta = {}, {}, {}
+        for s in SIZES:
+            N, L = s["N"], s["L"]
+            R = choose_R(L, strategy)
+            wp = rail_waypoints_absolute(N, R, L)
+            ib = raw_cell_inbox_fraction(N, R)  # raw-cell leakage (not min-imaged waypoint)
+            cfg = load_configs(s["path"], N, args.n_configs, seed=args.seed)
+            dl = cartesian_delta_targets(cfg, L, R)
+            rails[N], deltas[N], meta[N] = wp, dl, dict(R=R, cell=L / R, in_box=ib)
+            print(f"  N={N:3d} L={L} R={R:4d} cell={L/R:.5f} in_box={ib:.3f} "
+                  f"rail_n={len(wp)} delta_n={len(dl)}")
+
+        ref = 27
+        print(f"\n  Rail-input KS (vs N=27)         abs        /L(frac)   target-delta KS")
+        ks_summary = {}
+        for N in (64, 125):
+            L_N = [s for s in SIZES if s["N"] == N][0]["L"]
+            ra = _ks_max(tile_to(rails[ref], MIN_SAMPLES), tile_to(rails[N], MIN_SAMPLES))
+            rf = _ks_max(
+                tile_to(rails[ref] / SIZES[0]["L"], MIN_SAMPLES),
+                tile_to(rails[N] / L_N, MIN_SAMPLES),
+            )
+            dk = _ks_max(deltas[ref], deltas[N])
+            ks_summary[N] = dict(rail_abs=ra, rail_frac=rf, delta=dk)
+            print(f"    N=27 vs N={N:3d}              {ra:8.4f}   {rf:8.4f}     {dk:8.4f}")
+
+        fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+        fig.suptitle(f"K=1 rail transfer audit — strategy={strategy}", fontsize=12)
+        colors = {27: "#1f77b4", 64: "#ff7f0e", 125: "#2ca02c"}
+        for N in (27, 64, 125):
+            L = [s for s in SIZES if s["N"] == N][0]["L"]
+            axes[0].hist((rails[N] / L)[:, 0], bins=40, density=True, alpha=0.5,
+                         color=colors[N], label=f"N={N}")
+            axes[1].hist(np.linalg.norm(rails[N], axis=1), bins=40, density=True, alpha=0.5,
+                         color=colors[N], label=f"N={N}")
+            axes[2].hist(np.linalg.norm(deltas[N], axis=1), bins=60, density=True, alpha=0.5,
+                         color=colors[N], label=f"N={N}")
+        axes[0].set_title("rail x / L (fractional)"); axes[0].legend()
+        axes[1].set_title("|rail| (absolute)"); axes[1].legend()
+        axes[2].set_title("|cartesian delta| target"); axes[2].legend()
+        plt.tight_layout()
+        p = os.path.join(args.out_dir, f"k1_rail_audit_{strategy}.png")
+        plt.savefig(p, dpi=140, bbox_inches="tight"); plt.close()
+        print(f"  Saved {p}")
+
+        max_rail = max(ks_summary[N]["rail_frac"] for N in (64, 125))
+        min_ib = min(meta[N]["in_box"] for N in (64, 125))
+        verdict = "PASS" if max_rail < 0.30 else "FAIL"
+        print(f"  -> rail_frac maxKS={max_rail:.4f} (<0.30? {verdict}), "
+              f"min in_box={min_ib:.3f}")
+
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--n_configs", type=int, default=500)
+    ap.add_argument("--out_dir", type=str, default="reports/k1_rail_transfer")
+    ap.add_argument("--seed", type=int, default=42)
+    main(ap.parse_args())

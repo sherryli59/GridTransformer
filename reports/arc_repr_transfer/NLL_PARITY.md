@@ -10,7 +10,14 @@ pow2 caches (R=128 for L4/L5).
 |------|-------|-----------|-----------|------------------|
 | L=3 N=27 (train) | R=64 (training cache) | 0.115 | — | — |
 | L=4 N=64 zero-shot | R=128 | 0.649 | +0.53 | +2.1 |
-| L=5 N=125 zero-shot | R=128 | *(pending cache build)* | | |
+| L=5 N=125 zero-shot | R=128 | 0.656 | +0.54 | +2.2 |
+
+**The degradation is FLAT in size (L4 ≈ L5), not growing.** Contrast the old discrete
+model, whose zero-shot collapse *exploded* with size (OTgap 2.34 at L4 → 8.77 at L5).
+A flat step is the signature of a single train/test domain shift ("the conditional has
+only ever seen L=3 contexts"), not of size-dependent extrapolation — i.e. exactly the
+failure multi-size training is known to fix, and the best possible precondition for it:
+once the model sees two sizes, there is no size trend left to extrapolate.
 
 ## Interpretation (epoch 210; re-run at the final checkpoint)
 

@@ -212,15 +212,69 @@ git commit -m "Add K=1 rail transfer audit core + tests"
 
 ---
 
-## Task 2: Audit main() — KS table, in-box check, plots
+## Task 2: Audit main() — KS table, raw-cell leakage check, plots
 
 **Files:**
-- Modify: `analyze_k1_rail_transfer.py` (append `tile_to`, `main`, `__main__`)
+- Modify: `analyze_k1_rail_transfer.py` (append `raw_cell_inbox_fraction`, `tile_to`, `_ks_max`, `main`, `__main__`)
+- Modify: `tests/test_k1_rail_transfer.py` (add `raw_cell_inbox_fraction` tests)
 
 Compose the core functions into a report. Waypoints are few (N-1 per size); tile them to a
 floor sample count so KS has power (mirrors `tests/test_size_transfer_parity.py`).
 
-- [ ] **Step 1: Append report logic and CLI**
+**Important correctness note (discovered in Task 1):** `fixed_template_waypoints` with
+`reference="absolute"` and `periodic=True` applies `min_image_delta`, so every returned
+waypoint lands in `[-L/2, L/2)`. That means `in_box_fraction` on the *returned* waypoints
+always reads ~1.0 and cannot detect exact (non-pow2) R curve-length leakage. The exact-R
+disqualifier must instead inspect the **raw decoded Hilbert cell** (before min-image)
+against `[0, R)`. Add `raw_cell_inbox_fraction` for this and use it as the disqualifier.
+
+- [ ] **Step 1: Add the raw-cell leakage helper + tests (TDD)**
+
+Append to `tests/test_k1_rail_transfer.py`:
+
+```python
+def test_raw_cell_inbox_pow2_is_one():
+    # pow2 R == curve side: every decoded waypoint cell sits in [0, R).
+    from analyze_k1_rail_transfer import raw_cell_inbox_fraction
+    assert raw_cell_inbox_fraction(64, 64) == 1.0
+    assert raw_cell_inbox_fraction(64, 128) == 1.0
+
+
+def test_raw_cell_inbox_exact_is_valid_fraction():
+    # exact (non-pow2) R may leak cells outside [0, R); result is a valid fraction.
+    from analyze_k1_rail_transfer import raw_cell_inbox_fraction
+    frac = raw_cell_inbox_fraction(64, 85)
+    assert 0.0 <= frac <= 1.0
+```
+
+Append to `analyze_k1_rail_transfer.py` (needs `_hilbert3d_decode` added to the existing
+import from `grid_transformer.data.lj_transferable`):
+
+```python
+def raw_cell_inbox_fraction(N: int, R: int) -> float:
+    """Fraction of K=1 waypoints whose RAW decoded Hilbert cell lies fully in [0, R).
+
+    Detects exact (non-power-of-two) R curve-length leakage. With bits=ceil(log2(R)) the
+    Hilbert curve fills a 2**bits cube; decode((j+1)*X) can land on cells outside the
+    physical [0, R) grid even though the model-visible (min-imaged) waypoint always appears
+    in-box. Use this — not in_box_fraction on min-imaged waypoints — as the exact-R
+    disqualifier. For power-of-two R this is always 1.0.
+    """
+    total = R ** 3
+    X = max(1, total // int(N))
+    bits = _hilbert_bits(R)
+    j = np.arange(1, N, dtype=np.float64)            # predicting particles 1..N-1
+    idx = np.clip(np.rint((j + 1.0) * X), 0, total - 1).astype(np.int64)  # (j+1)*X
+    cx, cy, cz = _hilbert3d_decode(idx, bits=bits)
+    cells = np.stack([cx, cy, cz], axis=-1)
+    inside = np.all(cells < R, axis=-1)              # cells are >= 0 by construction
+    return float(np.mean(inside))
+```
+
+Run: `cd /mnt/ssd/GridTransformer && /home/sherryli/xsli/softwares/anaconda3/envs/lightning/bin/python -m pytest tests/test_k1_rail_transfer.py -q`
+Expected: 7 passed.
+
+- [ ] **Step 2: Append report logic and CLI**
 
 ```python
 def tile_to(arr: np.ndarray, n: int) -> np.ndarray:
@@ -247,7 +301,7 @@ def main(args) -> None:
             N, L = s["N"], s["L"]
             R = choose_R(L, strategy)
             wp = rail_waypoints_absolute(N, R, L)
-            ib = in_box_fraction(wp, L)
+            ib = raw_cell_inbox_fraction(N, R)  # raw-cell leakage (not min-imaged waypoint)
             cfg = load_configs(s["path"], N, args.n_configs, seed=args.seed)
             dl = cartesian_delta_targets(cfg, L, R)
             rails[N], deltas[N], meta[N] = wp, dl, dict(R=R, cell=L / R, in_box=ib)

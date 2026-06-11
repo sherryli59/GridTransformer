@@ -200,6 +200,7 @@ class GraphormerAR(pl.LightningModule):
         curve_rail_window: float = 1.0,
         curve_rail_reference: str = "absolute",
         curve_rail_residual_target: bool = False,
+        arc_repr: bool = False,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -256,17 +257,24 @@ class GraphormerAR(pl.LightningModule):
         self.output_spatial_dim = int(ida_spatial_dim)
         self.continuous_out_dim = 1 if self.is_factorized else self.output_spatial_dim
         self.axis_emb = nn.Embedding(self.output_spatial_dim, d_model) if self.is_factorized else None
+        # arc_repr: predict (Δs, fine_x, fine_y, fine_z) instead of (Δx, Δy, Δz).
+        # EdgeBias still uses 3D xyz coordinates (output_spatial_dim); only
+        # delta_in_proj and the MDN head switch to the 4D arc dimension.
+        self.arc_repr = bool(arc_repr)
+        if self.arc_repr and self.is_factorized:
+            raise ValueError("arc_repr=True is not supported with is_factorized=True.")
+        if self.arc_repr and self.polar:
+            raise ValueError("arc_repr=True is not supported with polar=True.")
+        self._delta_dim = 4 if self.arc_repr else self.output_spatial_dim
         # Continuous input feedback: project the (continuous) previous displacement into the
-        # residual stream instead of relying on the QUANTIZED discrete token. This removes
-        # the tokenizer bin-crossing cascade in autoregressive generation (the discrete
-        # input token flips across a bin under tiny drift -> adjacent under-trained token).
+        # residual stream instead of relying on the QUANTIZED discrete token.
         self.continuous_input = bool(continuous_input)
         if self.continuous_input:
             if self.is_factorized:
                 raise ValueError("continuous_input is not supported with is_factorized=True.")
             if self.polar:
                 raise ValueError("continuous_input is not supported with polar=True.")
-            self.delta_in_proj = nn.Linear(self.output_spatial_dim, d_model)
+            self.delta_in_proj = nn.Linear(self._delta_dim, d_model)
         else:
             self.delta_in_proj = None
         self.num_mixtures = int(num_mixtures)
@@ -340,9 +348,10 @@ class GraphormerAR(pl.LightningModule):
         )
         self.ln_f = nn.LayerNorm(d_model)
         if self.use_continuous_head:
+            _head_spatial = self._delta_dim if self.arc_repr else self.continuous_out_dim
             self.head = MDNHead(
                 d_model=d_model,
-                spatial_dim=self.continuous_out_dim,
+                spatial_dim=_head_spatial,
                 num_mixtures=self.num_mixtures,
                 full_covariance=self.full_covariance,
             )
@@ -470,9 +479,9 @@ class GraphormerAR(pl.LightningModule):
             # the (SOS) token embedding so the start of sequence is still marked.
             if input_deltas is None:
                 raise ValueError("continuous_input=True requires input_deltas in forward().")
-            if input_deltas.shape[:2] != (B, T) or input_deltas.shape[-1] != self.output_spatial_dim:
+            if input_deltas.shape[:2] != (B, T) or input_deltas.shape[-1] != self._delta_dim:
                 raise ValueError(
-                    f"input_deltas must be [B,T,{self.output_spatial_dim}], got {tuple(input_deltas.shape)}"
+                    f"input_deltas must be [B,T,{self._delta_dim}], got {tuple(input_deltas.shape)}"
                 )
             assert self.delta_in_proj is not None
             cont = self.delta_in_proj(input_deltas.to(dtype=self.delta_in_proj.weight.dtype))
@@ -627,9 +636,10 @@ class GraphormerAR(pl.LightningModule):
         coords = self._apply_training_coord_dequantization(coords, box_size)
         input_deltas = None
         if self.continuous_input:
-            tgt_deltas = batch.get("deltas")
+            _delta_key = "arc_delta" if self.arc_repr else "deltas"
+            tgt_deltas = batch.get(_delta_key)
             if tgt_deltas is None:
-                raise KeyError("continuous_input=True requires batch['deltas'].")
+                raise KeyError(f"continuous_input=True requires batch[{_delta_key!r}].")
             tgt_deltas = tgt_deltas.to(self.device, dtype=torch.float32)
             # Shift so position 0 = SOS (zeros), position t = delta_{t-1} (continuous feedback).
             zero = torch.zeros_like(tgt_deltas[:, :1, :])
@@ -664,12 +674,14 @@ class GraphormerAR(pl.LightningModule):
             loss = (seq_nll_model / coord_count).mean()
             seq_nll_exact = seq_nll_model.detach()
         elif self.use_continuous_head:
-            deltas = batch.get("deltas")
+            _delta_key = "arc_delta" if self.arc_repr else "deltas"
+            deltas = batch.get(_delta_key)
             if deltas is None:
-                raise KeyError("Continuous head requires batch['deltas'] targets.")
+                raise KeyError(f"Continuous head requires batch[{_delta_key!r}] targets.")
             deltas = deltas.to(self.device, dtype=torch.float32)
             log_pi, mu, scale_param = outputs
-            box_size_loss = box_size if self.torus else None
+            # arc_repr: box_size is 3D xyz, but targets are 4D (Δs, fine_xyz) — no torus wrap
+            box_size_loss = (box_size if self.torus else None) if not self.arc_repr else None
             if self.is_factorized:
                 batch_size, n_predict, coord_dim = deltas.shape
                 deltas = deltas.reshape(batch_size, n_predict * coord_dim, 1)

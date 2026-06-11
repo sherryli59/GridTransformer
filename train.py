@@ -362,6 +362,14 @@ def parse_args() -> argparse.Namespace:
         "--use_continuous_head, non-factorized, non-polar).",
     )
     parser.add_argument(
+        "--arc_repr",
+        type=int,
+        default=0,
+        help="Use Hilbert arc-length representation (Δs, fine_x, fine_y, fine_z) as AR target "
+        "instead of (Δx, Δy, Δz). Requires --continuous_input, --ordering hilbert, --periodic. "
+        "The 4D target is scale-invariant with constant cell size.",
+    )
+    parser.add_argument(
         "--num_mixtures",
         type=int,
         default=32,
@@ -489,6 +497,7 @@ def build_data_module(args: argparse.Namespace):
             curve_rail_k=int(args.lj_transfer_curve_rail_k),
             curve_rail_reference=str(args.lj_transfer_curve_rail_reference),
             curve_rail_residual_target=bool(args.lj_transfer_curve_rail_residual_target),
+            arc_repr=bool(int(args.arc_repr)),
         )
         data_module.setup("fit")
         vocab_size = data_module.vocab_size
@@ -554,6 +563,18 @@ def build_data_module(args: argparse.Namespace):
     return data_module, model_info
 
 
+def _validate_arc_repr_flags(args) -> None:
+    """arc_repr targets are Hilbert-code differences: they require continuous input
+    feedback and Hilbert ordering. Reads --lj_transfer_ordering (the actual CLI flag;
+    an earlier version read the nonexistent args.ordering and never fired)."""
+    if not int(args.arc_repr):
+        return
+    if not args.continuous_input:
+        raise ValueError("--arc_repr requires --continuous_input.")
+    if getattr(args, "lj_transfer_ordering", "hilbert") != "hilbert":
+        raise ValueError("--arc_repr requires --lj_transfer_ordering hilbert.")
+
+
 def main() -> None:
     args = parse_args()
     if args.discrete:
@@ -576,6 +597,7 @@ def main() -> None:
         raise ValueError("--full_covariance requires --use_continuous_head.")
     if args.continuous_input and not args.use_continuous_head:
         raise ValueError("--continuous_input currently requires --use_continuous_head.")
+    _validate_arc_repr_flags(args)
     if args.discrete:
         if args.dataset != "lj_transferable":
             raise ValueError("--discrete is only supported with --dataset lj_transferable.")
@@ -764,6 +786,7 @@ def main() -> None:
                 curve_rail_window=curve_rail_window,
                 curve_rail_reference=curve_rail_reference,
                 curve_rail_residual_target=curve_rail_residual_target,
+                arc_repr=bool(int(args.arc_repr)),
             )
         elif ar_arch == "vanilla":
             if args.use_continuous_head:

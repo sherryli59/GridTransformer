@@ -12,7 +12,9 @@ import torch.nn.functional as F
 from grid_transformer.data.lj_abs_dataset import AbsoluteCoordinateTokenizer
 from grid_transformer.data.lj_transferable import (
     RelativeDeltaTokenizer,
+    _hilbert3d_decode,
     _hilbert3d_encode,
+    _hilbert_bits,
     _load_codebook_tensor,
     _rail_relative_from_codes,
     fixed_template_waypoints,
@@ -392,7 +394,7 @@ def _compute_rail_waypoints_batch(
     the model is identical to what the model saw at training time.
     """
     R = int(resolution)
-    bits = int(math.ceil(math.log2(R)))
+    bits = _hilbert_bits(R)
     box64 = np.asarray(box_np, dtype=np.float64).reshape(-1)
     wrapped = np.mod(anchor_pos, box64[None, :])
     scaled = (wrapped / np.maximum(box64[None, :], 1e-8)) * float(R)
@@ -402,6 +404,69 @@ def _compute_rail_waypoints_batch(
         codes, anchor_pos, box64, R, np.asarray(offsets, dtype=np.int64), periodic=periodic
     )
     return rel  # [B, K, 3] float32
+
+
+def _arc_decode_positions(
+    curr_pos: torch.Tensor,      # [B, 3] current particle position (already placed)
+    delta_arc: torch.Tensor,     # [B, 4] predicted (Δs, fine_x, fine_y, fine_z)
+    box_size: torch.Tensor,      # [B, 3] or [1, 3]
+    R: int,
+    n_particles: int,
+) -> torch.Tensor:
+    """Decode arc-length prediction back to xyz position.
+
+    c_next = clamp(c_curr + round(Δs * X), 0, R³-1)
+    pos_next = cell_center(c_next) + fine_xyz
+    """
+    bits = _hilbert_bits(R)
+    R3 = R ** 3
+    X = max(1, R3 // n_particles)
+    device = curr_pos.device
+
+    # Compute Hilbert code of current position (numpy, per-sample)
+    box_np = box_size[0].detach().cpu().numpy().astype(np.float64)
+    curr_np = curr_pos.detach().cpu().numpy().astype(np.float64)
+    curr_wrapped = np.mod(curr_np, box_np[None, :])
+    cell_size = box_np / float(R)
+    grid = np.clip(np.floor(curr_wrapped / cell_size).astype(np.int64), 0, R - 1)
+    c_curr = _hilbert3d_encode(grid[:, 0], grid[:, 1], grid[:, 2], bits=bits)  # [B]
+
+    # Advance code
+    delta_s_np = delta_arc[:, 0].detach().cpu().numpy().astype(np.float64)
+    c_next = np.clip(
+        np.round(c_curr.astype(np.float64) + delta_s_np * float(X)).astype(np.int64),
+        0, R3 - 1,
+    )
+
+    # Decode code → cell center
+    ax, ay, az = _hilbert3d_decode(c_next, bits)
+    cell_centers = (np.stack([ax, ay, az], axis=1).astype(np.float64) + 0.5) * cell_size
+    cell_centers_t = torch.from_numpy(cell_centers.astype(np.float32)).to(device=device)
+
+    # Add fine offset (fine is normalized by cell_size during encoding). Min-image
+    # the fine offset into [-0.5, 0.5] to mirror the encoder (hilbert_arc_delta):
+    # a Gaussian-tail sample with |fine| > 0.5 must stay in the predicted cell,
+    # otherwise the next step's code re-bin lands in a spatially adjacent but
+    # Hilbert-distant cell and the chain teleports along the curve.
+    cell_size_t = torch.from_numpy(cell_size.astype(np.float32)).to(device=device)  # [3]
+    fine = delta_arc[:, 1:4]
+    fine = fine - torch.round(fine)
+    fine_xyz = fine * cell_size_t  # [B, 3] — rescale back to absolute units
+    return cell_centers_t + fine_xyz
+
+
+def _arc_initial_positions(box_size: torch.Tensor, R: int) -> torch.Tensor:
+    """Starting position for particle 0 in arc_repr sampling: the code-0 cell center.
+
+    Arc decode places particles at absolute box-frame positions, so particle 0 is
+    not a translation gauge (unlike plain-delta mode) — leaving it at the box corner
+    (0, 0, 0) would systematically misplace it relative to the trained conditional.
+    decode(0) is cell (0, 0, 0); its center is cell_size / 2.
+
+    Returns [1, 3] on the same device/dtype as ``box_size``.
+    """
+    cell = box_size[0:1, :] / float(R)
+    return cell * 0.5
 
 
 @torch.no_grad()
@@ -435,6 +500,7 @@ def autoregressive_relative_delta_sample(
     curve_rail_reference: str = "absolute",
     curve_rail_residual_target: bool = False,
     continuous_input: bool = False,
+    arc_repr: bool = False,
 ) -> dict[str, torch.Tensor]:
     if n_particles <= 1:
         raise ValueError(f"n_particles must be > 1, got {n_particles}")
@@ -513,6 +579,12 @@ def autoregressive_relative_delta_sample(
     # relative to particle 1, etc. Periodic mode wraps into [0, L); nonperiodic
     # mode shifts the full chain only at the end so COM lands at box center.
     x_base = torch.zeros((nsamples, n_particles, coord_dim), dtype=torch.float32, device=device)
+    if arc_repr and not factorized:
+        # Arc decode is absolute (cell centers), so particle 0 is NOT a gauge choice:
+        # start it where training data has the lowest-code particle (code-0 cell center)
+        # instead of the box corner. box_size is [1, coord_dim] at this point.
+        _arc_R0 = _rail_resolution_for_box(box_np, hilbert_resolution, cell_size)
+        x_base[:, 0, :] = _arc_initial_positions(box_size, int(_arc_R0)).to(device=device)
     deltas = torch.zeros((nsamples, n_predict_particles, coord_dim), dtype=torch.float32, device=device)
     logp_discrete = torch.zeros((nsamples,), dtype=torch.float32, device=device)
     logp_continuous = torch.zeros((nsamples,), dtype=torch.float32, device=device) if use_continuous_head else None
@@ -523,8 +595,9 @@ def autoregressive_relative_delta_sample(
         raise ValueError("continuous_input=True requires a continuous-head checkpoint.")
     if cont_input and factorized:
         raise ValueError("continuous_input=True is not supported with factorized tokenization.")
+    _input_delta_dim = 4 if (cont_input and arc_repr) else coord_dim
     input_deltas_buf = (
-        torch.zeros((nsamples, n_predict_tokens, coord_dim), dtype=torch.float32, device=device)
+        torch.zeros((nsamples, n_predict_tokens, _input_delta_dim), dtype=torch.float32, device=device)
         if cont_input else None
     )
 
@@ -629,7 +702,7 @@ def autoregressive_relative_delta_sample(
             log_pi_all, mu_all, scale_all = outputs
             log_pi_t = log_pi_all[:, -1, :]
             mu_t = mu_all[:, -1, :, :]
-            expected_out_dim = 1 if factorized else coord_dim
+            expected_out_dim = 1 if factorized else (4 if arc_repr else coord_dim)
             if mu_t.shape[-1] != expected_out_dim:
                 raise ValueError(
                     f"Continuous head output dim {mu_t.shape[-1]} does not match "
@@ -683,6 +756,20 @@ def autoregressive_relative_delta_sample(
                 delta_cart_t = spherical_to_cartesian(delta_model_t)
                 delta_context_t = delta_cart_t
 
+            # arc_repr: decode (Δs, fine_xyz) → xyz displacement NOW, before tokenizer
+            # encoding, because the tokenizer expects 3D. The raw 4D arc delta is kept
+            # in input_deltas_buf for model conditioning at the next step.
+            _arc_raw_pos: Optional[torch.Tensor] = None
+            if arc_repr and not factorized:
+                _R = _rail_resolution_for_box(box_np, hilbert_resolution, cell_size)
+                _arc_raw_pos = _arc_decode_positions(
+                    x_base[:, t, :], delta_model_t, box_size, int(_R), n_particles
+                )
+                if periodic:
+                    _arc_raw_pos = _wrap_positions_0_to_L(_arc_raw_pos, box_size)
+                delta_cart_t = _arc_raw_pos - x_base[:, t, :]
+                delta_context_t = delta_cart_t
+
             # Continuous feedback: store the EXACT predicted displacement (model space, =
             # training delta space) for the next step's input, bypassing quantization.
             if cont_input and (t + 1) < n_predict_tokens:
@@ -705,14 +792,20 @@ def autoregressive_relative_delta_sample(
                         raw_pos = _wrap_positions_0_to_L(raw_pos, box_size)
                     x_base[:, p_idx + 1, :] = raw_pos
             else:
-                if rail_residual:
+                if arc_repr:
+                    # Position already decoded above; reuse it.
+                    assert _arc_raw_pos is not None
+                    raw_pos = _arc_raw_pos
+                elif rail_residual:
                     assert rail_anchors is not None
                     # delta_cart_t is the residual to the rail anchor of particle t+1.
                     raw_pos = rail_anchors[t + 1].unsqueeze(0) + delta_cart_t
+                    if periodic:
+                        raw_pos = _wrap_positions_0_to_L(raw_pos, box_size)
                 else:
                     raw_pos = x_base[:, t, :] + delta_cart_t
-                if periodic:
-                    raw_pos = _wrap_positions_0_to_L(raw_pos, box_size)
+                    if periodic:
+                        raw_pos = _wrap_positions_0_to_L(raw_pos, box_size)
                 deltas[:, t, :] = delta_cart_t
                 x_base[:, t + 1, :] = raw_pos
         elif discrete:
@@ -1055,6 +1148,7 @@ def main() -> None:
     curve_rail_reference = str(getattr(model, "curve_rail_reference", "absolute"))
     curve_rail_residual_target = bool(getattr(model, "curve_rail_residual_target", False))
     ckpt_continuous_input = bool(getattr(model, "continuous_input", False))
+    ckpt_arc_repr = bool(getattr(model, "arc_repr", False))
     curve_rail_k = int(getattr(getattr(model, "hparams", object()), "curve_rail_k", 0)) or len(curve_rail_offsets)
     if ckpt_uses_curve_rail and curve_rail_mode == "lookahead" and not curve_rail_offsets:
         raise ValueError(
@@ -1357,6 +1451,7 @@ def main() -> None:
             curve_rail_reference=curve_rail_reference,
             curve_rail_residual_target=curve_rail_residual_target,
             continuous_input=ckpt_continuous_input,
+            arc_repr=ckpt_arc_repr,
         )
         chunks.append(out_chunk)
         done += bsz

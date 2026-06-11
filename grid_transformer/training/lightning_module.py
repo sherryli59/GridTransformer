@@ -387,6 +387,7 @@ class LJTransferableDataModule(pl.LightningDataModule):
         curve_rail_k: int = 8,
         curve_rail_reference: str = "absolute",
         curve_rail_residual_target: bool = False,
+        arc_repr: bool = False,
     ) -> None:
         super().__init__()
         self.data_path = data_path
@@ -422,6 +423,13 @@ class LJTransferableDataModule(pl.LightningDataModule):
         self.curve_rail_k_cfg = int(curve_rail_k)
         self.curve_rail_reference = str(curve_rail_reference)
         self.curve_rail_residual_target = bool(curve_rail_residual_target)
+        self.arc_repr = bool(arc_repr)
+        if self.arc_repr and self.preprocessed_path is None:
+            raise ValueError(
+                "arc_repr=True requires a preprocessed cache (preprocessed_path): "
+                "the on-the-fly LJTransferableDataset does not produce 'arc_delta' targets. "
+                "Run preprocess_lj_transferable.py first."
+            )
         if self.preprocessed_path is not None and self.random_grid_shift:
             warnings.warn(
                 "preprocessed_path is set, but random_grid_shift=True. "
@@ -454,6 +462,7 @@ class LJTransferableDataModule(pl.LightningDataModule):
                     limit=self.train_limit,
                     discrete=self.discrete,
                     codebook_path=self.codebook_path,
+                    arc_repr=self.arc_repr,
                 )
                 cached_periodic = bool(getattr(self._train_ds, "periodic", True))
                 if cached_periodic != self.periodic:

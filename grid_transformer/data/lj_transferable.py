@@ -154,6 +154,19 @@ def _hilbert3d_decode(code: np.ndarray, bits: int) -> tuple[np.ndarray, np.ndarr
     return X0, X1, X2
 
 
+def _hilbert_bits(R: int) -> int:
+    """Number of bits per axis for a Hilbert grid of resolution ``R``.
+
+    Single source of truth shared by every encode/decode site so the bit count can
+    never diverge between training and sampling. ``ceil`` (not ``round``) is correct:
+    a grid of side ``R`` needs ``ceil(log2(R))`` bits to address indices ``0..R-1``.
+    For power-of-two ``R`` (the usual case) ``ceil == round``; for non-power-of-two
+    ``R`` (e.g. a directly-set HILBERT_RESOLUTION during size transfer) only ``ceil``
+    addresses the full range.
+    """
+    return int(math.ceil(math.log2(int(R))))
+
+
 def min_image_delta(delta: np.ndarray, box: np.ndarray) -> np.ndarray:
     return delta - box * np.round(delta / np.maximum(box, 1e-8))
 
@@ -189,7 +202,7 @@ def _rail_relative_from_codes(
         ``[..., K, 3]`` min-image vectors from each particle to the future curve cells.
     """
     R = int(resolution)
-    bits = int(round(math.log2(R)))  # resolution is a power of two
+    bits = _hilbert_bits(R)  # resolution is a power of two
     offs = np.asarray(offsets, dtype=np.int64)
     base = np.asarray(cond_codes, dtype=np.int64)[..., None]  # [..., 1]
     widx = np.clip(base + offs, 0, R ** 3 - 1)                # [..., K]
@@ -242,7 +255,7 @@ def fixed_template_waypoints(
         ``[M, k, 3]`` float32 waypoint vectors.
     """
     R = int(resolution)
-    bits = int(round(math.log2(R)))
+    bits = _hilbert_bits(R)
     total = R ** 3
     X = max(1, total // int(n_particles))
     j = np.asarray(pred_indices, dtype=np.float64).reshape(-1)          # [M]
@@ -287,13 +300,74 @@ def fixed_template_anchors(
     Returns ``[M, 3]`` float64 cell-center positions for each ``pred_indices`` entry.
     """
     R = int(resolution)
-    bits = int(round(math.log2(R)))
+    bits = _hilbert_bits(R)
     total = R ** 3
     X = max(1, total // int(n_particles))
     idx = np.clip(np.rint(np.asarray(pred_indices, dtype=np.float64) * X), 0, total - 1).astype(np.int64)
     ax, ay, az = _hilbert3d_decode(idx, bits=bits)
     cell_size = np.asarray(box, dtype=np.float64) / float(R)
     return (np.stack([ax, ay, az], axis=-1).astype(np.float64) + 0.5) * cell_size  # [M, 3]
+
+
+def _validate_arc_repr_cache(*, ordering: str, periodic: bool, has_absolute_coords: bool) -> None:
+    """Preconditions for arc_repr targets on a preprocessed cache.
+
+    Δs targets are Hilbert-code differences over the *stored* particle order, so the
+    cache must have been built with Hilbert ordering; spectral (or any other) ordering
+    yields non-monotone codes and meaningless Δs with no runtime error.
+    """
+    if not has_absolute_coords:
+        raise ValueError(
+            "arc_repr=True requires absolute_coords in the cache. "
+            "Rebuild the cache (preprocess_lj_transferable.py) to include absolute coordinates."
+        )
+    if not periodic:
+        raise ValueError("arc_repr=True is only supported for periodic systems.")
+    if str(ordering).strip().lower() != "hilbert":
+        raise ValueError(
+            f"arc_repr=True requires a Hilbert-ordered cache, got ordering={ordering!r}. "
+            "Δs targets assume Hilbert-monotone codes along the stored particle sequence."
+        )
+
+
+def hilbert_arc_delta(
+    sorted_pos: np.ndarray,
+    hilbert_codes: np.ndarray,
+    box: np.ndarray,
+    R: int,
+    *,
+    periodic: bool = True,
+) -> np.ndarray:
+    """Compute (Δs, fine_x, fine_y, fine_z) AR targets from Hilbert-sorted positions.
+
+    Δs    = (c_{i+1} - c_i) / X  where X = R³ // N.  ≈1 for local steps, size-invariant.
+    fine  = (r_{i+1} - cell_center_{i+1}) / cell_size  (dimensionless, range ≈ [-0.5, 0.5]).
+
+    Normalizing fine by cell_size makes it size-invariant across system sizes at the same
+    density — the distribution is identical regardless of (N, L, R) when cell_size = L/R
+    is held constant.  Decode: pos = cell_center + fine * cell_size.
+
+    Returns: [N-1, 4] float32.
+    """
+    N = len(sorted_pos)
+    if N < 2:
+        return np.zeros((0, 4), dtype=np.float32)
+    bits = _hilbert_bits(R)
+    X = max(1, int(R ** 3) // N)
+
+    ax, ay, az = _hilbert3d_decode(hilbert_codes.astype(np.int64), bits)
+    cell_size = np.asarray(box, dtype=np.float64) / float(R)
+    cell_centers = (np.stack([ax, ay, az], axis=1).astype(np.float64) + 0.5) * cell_size
+
+    fine = sorted_pos.astype(np.float64) - cell_centers
+    if periodic:
+        fine = fine - np.round(fine / cell_size) * cell_size
+
+    delta_code = hilbert_codes[1:].astype(np.float64) - hilbert_codes[:-1].astype(np.float64)
+    delta_s = (delta_code / float(X)).astype(np.float32)
+    fine_dest = (fine[1:] / cell_size).astype(np.float32)  # normalized: range ≈ [-0.5, 0.5]
+
+    return np.concatenate([delta_s[:, None], fine_dest], axis=1)  # [N-1, 4]
 
 
 def _cartesian_to_spherical_np(deltas: np.ndarray) -> np.ndarray:
@@ -1035,7 +1109,7 @@ class LJTransferableDataset(Dataset):
         return h
 
     def _space_filling_codes_3d(self, grid: np.ndarray, resolution: int) -> np.ndarray:
-        bits = int(math.ceil(math.log2(int(resolution))))
+        bits = _hilbert_bits(int(resolution))
         return _hilbert3d_encode(grid[..., 0], grid[..., 1], grid[..., 2], bits=bits)
 
     def _space_filling_codes(self, grid: np.ndarray, resolution: Optional[int] = None) -> np.ndarray:
@@ -1067,10 +1141,16 @@ class LJTransferableDataset(Dataset):
         grid = np.floor(shifted * float(R)).astype(np.int64)
         return np.clip(grid, 0, R - 1)
 
-    def _hilbert_sort_periodic(self, coords: np.ndarray, box: np.ndarray) -> np.ndarray:
+    def _hilbert_sort_periodic(
+        self, coords: np.ndarray, box: np.ndarray, *, return_codes: bool = False
+    ):
         R = self._resolution_for_box(box)
         grid = self._grid_coords_periodic(coords, box)
-        return np.argsort(self._space_filling_codes(grid, R), kind="stable")
+        codes = self._space_filling_codes(grid, R)
+        order = np.argsort(codes, kind="stable")
+        if return_codes:
+            return order, codes[order]
+        return order
 
     def _hilbert_sort_nonperiodic(self, coords: np.ndarray) -> np.ndarray:
         grid = self._grid_coords_nonperiodic(coords)
@@ -1468,6 +1548,7 @@ class LJTransferableCachedDataset(Dataset):
         *,
         limit: Optional[int] = None,
         discrete: bool = False,
+        arc_repr: bool = False,
         codebook_path: Optional[str] = None,
     ) -> None:
         try:
@@ -1614,6 +1695,14 @@ class LJTransferableCachedDataset(Dataset):
                     "Please run preprocess_lj_transferable.py with --discrete to generate an offline discrete cache."
                 )
 
+        self.arc_repr = bool(arc_repr)
+        if self.arc_repr:
+            _validate_arc_repr_cache(
+                ordering=str(self.metadata.get("ordering", "hilbert") or "hilbert"),
+                periodic=self.periodic,
+                has_absolute_coords=self.absolute_coords_all is not None,
+            )
+
     def __len__(self) -> int:
         return int(self.sample_length_all.shape[0])
 
@@ -1709,6 +1798,23 @@ class LJTransferableCachedDataset(Dataset):
                 particle_len=particle_len,
                 seq_len=seq_len,
             )
+        if self.arc_repr:
+            particle_len = int(self.particle_length_all[idx].item())
+            if particle_len <= 0:
+                particle_len = int(self.absolute_coords_all.shape[1])
+            abs_coords_np = self.absolute_coords_all[idx, :particle_len, :].numpy()
+            box_np = self.box_size_all[idx].numpy()
+            R = self._resolution_for_box(box_np)
+            bits = _hilbert_bits(R)
+            cell_size_np = box_np.astype(np.float64) / float(R)
+            grid = np.floor(
+                np.mod(abs_coords_np, box_np[None, :]).astype(np.float64) / cell_size_np
+            ).astype(np.int64)
+            grid = np.clip(grid, 0, R - 1)
+            codes = _hilbert3d_encode(grid[:, 0], grid[:, 1], grid[:, 2], bits=bits)
+            item["arc_delta"] = torch.from_numpy(
+                hilbert_arc_delta(abs_coords_np, codes, box_np, R, periodic=self.periodic)
+            )  # [N-1, 4]
         return item
 
 

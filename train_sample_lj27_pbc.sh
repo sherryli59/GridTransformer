@@ -35,6 +35,7 @@ CURVE_RAIL_WINDOW="${CURVE_RAIL_WINDOW:-1.0}"
 CURVE_RAIL_K="${CURVE_RAIL_K:-8}"
 CURVE_RAIL_REFERENCE="${CURVE_RAIL_REFERENCE:-absolute}"
 CURVE_RAIL_RESIDUAL_TARGET="${CURVE_RAIL_RESIDUAL_TARGET:-0}"
+ARC_REPR="${ARC_REPR:-0}"
 PREPROCESS_RANDOM_SHIFT="${PREPROCESS_RANDOM_SHIFT:-0}"
 NUM_AUGMENTATIONS="${NUM_AUGMENTATIONS:-5}"
 if [[ "${USE_CURVE_RAIL}" == "1" ]] && [[ -z "${NUM_AUGMENTATIONS_WAS_SET}" ]]; then
@@ -769,6 +770,12 @@ if [[ "${RUN_TRAIN}" == "1" ]]; then
     fi
   elif [[ "${USE_COORD_DEQUANT}" == "1" ]]; then
     TRAIN_ARGS+=(--coord_dequant_width "${DEQUANT_WIDTH}")
+  fi
+  # ARC_REPR is passed unconditionally so train.py's own validation fires on
+  # invalid combinations (e.g. ARC_REPR=1 without USE_CONTINUOUS_HEAD/CONTINUOUS_INPUT)
+  # instead of silently training the baseline.
+  if [[ "${ARC_REPR}" == "1" ]]; then
+    TRAIN_ARGS+=(--arc_repr 1)
   fi
   if [[ "${USE_CURVE_RAIL}" == "1" ]]; then
     TRAIN_ARGS+=(

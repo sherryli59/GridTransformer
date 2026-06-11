@@ -1,0 +1,7 @@
+/home/sherryli/xsli/softwares/anaconda3/envs/lightning/lib/python3.11/site-packages/lightning_fabric/utilities/cloud_io.py:57: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+[transfer] strategy=pow2 L=5.0 -> R=128 cell=0.03906
+[transfer] strategy=pow2 L=5.0 -> R=128 cell=0.03906
+[transfer] strategy=pow2 L=5.0 -> R=128 cell=0.03906
+[transfer] strategy=pow2 L=5.0 -> R=128 cell=0.03906
+Saved reports/k1_rail_transfer/samples_N125.npz (mode=relative, nsamples=256, N=125, K=262145, bins=64, window=3.0, factorized=False, discrete=False, binned_discrete=False, continuous_head=True, full_covariance=True, polar=False, sigma_floor=0.0000, periodic=True, ar_arch=standard)
+Mean logp_continuous: -127.545601

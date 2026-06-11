@@ -1,5 +1,21 @@
 # Step-4a: teacher-forced NLL parity across box sizes (arc_repr)
 
+> **MULTI-SIZE UPDATE (2026-06-11, epoch-18 snapshot of `multisize_arc_fullcov`, 18/100
+> epochs):** the {L3,L5}-trained model already shows the hypothesized held-out recovery:
+>
+> | size | single-size (final) | multi-size ep18 | role |
+> |------|--------------------:|----------------:|------|
+> | L=3 N=27 | 0.115 | 0.168 | train |
+> | **L=4 N=64** | **0.649** | **0.273** | **HELD OUT** |
+> | L=5 N=125 | 0.656 | 0.187 | train |
+>
+> With **zero L4 training data** and only 1/5 of training done, the held-out L4
+> conditional recovered >58% of the transfer gap; both train sizes sit near each other
+> (0.168/0.187) with L4 *between* them — the model interpolates box size instead of
+> extrapolating. This is the signature predicted by the flat-domain-shift diagnosis:
+> once two sizes are seen, there is no size trend left to extrapolate. Expect further
+> improvement by epoch 100; generation OTgap at held-out L4 is the remaining gate.
+
 Script: `eval_arc_nll.py` (reuses `training_step` normalization; validated at L=3 against
 the run's own `train/loss_epoch` ≈ 0.133 → eval 0.115, consistent since eval mode drops
 training noise and best.ckpt is the best epoch). Checkpoint: **epoch-210 snapshot** of the

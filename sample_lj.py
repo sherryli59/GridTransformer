@@ -501,6 +501,7 @@ def autoregressive_relative_delta_sample(
     curve_rail_residual_target: bool = False,
     continuous_input: bool = False,
     arc_repr: bool = False,
+    use_kv_cache: bool = True,
 ) -> dict[str, torch.Tensor]:
     if n_particles <= 1:
         raise ValueError(f"n_particles must be > 1, got {n_particles}")
@@ -664,6 +665,18 @@ def autoregressive_relative_delta_sample(
                 (nsamples, n_predict_tokens, rail_K, coord_dim), dtype=torch.float32, device=device
             )
 
+    # KV cache: O(t) per step instead of re-forwarding the full prefix (O(t^2)).
+    # Exact — see tests/test_kv_cache.py; falls back to the legacy path for
+    # factorized models and architectures without forward_step (e.g. ida).
+    kv_cache = None
+    if (
+        use_kv_cache
+        and not factorized
+        and hasattr(model, "forward_step")
+        and not bool(getattr(model, "use_ida_pre", False))
+    ):
+        kv_cache = model.new_generation_cache()
+
     for t in range(n_predict_tokens):
         if factorized:
             anchor_ids = torch.arange(t + 1, device=device) // coord_dim
@@ -690,13 +703,24 @@ def autoregressive_relative_delta_sample(
             assert input_deltas_buf is not None
             rail_kwargs["input_deltas"] = input_deltas_buf[:, : t + 1]
 
-        outputs = model(
-            seq_in[:, : t + 1],
-            coords=coords_in,
-            box_size=box_size,
-            density=density_tensor,
-            **rail_kwargs,
-        )
+        if kv_cache is not None:
+            step_kwargs = {key: value[:, t : t + 1] for key, value in rail_kwargs.items()}
+            outputs = model.forward_step(
+                seq_in[:, t : t + 1],
+                cache=kv_cache,
+                coords=coords_in,
+                box_size=box_size,
+                density=density_tensor,
+                **step_kwargs,
+            )
+        else:
+            outputs = model(
+                seq_in[:, : t + 1],
+                coords=coords_in,
+                box_size=box_size,
+                density=density_tensor,
+                **rail_kwargs,
+            )
 
         if use_continuous_head:
             log_pi_all, mu_all, scale_all = outputs
@@ -1085,6 +1109,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Legacy alias used only when --ar_arch=auto. True=>ida, False=>standard; "
         "unset (default) lets auto infer the architecture from checkpoint metadata.",
+    )
+    ap.add_argument(
+        "--kv_cache",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Use the KV-cached incremental forward during sampling (exact; --no-kv_cache "
+        "falls back to the legacy full-prefix re-forward for A/B comparison).",
     )
     ap.add_argument(
         "--cell_size",
@@ -1509,6 +1540,7 @@ def main() -> None:
             curve_rail_residual_target=curve_rail_residual_target,
             continuous_input=ckpt_continuous_input,
             arc_repr=ckpt_arc_repr,
+            use_kv_cache=bool(args.kv_cache),
         )
         chunks.append(out_chunk)
         done += bsz

@@ -88,20 +88,71 @@ class EdgeBias(nn.Module):
                 raise ValueError("box_size is required when torus=True")
             diff = wrap_min_image(diff, box_size)
 
-        dist = torch.linalg.norm(diff, dim=-1)  # [B,T,T]
-
-        bins = self._bin_dist(dist)  # [B,T,T]
-        bias_dist = self.bin_embed(bins).permute(0, 3, 1, 2).contiguous()  # [B,nH,T,T]
-
-        if self.use_dir:
-            dir_scale = dist.unsqueeze(-1).clamp_min(1e-6)
-            unit_dir = diff / dir_scale
-            dir_bias = self.dir_mlp(unit_dir).permute(0, 3, 1, 2).contiguous()  # [B,nH,T,T]
-            bias = bias_dist + dir_bias
-        else:
-            bias = bias_dist
-
+        bias = self._bias_from_diff(diff)  # [B,nH,T,T]
         return bias.masked_fill(~causal_mask[:, None, :, :], float("-inf"))
+
+    def _bias_from_diff(self, diff: torch.Tensor) -> torch.Tensor:
+        """Shared bias math for the full matrix and the incremental row: [..., Q, K, 3] -> [B, nH, Q, K]."""
+        dist = torch.linalg.norm(diff, dim=-1)
+        bins = self._bin_dist(dist)
+        bias = self.bin_embed(bins).permute(0, 3, 1, 2).contiguous()
+        if self.use_dir:
+            unit_dir = diff / dist.unsqueeze(-1).clamp_min(1e-6)
+            bias = bias + self.dir_mlp(unit_dir).permute(0, 3, 1, 2).contiguous()
+        return bias
+
+    def bias_row(
+        self,
+        coords: torch.Tensor,
+        *,
+        box_size: Optional[torch.Tensor] = None,
+        torus: bool = False,
+    ) -> torch.Tensor:
+        """Bias row for the LAST position attending to the whole prefix: [B, nH, 1, P].
+
+        ``coords`` is [B, P, C] (prefix INCLUDING the new position, last). Equals the
+        last causal row of :meth:`forward` on the same coords — O(P) instead of O(P²),
+        for KV-cached generation. No causal masking needed (the last row sees all).
+        """
+        if coords.ndim != 3:
+            raise ValueError(f"coords must be [B,P,C], got {tuple(coords.shape)}")
+        B, P, C = coords.shape
+        if C == 2:
+            zeros = torch.zeros(B, P, 1, device=coords.device, dtype=coords.dtype)
+            coords3 = torch.cat([coords, zeros], dim=-1)
+            if box_size is not None:
+                bs = torch.as_tensor(box_size, device=coords.device, dtype=coords.dtype)
+                if bs.ndim == 1:
+                    bs = torch.cat([bs, torch.ones(1, device=bs.device, dtype=bs.dtype)], dim=0)
+                elif bs.ndim == 2:
+                    pad = torch.ones(bs.shape[0], 1, device=bs.device, dtype=bs.dtype)
+                    bs = torch.cat([bs, pad], dim=1)
+                box_size = bs
+        elif C == 3:
+            coords3 = coords
+        else:
+            raise ValueError(f"coords last dim must be 2 or 3, got {C}")
+
+        diff = coords3[:, -1:, None, :] - coords3[:, None, :, :]  # [B,1,P,3]
+        if torus:
+            if box_size is None:
+                raise ValueError("box_size is required when torus=True")
+            diff = wrap_min_image(diff, box_size)
+        return self._bias_from_diff(diff)  # [B,nH,1,P]
+
+
+class GenerationCache:
+    """Per-layer KV cache for incremental autoregressive generation.
+
+    ``layers[i]`` holds the (k, v) tensors of block i over all positions generated so
+    far; ``length`` is the number of positions already in the cache.
+    """
+
+    __slots__ = ("layers", "length")
+
+    def __init__(self, n_layer: int):
+        self.layers: list[Optional[tuple[torch.Tensor, torch.Tensor]]] = [None] * int(n_layer)
+        self.length: int = 0
 
 
 class CausalSelfAttnWithBias(nn.Module):
@@ -118,13 +169,25 @@ class CausalSelfAttnWithBias(nn.Module):
         self.attn_drop = nn.Dropout(dropout)
         self.resid_drop = nn.Dropout(dropout)
 
-    def forward(self, x: torch.Tensor, bias: torch.Tensor, key_padding_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(
+        self,
+        x: torch.Tensor,
+        bias: torch.Tensor,
+        key_padding_mask: Optional[torch.Tensor] = None,
+        past_kv: Optional[tuple[torch.Tensor, torch.Tensor]] = None,
+        return_kv: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
         B, T, D = x.shape
         qkv = self.qkv(x).view(B, T, 3, self.n_head, self.d_head)
         q, k, v = qkv.unbind(dim=2)
         q = q.transpose(1, 2)  # [B,nH,T,dH]
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
+        if past_kv is not None:
+            # KV-cached generation: x holds only NEW positions; bias is [B,nH,T_new,T_total].
+            pk, pv = past_kv
+            k = torch.cat([pk, k], dim=2)
+            v = torch.cat([pv, v], dim=2)
 
         att = (q @ k.transpose(-2, -1)) / (self.d_head ** 0.5)
         att = att + bias
@@ -136,7 +199,10 @@ class CausalSelfAttnWithBias(nn.Module):
         att = self.attn_drop(att)
         y = att @ v
         y = y.transpose(1, 2).contiguous().view(B, T, D)
-        return self.resid_drop(self.proj(y))
+        y = self.resid_drop(self.proj(y))
+        if return_kv:
+            return y, (k, v)
+        return y
 
 
 class GraphormerAR(pl.LightningModule):
@@ -563,7 +629,89 @@ class GraphormerAR(pl.LightningModule):
             x = x + blk["mlp"](blk["ln2"](x))
         x = self.ln_f(x)
         return self.head(x)
-    
+
+    def new_generation_cache(self) -> GenerationCache:
+        return GenerationCache(len(self.blocks))
+
+    def forward_step(
+        self,
+        seq_in_t: torch.LongTensor,
+        *,
+        cache: GenerationCache,
+        coords: Optional[torch.Tensor] = None,
+        box_size: Optional[torch.Tensor] = None,
+        density: Optional[torch.Tensor] = None,
+        curve_waypoints: Optional[torch.Tensor] = None,
+        input_deltas: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Incremental forward for ONE new position, using (and updating) a KV cache.
+
+        Numerically equivalent to calling :meth:`forward` on the full prefix and taking
+        the last position (see tests/test_kv_cache.py), at O(t) per step instead of
+        O(t²): past K/V are exact because there is no RoPE and all input embeddings are
+        position-local; EdgeBias contributes only its last causal row.
+
+        Args mirror :meth:`forward` but per step: ``seq_in_t`` is [B, 1] (the token at
+        position t = cache.length), ``input_deltas`` is [B, 1, delta_dim],
+        ``curve_waypoints`` is [B, 1, K, 3]; ``coords`` covers the FULL prefix
+        [B, t+1, D] (needed for the bias row — only the last row is computed).
+        """
+        if self.use_ida_pre and self.ida_pre is not None:
+            raise NotImplementedError("forward_step does not support use_ida_pre; use forward().")
+        B, T_new = seq_in_t.shape
+        if T_new != 1:
+            raise ValueError(f"forward_step expects one position at a time, got T={T_new}")
+        t = int(cache.length)
+
+        if self.continuous_input:
+            if t == 0:
+                x = self.tok_emb(seq_in_t)  # SOS marks the start of sequence
+            else:
+                if input_deltas is None:
+                    raise ValueError("continuous_input=True requires input_deltas in forward_step().")
+                if input_deltas.shape != (B, 1, self._delta_dim):
+                    raise ValueError(
+                        f"input_deltas must be [B,1,{self._delta_dim}], got {tuple(input_deltas.shape)}"
+                    )
+                assert self.delta_in_proj is not None
+                x = self.delta_in_proj(input_deltas.to(dtype=self.delta_in_proj.weight.dtype))
+        else:
+            x = self.tok_emb(seq_in_t)
+        if self.use_pos_emb:
+            assert self.pos_emb is not None
+            if t >= self.pos_emb.num_embeddings:
+                raise ValueError(f"Position {t} exceeds max position embeddings {self.pos_emb.num_embeddings}")
+            x = x + self.pos_emb(torch.tensor([t], device=seq_in_t.device))[None, :, :]
+        if getattr(self, "is_factorized", False) and self.axis_emb is not None:
+            axis_ids = torch.tensor([t % self.output_spatial_dim], device=seq_in_t.device)
+            x = x + self.axis_emb(axis_ids)[None, :, :]
+        if self.use_density_cond:
+            if density is None:
+                raise ValueError("density must be provided when use_density_cond=True")
+            assert self.density_emb is not None
+            dens = torch.as_tensor(density, device=seq_in_t.device, dtype=x.dtype).reshape(-1, 1)
+            if dens.shape[0] == 1 and B > 1:
+                dens = dens.expand(B, 1)
+            x = x + self.density_emb(dens)[:, None, :]
+
+        if self.use_curve_rail and self.rail_attn is not None and curve_waypoints is not None:
+            x = self.rail_attn(x, curve_waypoints.to(dtype=x.dtype))
+
+        coords_prep = self._prepare_attention_coords(coords, seq_len=t + 1)
+        if self.use_edge_bias and coords_prep is not None:
+            bias = self.edge_bias.bias_row(coords_prep, box_size=box_size, torus=self.torus)
+        else:
+            bias = torch.zeros(B, 1, 1, t + 1, device=x.device, dtype=x.dtype)
+
+        for i, blk in enumerate(self.blocks):
+            y, kv = blk["attn"](blk["ln1"](x), bias, past_kv=cache.layers[i], return_kv=True)
+            cache.layers[i] = kv
+            x = x + y
+            x = x + blk["mlp"](blk["ln2"](x))
+        cache.length = t + 1
+        x = self.ln_f(x)
+        return self.head(x)
+
     @torch.no_grad()
     def nll(
         self,

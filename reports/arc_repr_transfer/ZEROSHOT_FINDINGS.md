@@ -1,4 +1,11 @@
-# Stage-2 zero-shot findings — arc_repr size transfer (epoch-332 snapshot)
+# Stage-2 zero-shot findings — arc_repr size transfer
+
+> **FINAL (epoch-355, training stopped):** OTgap **0.524 / 0.795 / 0.911** at
+> N=27/64/125 (`samples_N*_ep355.npz`, GPU + KV cache) — within noise of the ep332
+> snapshot below; N=64 lands just inside the yellow band (<0.8). The model had
+> converged; this is the locked zero-shot baseline for the multi-size run to beat.
+
+## Original ep332 snapshot
 
 Checkpoint: epoch-332 snapshot of `lj27_pbc_arc_repr_norm_fullcov` (training still running
 to 400). Sampler: fixed `sample_lj.py` with the new `--cell_size 0.046875` override

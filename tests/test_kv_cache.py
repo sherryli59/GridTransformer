@@ -116,6 +116,43 @@ def test_forward_step_matches_full_arc_continuous():
                 torch.testing.assert_close(got, want[:, t : t + 1], atol=1e-5, rtol=1e-4)
 
 
+def test_forward_step_matches_full_with_curve_rail():
+    """Rail cross-attention path: cached steps must match the full forward
+    (the rail row is per-position, so caching is exact here too)."""
+    model = _tiny_model(
+        use_continuous_head=True,
+        num_mixtures=3,
+        full_covariance=True,
+        continuous_input=True,
+        use_curve_rail=True,
+        curve_rail_k=1,
+        curve_rail_mode="fixed_template",
+        curve_rail_reference="prev_step",
+    )
+    g = torch.Generator().manual_seed(5)
+    seq = torch.full((B, T), 16, dtype=torch.long)
+    deltas = torch.randn(B, T, 3, generator=g) * 0.3
+    deltas[:, 0] = 0.0
+    waypoints = torch.randn(B, T, 1, 3, generator=g)
+    coords = _rand_coords()
+    box = torch.full((B, 3), 3.0)
+
+    with torch.no_grad():
+        full = model(seq, coords=coords, box_size=box, input_deltas=deltas, curve_waypoints=waypoints)
+        cache = model.new_generation_cache()
+        for t in range(T):
+            out = model.forward_step(
+                seq[:, t : t + 1],
+                cache=cache,
+                coords=coords[:, : t + 1, :],
+                box_size=box,
+                input_deltas=deltas[:, t : t + 1, :],
+                curve_waypoints=waypoints[:, t : t + 1],
+            )
+            for got, want in zip(out, full):
+                torch.testing.assert_close(got, want[:, t : t + 1], atol=1e-5, rtol=1e-4)
+
+
 def test_sampler_kv_cache_matches_legacy():
     """End to end: argmax sampling with the cache reproduces the legacy path exactly."""
     from grid_transformer.data.lj_transferable import RelativeDeltaTokenizer

@@ -10,15 +10,16 @@ import torch
 import torch.nn.functional as F
 
 from grid_transformer.data.lj_abs_dataset import AbsoluteCoordinateTokenizer
+from grid_transformer.data.curves import get_curve3d
 from grid_transformer.data.lj_transferable import (
     RelativeDeltaTokenizer,
-    _hilbert3d_decode,
     _hilbert3d_encode,
     _hilbert_bits,
     _load_codebook_tensor,
     _rail_relative_from_codes,
     fixed_template_waypoints,
     fixed_template_anchors,
+    resolution_for_box_rule,
 )
 from grid_transformer.models.ar_registry import AR_ARCH_CHOICES, load_ar_checkpoint
 from grid_transformer.utils.spatial import spherical_to_cartesian
@@ -362,19 +363,19 @@ def _rail_resolution_for_box(
     box_np: np.ndarray,
     hilbert_resolution: int,
     cell_size: Optional[float],
+    ordering: str = "hilbert",
 ) -> int:
     """Grid resolution R used to interpret the curve rail at sampling time.
 
-    Mirrors ``LJTransferableDataset._resolution_for_box``: a fixed global
-    resolution when ``cell_size`` is None (the cache-build path), else the next
-    power of two of ``max(L)/cell_size`` so the physical cell size is held constant
-    across box sizes.
+    Delegates to ``resolution_for_box_rule`` — see that function for the
+    full rule (hilbert: next_pow2; gilbert: nearest even integer).
     """
-    if cell_size is None:
-        return int(hilbert_resolution)
-    L = float(np.max(np.asarray(box_np, dtype=np.float64)))
-    n = max(2, int(round(L / float(cell_size))))
-    return int(1 << int(math.ceil(math.log2(n))))
+    return resolution_for_box_rule(
+        box_np,
+        cell_size=cell_size,
+        hilbert_resolution=hilbert_resolution,
+        ordering=ordering,
+    )
 
 
 def _compute_rail_waypoints_batch(
@@ -413,46 +414,57 @@ def _arc_decode_positions(
     R: int,
     n_particles: int,
     *,
+    curve=None,
     return_diagnostics: bool = False,
 ) -> torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor]]:
     """Decode arc-length prediction back to xyz position.
 
-    c_next = clamp(c_curr + round(Δs * X), 0, R³-1)
+    s_next = clamp(s(c_curr) + Δs * X); c_next = nearest code to s_next.
     pos_next = cell_center(c_next) + fine_xyz
+
+    For pow-2 Hilbert curves, s(c) == c (float64), so this is byte-exact with
+    the historical round/clip. For Gilbert (arbitrary-resolution), s(c) is the
+    arc-length coordinate from the LUT.
+
+    ``curve=None`` defaults to HilbertCurve3D(R), preserving byte compatibility
+    for all existing callers.
 
     With ``return_diagnostics=True`` also returns per-sample exactness events of
     the (non-bijective) arc→position map: ``c_curr``/``c_next`` Hilbert codes,
     ``clamp_hit`` (code left [0, R³) and was clamped — L3) and ``fine_wrap``
     (|fine| > 0.5 cell, min-imaged back into the cell — L2).
     """
-    bits = _hilbert_bits(R)
-    R3 = R ** 3
+    if curve is None:
+        curve = get_curve3d("hilbert", R)
+    R3 = int(curve.ncells)
     X = max(1, R3 // n_particles)
     device = curr_pos.device
 
-    # Compute Hilbert code of current position (numpy, per-sample)
+    # Compute curve code of current position (numpy, per-sample)
     box_np = box_size[0].detach().cpu().numpy().astype(np.float64)
     curr_np = curr_pos.detach().cpu().numpy().astype(np.float64)
     curr_wrapped = np.mod(curr_np, box_np[None, :])
     cell_size = box_np / float(R)
     grid = np.clip(np.floor(curr_wrapped / cell_size).astype(np.int64), 0, R - 1)
-    c_curr = _hilbert3d_encode(grid[:, 0], grid[:, 1], grid[:, 2], bits=bits)  # [B]
+    c_curr = curve.encode(grid)  # [B]
 
-    # Advance code
+    # Advance in s-space: s_next = s(c_curr) + Δs * X; c_next = code_from_arc(s_next).
+    # For HilbertCurve3D, arc(c)==c (float64), so this reproduces the historical
+    # round/clip byte-exactly (old: c_raw=round(c_curr+Δs*X); c_next=clip(c_raw, 0, R³-1);
+    # clamp_hit = c_raw != c_next).
     delta_s_np = delta_arc[:, 0].detach().cpu().numpy().astype(np.float64)
-    c_raw = np.round(c_curr.astype(np.float64) + delta_s_np * float(X)).astype(np.int64)
-    c_next = np.clip(c_raw, 0, R3 - 1)
+    s_next = curve.arc(c_curr) + delta_s_np * float(X)
+    c_next, clamp_hit = curve.code_from_arc(s_next, return_clamped=True)
 
     # Decode code → cell center
-    ax, ay, az = _hilbert3d_decode(c_next, bits)
-    cell_centers = (np.stack([ax, ay, az], axis=1).astype(np.float64) + 0.5) * cell_size
+    cell_centers = (curve.decode(c_next).astype(np.float64) + 0.5) * cell_size
     cell_centers_t = torch.from_numpy(cell_centers.astype(np.float32)).to(device=device)
 
     # Add fine offset (fine is normalized by cell_size during encoding). Min-image
     # the fine offset into [-0.5, 0.5] to mirror the encoder (hilbert_arc_delta):
     # a Gaussian-tail sample with |fine| > 0.5 must stay in the predicted cell,
     # otherwise the next step's code re-bin lands in a spatially adjacent but
-    # Hilbert-distant cell and the chain teleports along the curve.
+    # curve-distant cell and the chain teleports along the curve.
     cell_size_t = torch.from_numpy(cell_size.astype(np.float32)).to(device=device)  # [3]
     fine_raw = delta_arc[:, 1:4]
     wrap_amount = torch.round(fine_raw)
@@ -463,8 +475,8 @@ def _arc_decode_positions(
         return pos
     diag = {
         "c_curr": torch.from_numpy(c_curr.astype(np.int64)).to(device=device),
-        "c_next": torch.from_numpy(c_next).to(device=device),
-        "clamp_hit": torch.from_numpy(c_raw != c_next).to(device=device),
+        "c_next": torch.from_numpy(c_next.astype(np.int64)).to(device=device),
+        "clamp_hit": torch.from_numpy(clamp_hit).to(device=device),
         "fine_wrap": (wrap_amount != 0).any(dim=-1),
     }
     return pos, diag
@@ -520,22 +532,28 @@ def empirical_p0_positions(
     *,
     box_lengths: Sequence[float],
     R: int,
+    curve=None,
 ) -> np.ndarray:
-    """Lowest-Hilbert-code particle of each config: the training-side particle-0 marginal.
+    """Lowest-curve-code particle of each config: the training-side particle-0 marginal.
 
     Arc sampling pins particle 0 deterministically at the code-0 cell center, but the
     training conditional saw the actual lowest-code particle of real configs. Drawing
     seeds from this empirical pool (``--arc_p0_file``) removes that train/sample
     mismatch (action-plan §1.5). Input [M, N, 3] box-frame positions; returns [M, 3].
+
+    ``curve=None`` defaults to HilbertCurve3D(R), preserving existing behavior.
     """
     configs = np.asarray(configs, dtype=np.float64)
     if configs.ndim != 3 or configs.shape[-1] != 3:
         raise ValueError(f"configs must be [M, N, 3], got {tuple(configs.shape)}")
+    if curve is None:
+        curve = get_curve3d("hilbert", R)
     box = np.asarray(box_lengths, dtype=np.float64).reshape(1, 1, 3)
-    bits = _hilbert_bits(R)
     wrapped = np.mod(configs, box)
     grid = np.clip(np.floor(wrapped / (box / float(R))).astype(np.int64), 0, R - 1)
-    codes = _hilbert3d_encode(grid[..., 0], grid[..., 1], grid[..., 2], bits=bits)  # [M, N]
+    # Encode [M, N, 3] grids: reshape to (M*N, 3), encode, reshape back.
+    MN = grid.shape[0] * grid.shape[1]
+    codes = curve.encode(grid.reshape(MN, 3)).reshape(grid.shape[0], grid.shape[1])  # [M, N]
     first = np.argmin(codes, axis=1)
     return configs[np.arange(configs.shape[0]), first]
 
@@ -555,13 +573,17 @@ def _load_arc_p0_pool(
     *,
     box_lengths: Sequence[float],
     R: int,
+    curve=None,
 ) -> torch.Tensor:
     """Load an [M, N, 3] config archive (npz key 'x_base' or 'positions') and reduce
-    it to the [M, 3] empirical particle-0 pool for arc sampling."""
+    it to the [M, 3] empirical particle-0 pool for arc sampling.
+
+    ``curve=None`` defaults to HilbertCurve3D(R) — pass a gilbert curve for gilbert runs.
+    """
     with np.load(path) as data:
         key = "x_base" if "x_base" in data else "positions"
         configs = np.asarray(data[key], dtype=np.float64)
-    pool = empirical_p0_positions(configs, box_lengths=box_lengths, R=R)
+    pool = empirical_p0_positions(configs, box_lengths=box_lengths, R=R, curve=curve)
     return torch.from_numpy(np.ascontiguousarray(pool)).to(dtype=torch.float32)
 
 
@@ -599,6 +621,7 @@ def autoregressive_relative_delta_sample(
     arc_repr: bool = False,
     arc_p0_positions: Optional[torch.Tensor] = None,
     use_kv_cache: bool = True,
+    ordering: str = "hilbert",
 ) -> dict[str, torch.Tensor]:
     if n_particles <= 1:
         raise ValueError(f"n_particles must be > 1, got {n_particles}")
@@ -676,6 +699,14 @@ def autoregressive_relative_delta_sample(
     # The model predicts particle 1 relative to particle 0 first, then particle 2
     # relative to particle 1, etc. Periodic mode wraps into [0, L); nonperiodic
     # mode shifts the full chain only at the end so COM lands at box center.
+    # Build the space-filling curve object for arc_repr decode (once per sampling call).
+    # curve=None is accepted by _arc_decode_positions (defaults to hilbert), but we build
+    # it explicitly so the same object is reused across all loop steps.
+    arc_curve = None
+    if arc_repr and not factorized:
+        _arc_R_for_curve = _rail_resolution_for_box(box_np, hilbert_resolution, cell_size, ordering=ordering)
+        arc_curve = get_curve3d(ordering, int(_arc_R_for_curve))
+
     x_base = torch.zeros((nsamples, n_particles, coord_dim), dtype=torch.float32, device=device)
     if arc_repr and not factorized:
         # Arc decode is absolute (cell centers), so particle 0 is NOT a gauge choice:
@@ -694,7 +725,8 @@ def autoregressive_relative_delta_sample(
                 p0_idx = torch.randint(p0_pool.shape[0], (nsamples,), device=device)
             x_base[:, 0, :] = p0_pool[p0_idx]
         else:
-            _arc_R0 = _rail_resolution_for_box(box_np, hilbert_resolution, cell_size)
+            assert arc_curve is not None
+            _arc_R0 = _rail_resolution_for_box(box_np, hilbert_resolution, cell_size, ordering=ordering)
             x_base[:, 0, :] = _arc_initial_positions(box_size, int(_arc_R0)).to(device=device)
     deltas = torch.zeros((nsamples, n_predict_particles, coord_dim), dtype=torch.float32, device=device)
     # Arc exactness diagnostics (action-plan Phase 1): generated Hilbert-code chain
@@ -746,7 +778,7 @@ def autoregressive_relative_delta_sample(
             raise ValueError(f"Curve-rail sampling requires 3D coordinates, got coord_dim={coord_dim}.")
         if not periodic:
             raise ValueError("Curve-rail sampling requires periodic geometry.")
-        rail_resolution = _rail_resolution_for_box(box_np, hilbert_resolution, cell_size)
+        rail_resolution = _rail_resolution_for_box(box_np, hilbert_resolution, cell_size, ordering=ordering)
         if rail_is_fixed:
             # Sample-INDEPENDENT template: identical for every generated config (depends
             # only on N, R, particle index). Precompute the whole buffer ONCE; the rail
@@ -904,9 +936,10 @@ def autoregressive_relative_delta_sample(
             # in input_deltas_buf for model conditioning at the next step.
             _arc_raw_pos: Optional[torch.Tensor] = None
             if arc_repr and not factorized:
-                _R = _rail_resolution_for_box(box_np, hilbert_resolution, cell_size)
+                _R = _rail_resolution_for_box(box_np, hilbert_resolution, cell_size, ordering=ordering)
                 _arc_raw_pos, _arc_diag = _arc_decode_positions(
                     x_base[:, t, :], delta_model_t, box_size, int(_R), n_particles,
+                    curve=arc_curve,
                     return_diagnostics=True,
                 )
                 assert arc_codes is not None and arc_clamp_any is not None and arc_fine_wrap_any is not None
@@ -1295,6 +1328,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Override the checkpoint's Hilbert grid resolution directly "
         "(used when --cell_size is not set).",
     )
+    ap.add_argument(
+        "--ordering",
+        choices=("hilbert", "gilbert"),
+        default=None,
+        help="Space-filling curve family. Default: read from the checkpoint "
+        "(model.ordering) when present, else 'hilbert'. A checkpoint trained "
+        "with one family cannot be sampled with the other.",
+    )
     return ap
 
 
@@ -1388,6 +1429,19 @@ def main() -> None:
     if args.polar and (not ckpt_uses_polar):
         raise ValueError("Checkpoint was not trained with polar continuous targets.")
     polar = bool(args.polar) or ckpt_uses_polar
+    # Ordering (space-filling curve family): CLI overrides checkpoint; getattr-with-default
+    # is forward-compatible with Task 6 which will store model.ordering in checkpoints.
+    ckpt_ordering = getattr(model, "ordering", None)
+    effective_ordering = (
+        args.ordering
+        or (str(ckpt_ordering).strip().lower() if ckpt_ordering else None)
+        or "hilbert"
+    )
+    if ckpt_ordering and args.ordering and str(ckpt_ordering).strip().lower() != args.ordering:
+        raise SystemExit(
+            f"--ordering {args.ordering} contradicts checkpoint ordering {ckpt_ordering!r}: "
+            "a model trained on one curve family cannot be sampled with another."
+        )
     # Curve-rail (GPS-guide) scaffold: detect from the checkpoint and recover the
     # geometry (offsets, grid resolution) carried in the model hparams.
     ckpt_uses_curve_rail = bool(getattr(model, "use_curve_rail", False))
@@ -1683,9 +1737,13 @@ def main() -> None:
         if not ckpt_arc_repr:
             raise ValueError("--arc_p0_file is only meaningful for arc_repr checkpoints.")
         _p0_R = _rail_resolution_for_box(
-            np.asarray(box_lengths, dtype=np.float64), curve_rail_resolution, curve_rail_cell_size
+            np.asarray(box_lengths, dtype=np.float64), curve_rail_resolution, curve_rail_cell_size,
+            ordering=effective_ordering,
         )
-        arc_p0_pool = _load_arc_p0_pool(args.arc_p0_file, box_lengths=box_lengths, R=int(_p0_R))
+        _p0_curve = get_curve3d(effective_ordering, int(_p0_R))
+        arc_p0_pool = _load_arc_p0_pool(
+            args.arc_p0_file, box_lengths=box_lengths, R=int(_p0_R), curve=_p0_curve
+        )
         print(f"Loaded arc particle-0 pool: {arc_p0_pool.shape[0]} positions (R={int(_p0_R)})")
 
     while done < total:
@@ -1721,6 +1779,7 @@ def main() -> None:
             arc_repr=ckpt_arc_repr,
             arc_p0_positions=arc_p0_pool,
             use_kv_cache=bool(args.kv_cache),
+            ordering=effective_ordering,
         )
         chunks.append(out_chunk)
         done += bsz

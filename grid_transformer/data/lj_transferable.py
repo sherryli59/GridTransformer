@@ -17,6 +17,30 @@ def _is_power_of_two(v: int) -> bool:
     return v > 0 and (v & (v - 1)) == 0
 
 
+def resolution_for_box_rule(
+    box: Optional[np.ndarray],
+    *,
+    cell_size: Optional[float],
+    hilbert_resolution: int,
+    ordering: str = "hilbert",
+) -> int:
+    """Grid resolution (cells per axis) for a box. Constant cell size when
+    cell_size is set: hilbert -> next_pow2(round(max(L)/cell_size)) (constant
+    only up to an octave); gilbert -> nearest EVEN integer of L/cell_size
+    (constant to <1%; even grids keep the gilbert curve fully face-continuous).
+    Else the fixed global resolution (constant cell count)."""
+    if cell_size is None or box is None:
+        return int(hilbert_resolution)
+    L = float(np.max(np.asarray(box, dtype=np.float64)))
+    if str(ordering).strip().lower() == "gilbert":
+        # Round L/cell directly to the nearest even integer; dividing by 2
+        # before any integer rounding avoids banker's-rounding ties on the
+        # pre-rounded integer (85 -> 84, 107 -> 108 would be the FARTHER even).
+        return max(2, int(round(L / float(cell_size) / 2.0)) * 2)
+    n = max(2, int(round(L / float(cell_size))))
+    return int(1 << int(math.ceil(math.log2(n))))
+
+
 def _hilbert_rot(side: int, x: int, y: int, rx: int, ry: int) -> tuple[int, int]:
     if ry == 0:
         if rx == 1:
@@ -312,9 +336,10 @@ def fixed_template_anchors(
 def _validate_arc_repr_cache(*, ordering: str, periodic: bool, has_absolute_coords: bool) -> None:
     """Preconditions for arc_repr targets on a preprocessed cache.
 
-    Δs targets are Hilbert-code differences over the *stored* particle order, so the
-    cache must have been built with Hilbert ordering; spectral (or any other) ordering
-    yields non-monotone codes and meaningless Δs with no runtime error.
+    Δs targets are space-filling-curve-code differences over the *stored* particle
+    order, so the cache must have been built with Hilbert or Gilbert ordering; spectral
+    (or any other) ordering yields non-monotone codes and meaningless Δs with no
+    runtime error.
     """
     if not has_absolute_coords:
         raise ValueError(
@@ -1108,22 +1133,14 @@ class LJTransferableDataset(Dataset):
         return int(self.sample_id_to_file_index.shape[0])
 
     def _resolution_for_box(self, box: Optional[np.ndarray]) -> int:
-        """Grid resolution (cells per axis) for a box. Constant cell size when
-        self.cell_size is set: hilbert -> next_pow2(round(max(L)/cell_size))
-        (constant only up to an octave); gilbert -> nearest EVEN integer
-        (constant to <1%, even sizes keep the curve fully face-continuous).
-        Else the fixed global resolution (constant cell count)."""
-        if self.cell_size is None or box is None:
-            return int(self.hilbert_resolution)
-        L = float(np.max(np.asarray(box, dtype=np.float64)))
-        if self.ordering == "gilbert":
-            # Round L/cell directly to the nearest even integer to keep cell size
-            # constant to <1% across box sizes. Dividing by 2 before rounding and
-            # multiplying back avoids half-integer ties that depend on the
-            # pre-rounded integer value.
-            return max(2, int(round(L / self.cell_size / 2.0)) * 2)
-        n = max(2, int(round(L / self.cell_size)))
-        return int(1 << int(math.ceil(math.log2(n))))  # next power of two (hilbert)
+        """Grid resolution (cells per axis) for a box — delegates to
+        ``resolution_for_box_rule``. See that function for the full rule."""
+        return resolution_for_box_rule(
+            box,
+            cell_size=self.cell_size,
+            hilbert_resolution=self.hilbert_resolution,
+            ordering=self.ordering,
+        )
 
     def _space_filling_codes_2d(self, grid: np.ndarray, resolution: int) -> np.ndarray:
         h = np.empty(grid.shape[0], dtype=np.int64)
@@ -1732,14 +1749,14 @@ class LJTransferableCachedDataset(Dataset):
         return int(self.sample_length_all.shape[0])
 
     def _resolution_for_box(self, box: np.ndarray) -> int:
-        if self.cell_size is None:
-            return int(self.hilbert_resolution)
-        L = float(np.max(np.asarray(box, dtype=np.float64)))
+        """Grid resolution for a box — delegates to ``resolution_for_box_rule``."""
         ordering = str(self.metadata.get("ordering", "hilbert") or "hilbert").strip().lower()
-        if ordering == "gilbert":
-            return max(2, int(round(L / self.cell_size / 2.0)) * 2)
-        n = max(2, int(round(L / self.cell_size)))
-        return int(1 << int(math.ceil(math.log2(n))))
+        return resolution_for_box_rule(
+            box,
+            cell_size=self.cell_size,
+            hilbert_resolution=self.hilbert_resolution,
+            ordering=ordering,
+        )
 
     def _fixed_template_curve_waypoints_for_sample(
         self,

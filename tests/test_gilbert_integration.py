@@ -233,3 +233,57 @@ def test_gilbert_validation(tmp_path):
         hilbert_resolution=64,
     )
     assert dm.ordering == "gilbert"
+
+
+# ---------------------------------------------------------------------------
+# Task 5: s-space arc decode + --ordering plumbing
+# ---------------------------------------------------------------------------
+
+
+def test_arc_decode_positions_gilbert_roundtrip():
+    """Sampler decode with a gilbert curve reconstructs encoder targets exactly."""
+    from sample_lj import _arc_decode_positions
+
+    R, box, n = 6, 3.0, 27
+    curve = get_curve3d("gilbert", R)
+    pos, codes = _random_sorted_config(curve, box, n, seed=7)
+    box_arr = np.array([box] * 3)
+    arc = hilbert_arc_delta(pos, codes, box_arr, R, periodic=True, curve=curve)
+
+    box_t = torch.tensor([[box, box, box]], dtype=torch.float32)
+    curr = torch.tensor(pos[:1], dtype=torch.float32)
+    for i in range(n - 1):
+        delta = torch.tensor(arc[i : i + 1], dtype=torch.float32)
+        nxt, diag = _arc_decode_positions(
+            curr, delta, box_t, R, n, curve=curve, return_diagnostics=True
+        )
+        target = torch.tensor(pos[i + 1], dtype=torch.float32)
+        d = (nxt[0] - target).double().numpy()
+        d -= np.round(d / box) * box
+        np.testing.assert_allclose(d, 0.0, atol=1e-4)
+        assert int(diag["c_next"][0]) == int(codes[i + 1])
+        assert not bool(diag["clamp_hit"][0])
+        curr = nxt
+
+
+def test_arc_decode_positions_hilbert_default_unchanged():
+    """curve=None keeps the historical pow-2 behavior (existing suites also
+    cover this; this is the explicit equivalence check)."""
+    from sample_lj import _arc_decode_positions
+
+    R, box, n = 8, 3.0, 27
+    rng = np.random.default_rng(11)
+    curr = torch.tensor(rng.uniform(0, box, (5, 3)), dtype=torch.float32)
+    delta = torch.tensor(rng.normal(0, 2, (5, 4)), dtype=torch.float32)
+    box_t = torch.tensor([[box] * 3], dtype=torch.float32)
+    a = _arc_decode_positions(curr, delta, box_t, R, n)
+    b = _arc_decode_positions(curr, delta, box_t, R, n, curve=get_curve3d("hilbert", R))
+    torch.testing.assert_close(a, b)
+
+
+def test_rail_resolution_for_box_gilbert_rule():
+    from sample_lj import _rail_resolution_for_box
+
+    box = np.array([4.0, 4.0, 4.0])
+    assert _rail_resolution_for_box(box, 64, 0.046875) == 128  # hilbert default
+    assert _rail_resolution_for_box(box, 64, 0.046875, ordering="gilbert") == 86

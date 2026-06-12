@@ -69,6 +69,32 @@ coupled to that pow2 cell scale, so it is exactly the component that fails to ex
 the cell-normalized fine offset is scale-free and transfers. This is a concrete,
 marginal-level mechanism for the L4 OTgap (0.89) staying red while L5 (0.45) is green.
 
+## L5→L10 test REFUTES the cell hypothesis (2026-06-12)
+
+The §"Why Δs specifically, and why L4" cell-discontinuity hypothesis above was tested directly
+and **refuted**. L=10 / N=1000 shares L5's *exact* cell (0.0391) and X (16777), so the cell
+hypothesis predicts it should transfer like L5. Generated 256 configs from the same checkpoint
+(`use_pos_emb=False`, no positional ceiling) and compared Δs to the L10 MCMC data:
+
+| size | role | cell | Δs W1 (gen vs data) | gen Δs mean |
+|------|------|------|--------------------:|------------:|
+| L3 N=27   | **trained**  | 0.0469 | 0.029 | 0.991 |
+| L5 N=125  | **trained**  | 0.0391 | 0.014 | 0.988 |
+| L4 N=64   | held out | 0.0313 | 0.107 | 0.889 |
+| L10 N=1000| held out | **0.0391 (= L5)** | 0.129 | 0.882 |
+
+The splitter is **trained vs held-out, not cell**: the two trained sizes have *different* cells
+yet both succeed; L10 has the *same* cell as L5 yet fails identically to L4. Cell is orthogonal.
+
+**Revised mechanism — exposure bias / AR drift.** The teacher-forced conditional generalises
+(NLL good at held-out L4), but free-running generation drifts: at an unseen box size the model
+biases Δs slightly low each step, compounding over 64–1000 steps into a mode collapse
+(→~0.15), regardless of whether the size is interpolated (L4) or extrapolated (L10). Fine
+offsets still transfer everywhere (cell-normalised, scale-free). **Consequence: the
+constant-cell pow2 ladder will NOT fix transfer** — a same-cell held-out size still fails.
+Levers that target the real cause: more/denser training sizes, exposure-bias mitigation
+(scheduled sampling / `continuous_input_noise`), or reducing brittle box-size conditioning.
+
 ## What this does and does not tell us
 
 For the **trained** L5 the per-step marginals are near-perfect (consistent with its green

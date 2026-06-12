@@ -778,6 +778,11 @@ def autoregressive_relative_delta_sample(
             raise ValueError(f"Curve-rail sampling requires 3D coordinates, got coord_dim={coord_dim}.")
         if not periodic:
             raise ValueError("Curve-rail sampling requires periodic geometry.")
+        if str(ordering).strip().lower() == "gilbert":
+            # Rail waypoint decode (_compute_rail_waypoints_batch / fixed_template)
+            # still goes through _hilbert_bits, which silently mis-encodes on a
+            # non-pow-2 grid — fail loudly instead. Mirrors the dataset-side guard.
+            raise NotImplementedError("curve rail sampling is pow-2 Hilbert only")
         rail_resolution = _rail_resolution_for_box(box_np, hilbert_resolution, cell_size, ordering=ordering)
         if rail_is_fixed:
             # Sample-INDEPENDENT template: identical for every generated config (depends

@@ -370,6 +370,35 @@ def parse_args() -> argparse.Namespace:
         "The 4D target is scale-invariant with constant cell size.",
     )
     parser.add_argument(
+        "--use_joint_arc_bias",
+        type=int,
+        default=0,
+        help="Variant A probe: additive attention bias over the joint (pair distance, "
+        "arc separation). Zero-initialized — exact no-op until fine-tuned. Requires "
+        "--arc_repr and --continuous_input.",
+    )
+    parser.add_argument(
+        "--use_refine_rbf_bias",
+        type=int,
+        default=0,
+        help="Variant F probe: additive near-contact RBF bias (dense centers d<=2). "
+        "Zero-initialized — exact no-op until fine-tuned.",
+    )
+    parser.add_argument(
+        "--knn_mask_k",
+        type=int,
+        default=None,
+        help="Variant G probe: restrict attention to the k nearest causal keys.",
+    )
+    parser.add_argument(
+        "--warm_start_ckpt",
+        type=str,
+        default=None,
+        help="Load model weights (state_dict, strict=False) from this checkpoint before "
+        "training. Unlike --resume_from this resets the optimizer/epoch count and "
+        "tolerates new (probe) modules — the warm-start protocol of the action plan.",
+    )
+    parser.add_argument(
         "--num_mixtures",
         type=int,
         default=32,
@@ -561,6 +590,37 @@ def build_data_module(args: argparse.Namespace):
         }
 
     return data_module, model_info
+
+
+def warm_start_from_checkpoint(model, ckpt_path: str) -> dict:
+    """Load baseline weights into a (possibly extended) model, strict=False.
+
+    The warm-start probe protocol (action-plan Phase 3): every probe module is an
+    exact no-op at init (zero-init outputs), so loading the baseline state_dict with
+    strict=False reproduces the baseline exactly at step 0 — any subsequent NLL
+    movement is causally attributable to the probe. Missing keys must all belong to
+    new probe modules; unexpected keys are an error (wrong checkpoint).
+    """
+    import torch as _torch
+
+    state = _torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    state_dict = state.get("state_dict", state)
+    missing, unexpected = model.load_state_dict(state_dict, strict=False)
+    if unexpected:
+        raise ValueError(
+            f"Warm-start checkpoint has {len(unexpected)} keys the model does not "
+            f"(first: {unexpected[:3]}) — wrong checkpoint/architecture?"
+        )
+    report = {
+        "n_loaded": len(state_dict) - len(unexpected),
+        "missing": list(missing),
+        "unexpected": list(unexpected),
+    }
+    print(
+        f"[warm_start] loaded {report['n_loaded']} tensors from {ckpt_path}; "
+        f"{len(missing)} new (probe) tensors keep their init: {missing[:6]}"
+    )
+    return report
 
 
 def _validate_arc_repr_flags(args) -> None:
@@ -787,6 +847,9 @@ def main() -> None:
                 curve_rail_reference=curve_rail_reference,
                 curve_rail_residual_target=curve_rail_residual_target,
                 arc_repr=bool(int(args.arc_repr)),
+                use_joint_arc_bias=bool(int(args.use_joint_arc_bias)),
+                use_refine_rbf_bias=bool(int(args.use_refine_rbf_bias)),
+                knn_mask_k=args.knn_mask_k,
             )
         elif ar_arch == "vanilla":
             if args.use_continuous_head:
@@ -865,6 +928,11 @@ def main() -> None:
         callbacks=callbacks,
         log_every_n_steps=args.log_every_n_steps,
     )
+
+    if args.warm_start_ckpt:
+        if args.resume_from:
+            raise ValueError("--warm_start_ckpt and --resume_from are mutually exclusive.")
+        warm_start_from_checkpoint(lit_module, args.warm_start_ckpt)
 
     trainer.fit(lit_module, datamodule=data_module, ckpt_path=args.resume_from)
 

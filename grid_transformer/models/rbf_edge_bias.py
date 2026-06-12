@@ -91,3 +91,26 @@ class RBFEdgeBias(nn.Module):
         bias = self.mlp(rbf).permute(0, 3, 1, 2).contiguous()  # [B,nH,T,T]
         return bias.masked_fill(~causal_mask[:, None, :, :], float("-inf"))
 
+    def bias_row(
+        self,
+        coords: torch.Tensor,
+        *,
+        box_size: torch.Tensor | None = None,
+        torus: bool = False,
+    ) -> torch.Tensor:
+        """Bias row for the LAST position attending to the whole prefix: [B, nH, 1, P].
+
+        Equals the last causal row of :meth:`forward` on the same coords, at O(P)
+        for KV-cached generation (mirrors EdgeBias.bias_row).
+        """
+        coords3, box = self._prepare_coords_and_box(coords, box_size)
+        diff = coords3[:, -1:, None, :] - coords3[:, None, :, :]  # [B,1,P,3]
+        if torus:
+            if box is None:
+                raise ValueError("box_size is required when torus=True")
+            diff = wrap_min_image(diff, box)
+        dist = torch.linalg.norm(diff, dim=-1)  # [B,1,P]
+        centers = self.centers.to(device=dist.device, dtype=dist.dtype)
+        rbf = torch.exp(-self.gamma * (dist.unsqueeze(-1) - centers.view(1, 1, 1, -1)) ** 2)
+        return self.mlp(rbf).permute(0, 3, 1, 2).contiguous()  # [B,nH,1,P]
+

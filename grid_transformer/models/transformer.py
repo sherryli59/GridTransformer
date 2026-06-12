@@ -8,10 +8,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from ..training.ar import MDNHead, compute_log_weight_variance, mdn_loss
+from ..training.ar import MDNHead, compute_log_weight_variance, mdn_loss, stratified_nll_means
 from .curve_rail import CurveRailAttention
 from .deep_ida import DeepIDABias
 from .ida import PeriodicIDA
+from .joint_arc_bias import JointEdgeBias
 from .rbf_edge_bias import RBFEdgeBias
 from ..utils.spatial import build_attention_coords, id_to_center_xyz, wrap_min_image
 
@@ -145,14 +146,45 @@ class GenerationCache:
     """Per-layer KV cache for incremental autoregressive generation.
 
     ``layers[i]`` holds the (k, v) tensors of block i over all positions generated so
-    far; ``length`` is the number of positions already in the cache.
+    far; ``length`` is the number of positions already in the cache. ``arc_s`` holds
+    the cumulative normalized arc length per position [B, length] (only used when the
+    joint arc bias is enabled).
     """
 
-    __slots__ = ("layers", "length")
+    __slots__ = ("layers", "length", "arc_s")
 
     def __init__(self, n_layer: int):
         self.layers: list[Optional[tuple[torch.Tensor, torch.Tensor]]] = [None] * int(n_layer)
         self.length: int = 0
+        self.arc_s: Optional[torch.Tensor] = None
+
+
+def _knn_causal_mask(
+    coords: torch.Tensor,
+    k: int,
+    causal_mask: torch.Tensor,
+    *,
+    box_size: Optional[torch.Tensor] = None,
+    torus: bool = False,
+) -> torch.Tensor:
+    """Variant G: restrict each query to its k nearest causal keys (plus itself).
+
+    coords [B,T,C], causal_mask [B,T,T] bool -> [B,T,T] bool subset of causal_mask.
+    """
+    B, T, _ = coords.shape
+    diff = coords[:, :, None, :] - coords[:, None, :, :]
+    if torus and box_size is not None:
+        diff = wrap_min_image(diff, box_size)
+    dist = torch.linalg.norm(diff, dim=-1)
+    dist = dist.masked_fill(~causal_mask, float("inf"))
+    kk = min(int(k) + 1, T)  # +1: self-distance 0 is always among the smallest
+    idx = dist.topk(kk, dim=-1, largest=False).indices
+    keep = torch.zeros_like(causal_mask)
+    keep.scatter_(-1, idx, True)
+    keep &= causal_mask
+    # The diagonal is always allowed so every row keeps at least one finite logit.
+    eye = torch.eye(T, device=coords.device, dtype=torch.bool).unsqueeze(0)
+    return keep | (eye & causal_mask)
 
 
 class CausalSelfAttnWithBias(nn.Module):
@@ -267,6 +299,10 @@ class GraphormerAR(pl.LightningModule):
         curve_rail_reference: str = "absolute",
         curve_rail_residual_target: bool = False,
         arc_repr: bool = False,
+        use_joint_arc_bias: bool = False,
+        use_refine_rbf_bias: bool = False,
+        knn_mask_k: Optional[int] = None,
+        jump_delta_s_threshold: float = 4.0,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -346,6 +382,36 @@ class GraphormerAR(pl.LightningModule):
         self.num_mixtures = int(num_mixtures)
         self.lambda_var = float(lambda_var)
         self.lj_kT = float(lj_kT)
+
+        # Phase-3 probe variants (action-plan). All are exact no-ops at init
+        # (zero-init outputs / parameter-free), so they can be warm-started from a
+        # baseline checkpoint with strict=False loading.
+        self.use_joint_arc_bias = bool(use_joint_arc_bias)
+        self.use_refine_rbf_bias = bool(use_refine_rbf_bias)
+        self.knn_mask_k = int(knn_mask_k) if knn_mask_k is not None else None
+        self.jump_delta_s_threshold = float(jump_delta_s_threshold)
+        if self.use_joint_arc_bias:
+            if not (self.arc_repr and self.continuous_input):
+                raise ValueError(
+                    "use_joint_arc_bias requires arc_repr=True and continuous_input=True "
+                    "(arc positions are accumulated from the input deltas)."
+                )
+            self.joint_arc_bias = JointEdgeBias(n_head=n_head, max_dist=edge_max_dist)
+        else:
+            self.joint_arc_bias = None
+        if self.use_refine_rbf_bias:
+            # Variant F: dense RBF refinement concentrated near contact (d <= 2 sigma),
+            # where log-binned EdgeBias is coarsest and the LJ wall is stiffest.
+            self.refine_rbf_bias = RBFEdgeBias(
+                n_head=n_head,
+                n_rbf_centers=64,
+                max_dist=2.0,
+                hidden_dim=int(rbf_hidden_dim),
+            )
+            nn.init.zeros_(self.refine_rbf_bias.mlp[-1].weight)
+            nn.init.zeros_(self.refine_rbf_bias.mlp[-1].bias)
+        else:
+            self.refine_rbf_bias = None
         if self.use_ida_pre:
             self.ida_pre = PeriodicIDA(
                 d_model=d_model,
@@ -624,6 +690,32 @@ class GraphormerAR(pl.LightningModule):
             x = self.rail_attn(x, curve_waypoints.to(dtype=x.dtype))
 
         bias = self._causal_bias(B, T, coords, box_size, x.device, x.dtype)
+        if coords is not None and (
+            self.joint_arc_bias is not None
+            or self.refine_rbf_bias is not None
+            or self.knn_mask_k is not None
+        ):
+            causal = (
+                torch.tril(torch.ones(T, T, device=x.device, dtype=torch.bool))
+                .unsqueeze(0)
+                .expand(B, -1, -1)
+            )
+            if self.refine_rbf_bias is not None:
+                bias = bias + self.refine_rbf_bias(
+                    coords, causal, box_size=box_size, torus=self.torus
+                )
+            if self.joint_arc_bias is not None:
+                if input_deltas is None:
+                    raise ValueError("use_joint_arc_bias requires input_deltas in forward().")
+                arc_s = torch.cumsum(input_deltas[..., 0].to(dtype=x.dtype), dim=1)  # [B,T]
+                bias = bias + self.joint_arc_bias(
+                    coords, arc_s, causal, box_size=box_size, torus=self.torus
+                )
+            if self.knn_mask_k is not None:
+                knn = _knn_causal_mask(
+                    coords, self.knn_mask_k, causal, box_size=box_size, torus=self.torus
+                )
+                bias = bias.masked_fill(~knn[:, None, :, :], float("-inf"))
         for blk in self.blocks:
             x = x + blk["attn"](blk["ln1"](x), bias, key_padding_mask=pad_mask)
             x = x + blk["mlp"](blk["ln2"](x))
@@ -702,6 +794,45 @@ class GraphormerAR(pl.LightningModule):
             bias = self.edge_bias.bias_row(coords_prep, box_size=box_size, torus=self.torus)
         else:
             bias = torch.zeros(B, 1, 1, t + 1, device=x.device, dtype=x.dtype)
+
+        if coords_prep is not None and (
+            self.joint_arc_bias is not None
+            or self.refine_rbf_bias is not None
+            or self.knn_mask_k is not None
+        ):
+            if self.refine_rbf_bias is not None:
+                bias = bias + self.refine_rbf_bias.bias_row(
+                    coords_prep, box_size=box_size, torus=self.torus
+                )
+            if self.joint_arc_bias is not None:
+                # Accumulate the cumulative arc coordinate across steps in the cache
+                # (mirrors forward()'s cumsum over input_deltas[..., 0]).
+                if input_deltas is not None:
+                    delta_s_new = input_deltas[:, 0, 0].to(dtype=x.dtype)
+                else:
+                    delta_s_new = torch.zeros(B, device=x.device, dtype=x.dtype)
+                prev_s = (
+                    cache.arc_s[:, -1]
+                    if cache.arc_s is not None
+                    else torch.zeros(B, device=x.device, dtype=x.dtype)
+                )
+                s_new = (prev_s + delta_s_new).unsqueeze(1)  # [B,1]
+                arc_prefix = s_new if cache.arc_s is None else torch.cat([cache.arc_s, s_new], dim=1)
+                cache.arc_s = arc_prefix
+                bias = bias + self.joint_arc_bias.bias_row(
+                    coords_prep, arc_prefix, box_size=box_size, torus=self.torus
+                )
+            if self.knn_mask_k is not None:
+                diff = coords_prep[:, -1:, :] - coords_prep  # [B,P,C]
+                if self.torus and box_size is not None:
+                    diff = wrap_min_image(diff, box_size)
+                dist = torch.linalg.norm(diff, dim=-1)  # [B,P]
+                kk = min(self.knn_mask_k + 1, dist.shape[1])
+                idx = dist.topk(kk, dim=-1, largest=False).indices
+                keep = torch.zeros_like(dist, dtype=torch.bool)
+                keep.scatter_(-1, idx, True)
+                keep[:, -1] = True  # self
+                bias = bias.masked_fill(~keep[:, None, None, :], float("-inf"))
 
         for i, blk in enumerate(self.blocks):
             y, kv = blk["attn"](blk["ln1"](x), bias, past_kv=cache.layers[i], return_kv=True)
@@ -844,15 +975,48 @@ class GraphormerAR(pl.LightningModule):
                     f"Continuous delta targets shape {tuple(deltas.shape)} does not match "
                     f"model outputs log_pi={tuple(log_pi.shape)}, mu={tuple(mu.shape)}, scale={tuple(scale_param.shape)}."
                 )
-            loss, seq_nll_model, coord_count = mdn_loss(
+            loss, seq_nll_model, coord_count, point_nll = mdn_loss(
                 log_pi,
                 mu,
                 scale_param,
                 deltas,
                 pad_mask=pad,
                 box_size=box_size_loss,
+                return_point_nll=True,
             )
             seq_nll_exact = seq_nll_model.detach()
+            if self.arc_repr:
+                # Jump-stratified NLL: the cheap discriminator for the geometric
+                # probe variants (action-plan Phase 3). Δs is the arc target's dim 0.
+                strat = stratified_nll_means(
+                    point_nll.detach(),
+                    deltas[..., 0].detach(),
+                    threshold=self.jump_delta_s_threshold,
+                    pad_mask=pad,
+                )
+                if strat["nll_jump"] is not None:
+                    self.log(
+                        "train/nll_jump",
+                        strat["nll_jump"],
+                        on_step=False,
+                        on_epoch=True,
+                        batch_size=seq.size(0),
+                    )
+                if strat["nll_local"] is not None:
+                    self.log(
+                        "train/nll_local",
+                        strat["nll_local"],
+                        on_step=False,
+                        on_epoch=True,
+                        batch_size=seq.size(0),
+                    )
+                self.log(
+                    "train/jump_fraction",
+                    strat["jump_fraction"],
+                    on_step=False,
+                    on_epoch=True,
+                    batch_size=seq.size(0),
+                )
         else:
             logits = outputs
             tok_nll = F.cross_entropy(

@@ -36,6 +36,11 @@ CURVE_RAIL_K="${CURVE_RAIL_K:-8}"
 CURVE_RAIL_REFERENCE="${CURVE_RAIL_REFERENCE:-absolute}"
 CURVE_RAIL_RESIDUAL_TARGET="${CURVE_RAIL_RESIDUAL_TARGET:-0}"
 ARC_REPR="${ARC_REPR:-0}"
+# Phase-3 warm-start probe variants (all default off; see action plan).
+USE_JOINT_ARC_BIAS="${USE_JOINT_ARC_BIAS:-0}"
+USE_REFINE_RBF_BIAS="${USE_REFINE_RBF_BIAS:-0}"
+KNN_MASK_K="${KNN_MASK_K:-}"
+WARM_START_CKPT="${WARM_START_CKPT:-}"
 PREPROCESS_RANDOM_SHIFT="${PREPROCESS_RANDOM_SHIFT:-0}"
 NUM_AUGMENTATIONS="${NUM_AUGMENTATIONS:-5}"
 if [[ "${USE_CURVE_RAIL}" == "1" ]] && [[ -z "${NUM_AUGMENTATIONS_WAS_SET}" ]]; then
@@ -776,6 +781,18 @@ if [[ "${RUN_TRAIN}" == "1" ]]; then
   # instead of silently training the baseline.
   if [[ "${ARC_REPR}" == "1" ]]; then
     TRAIN_ARGS+=(--arc_repr 1)
+  fi
+  if [[ "${USE_JOINT_ARC_BIAS}" == "1" ]]; then
+    TRAIN_ARGS+=(--use_joint_arc_bias 1)
+  fi
+  if [[ "${USE_REFINE_RBF_BIAS}" == "1" ]]; then
+    TRAIN_ARGS+=(--use_refine_rbf_bias 1)
+  fi
+  if [[ -n "${KNN_MASK_K}" ]]; then
+    TRAIN_ARGS+=(--knn_mask_k "${KNN_MASK_K}")
+  fi
+  if [[ -n "${WARM_START_CKPT}" ]]; then
+    TRAIN_ARGS+=(--warm_start_ckpt "${WARM_START_CKPT}")
   fi
   if [[ "${USE_CURVE_RAIL}" == "1" ]]; then
     TRAIN_ARGS+=(

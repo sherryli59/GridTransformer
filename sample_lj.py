@@ -412,11 +412,18 @@ def _arc_decode_positions(
     box_size: torch.Tensor,      # [B, 3] or [1, 3]
     R: int,
     n_particles: int,
-) -> torch.Tensor:
+    *,
+    return_diagnostics: bool = False,
+) -> torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor]]:
     """Decode arc-length prediction back to xyz position.
 
     c_next = clamp(c_curr + round(Δs * X), 0, R³-1)
     pos_next = cell_center(c_next) + fine_xyz
+
+    With ``return_diagnostics=True`` also returns per-sample exactness events of
+    the (non-bijective) arc→position map: ``c_curr``/``c_next`` Hilbert codes,
+    ``clamp_hit`` (code left [0, R³) and was clamped — L3) and ``fine_wrap``
+    (|fine| > 0.5 cell, min-imaged back into the cell — L2).
     """
     bits = _hilbert_bits(R)
     R3 = R ** 3
@@ -433,10 +440,8 @@ def _arc_decode_positions(
 
     # Advance code
     delta_s_np = delta_arc[:, 0].detach().cpu().numpy().astype(np.float64)
-    c_next = np.clip(
-        np.round(c_curr.astype(np.float64) + delta_s_np * float(X)).astype(np.int64),
-        0, R3 - 1,
-    )
+    c_raw = np.round(c_curr.astype(np.float64) + delta_s_np * float(X)).astype(np.int64)
+    c_next = np.clip(c_raw, 0, R3 - 1)
 
     # Decode code → cell center
     ax, ay, az = _hilbert3d_decode(c_next, bits)
@@ -449,10 +454,20 @@ def _arc_decode_positions(
     # otherwise the next step's code re-bin lands in a spatially adjacent but
     # Hilbert-distant cell and the chain teleports along the curve.
     cell_size_t = torch.from_numpy(cell_size.astype(np.float32)).to(device=device)  # [3]
-    fine = delta_arc[:, 1:4]
-    fine = fine - torch.round(fine)
+    fine_raw = delta_arc[:, 1:4]
+    wrap_amount = torch.round(fine_raw)
+    fine = fine_raw - wrap_amount
     fine_xyz = fine * cell_size_t  # [B, 3] — rescale back to absolute units
-    return cell_centers_t + fine_xyz
+    pos = cell_centers_t + fine_xyz
+    if not return_diagnostics:
+        return pos
+    diag = {
+        "c_curr": torch.from_numpy(c_curr.astype(np.int64)).to(device=device),
+        "c_next": torch.from_numpy(c_next).to(device=device),
+        "clamp_hit": torch.from_numpy(c_raw != c_next).to(device=device),
+        "fine_wrap": (wrap_amount != 0).any(dim=-1),
+    }
+    return pos, diag
 
 
 def _arc_initial_positions(box_size: torch.Tensor, R: int) -> torch.Tensor:
@@ -467,6 +482,87 @@ def _arc_initial_positions(box_size: torch.Tensor, R: int) -> torch.Tensor:
     """
     cell = box_size[0:1, :] / float(R)
     return cell * 0.5
+
+
+def arc_logp_position_correction(n_particles: int, box_lengths: Sequence[float]) -> float:
+    """Arc→position change of measure: log p(positions) = logp_continuous + (N−1)·log ρ.
+
+    Per predicted particle the code-rounding interval contributes −log X (X = R³/N)
+    and the cell-unit fine offset contributes −3·log(L/R); together −log X − 3 log ℓ
+    = log(N/V) = log ρ, independent of the Hilbert resolution R. Constant at fixed
+    (N, L) — cancels in self-normalized IS — but required for cross-size or absolute
+    (MCMC) likelihood comparisons. See action-plan §1.3 / review finding 3.6.
+    """
+    volume = float(np.prod(np.asarray(box_lengths, dtype=np.float64)))
+    return float((int(n_particles) - 1) * math.log(float(n_particles) / volume))
+
+
+def arc_canonical_stats(codes: torch.Tensor) -> dict[str, torch.Tensor]:
+    """Per-sample canonical-order events for a generated Hilbert-code chain [B, N].
+
+    ``noncanonical``: any non-increasing step (Δc ≤ 0) — the generated sequence is
+    not the Hilbert sort of its own configuration, so its sequence-density is not
+    the configuration likelihood (action-plan §1.4, L4).
+    ``duplicate_code``: any adjacent tie (Δc == 0) — two particles share a cell and
+    the canonical order is ambiguous.
+    """
+    if codes.ndim != 2:
+        raise ValueError(f"codes must be [B, N], got {tuple(codes.shape)}")
+    dc = codes[:, 1:] - codes[:, :-1]
+    return {
+        "noncanonical": (dc <= 0).any(dim=1),
+        "duplicate_code": (dc == 0).any(dim=1),
+    }
+
+
+def empirical_p0_positions(
+    configs: np.ndarray,
+    *,
+    box_lengths: Sequence[float],
+    R: int,
+) -> np.ndarray:
+    """Lowest-Hilbert-code particle of each config: the training-side particle-0 marginal.
+
+    Arc sampling pins particle 0 deterministically at the code-0 cell center, but the
+    training conditional saw the actual lowest-code particle of real configs. Drawing
+    seeds from this empirical pool (``--arc_p0_file``) removes that train/sample
+    mismatch (action-plan §1.5). Input [M, N, 3] box-frame positions; returns [M, 3].
+    """
+    configs = np.asarray(configs, dtype=np.float64)
+    if configs.ndim != 3 or configs.shape[-1] != 3:
+        raise ValueError(f"configs must be [M, N, 3], got {tuple(configs.shape)}")
+    box = np.asarray(box_lengths, dtype=np.float64).reshape(1, 1, 3)
+    bits = _hilbert_bits(R)
+    wrapped = np.mod(configs, box)
+    grid = np.clip(np.floor(wrapped / (box / float(R))).astype(np.int64), 0, R - 1)
+    codes = _hilbert3d_encode(grid[..., 0], grid[..., 1], grid[..., 2], bits=bits)  # [M, N]
+    first = np.argmin(codes, axis=1)
+    return configs[np.arange(configs.shape[0]), first]
+
+
+def arc_exactness_rates(out: dict) -> dict[str, float]:
+    """Scalar rates from the per-sample arc exactness masks (for save/summary)."""
+    return {
+        "arc_clamp_rate": float(out["arc_clamp_any"].float().mean()),
+        "arc_fine_wrap_rate": float(out["arc_fine_wrap_any"].float().mean()),
+        "arc_noncanonical_rate": float(out["arc_noncanonical"].float().mean()),
+        "arc_duplicate_code_rate": float(out["arc_duplicate_code"].float().mean()),
+    }
+
+
+def _load_arc_p0_pool(
+    path: str,
+    *,
+    box_lengths: Sequence[float],
+    R: int,
+) -> torch.Tensor:
+    """Load an [M, N, 3] config archive (npz key 'x_base' or 'positions') and reduce
+    it to the [M, 3] empirical particle-0 pool for arc sampling."""
+    with np.load(path) as data:
+        key = "x_base" if "x_base" in data else "positions"
+        configs = np.asarray(data[key], dtype=np.float64)
+    pool = empirical_p0_positions(configs, box_lengths=box_lengths, R=R)
+    return torch.from_numpy(np.ascontiguousarray(pool)).to(dtype=torch.float32)
 
 
 @torch.no_grad()
@@ -501,6 +597,7 @@ def autoregressive_relative_delta_sample(
     curve_rail_residual_target: bool = False,
     continuous_input: bool = False,
     arc_repr: bool = False,
+    arc_p0_positions: Optional[torch.Tensor] = None,
     use_kv_cache: bool = True,
 ) -> dict[str, torch.Tensor]:
     if n_particles <= 1:
@@ -582,11 +679,33 @@ def autoregressive_relative_delta_sample(
     x_base = torch.zeros((nsamples, n_particles, coord_dim), dtype=torch.float32, device=device)
     if arc_repr and not factorized:
         # Arc decode is absolute (cell centers), so particle 0 is NOT a gauge choice:
-        # start it where training data has the lowest-code particle (code-0 cell center)
-        # instead of the box corner. box_size is [1, coord_dim] at this point.
-        _arc_R0 = _rail_resolution_for_box(box_np, hilbert_resolution, cell_size)
-        x_base[:, 0, :] = _arc_initial_positions(box_size, int(_arc_R0)).to(device=device)
+        # start it where training data has the lowest-code particle. Preferred: a pool
+        # of empirical particle-0 positions (see empirical_p0_positions); fallback:
+        # the code-0 cell center. box_size is [1, coord_dim] at this point.
+        if arc_p0_positions is not None:
+            p0_pool = torch.as_tensor(arc_p0_positions, dtype=torch.float32, device=device)
+            if p0_pool.ndim != 2 or p0_pool.shape[-1] != coord_dim:
+                raise ValueError(
+                    f"arc_p0_positions must be [M, {coord_dim}], got {tuple(p0_pool.shape)}"
+                )
+            if gen is not None:
+                p0_idx = torch.randint(p0_pool.shape[0], (nsamples,), generator=gen, device=device)
+            else:
+                p0_idx = torch.randint(p0_pool.shape[0], (nsamples,), device=device)
+            x_base[:, 0, :] = p0_pool[p0_idx]
+        else:
+            _arc_R0 = _rail_resolution_for_box(box_np, hilbert_resolution, cell_size)
+            x_base[:, 0, :] = _arc_initial_positions(box_size, int(_arc_R0)).to(device=device)
     deltas = torch.zeros((nsamples, n_predict_particles, coord_dim), dtype=torch.float32, device=device)
+    # Arc exactness diagnostics (action-plan Phase 1): generated Hilbert-code chain
+    # plus per-sample any-event masks for clamp (L3) and fine-wrap (L2).
+    arc_codes: Optional[torch.Tensor] = None
+    arc_clamp_any: Optional[torch.Tensor] = None
+    arc_fine_wrap_any: Optional[torch.Tensor] = None
+    if arc_repr and not factorized:
+        arc_codes = torch.zeros((nsamples, n_particles), dtype=torch.long, device=device)
+        arc_clamp_any = torch.zeros((nsamples,), dtype=torch.bool, device=device)
+        arc_fine_wrap_any = torch.zeros((nsamples,), dtype=torch.bool, device=device)
     logp_discrete = torch.zeros((nsamples,), dtype=torch.float32, device=device)
     logp_continuous = torch.zeros((nsamples,), dtype=torch.float32, device=device) if use_continuous_head else None
 
@@ -786,9 +905,16 @@ def autoregressive_relative_delta_sample(
             _arc_raw_pos: Optional[torch.Tensor] = None
             if arc_repr and not factorized:
                 _R = _rail_resolution_for_box(box_np, hilbert_resolution, cell_size)
-                _arc_raw_pos = _arc_decode_positions(
-                    x_base[:, t, :], delta_model_t, box_size, int(_R), n_particles
+                _arc_raw_pos, _arc_diag = _arc_decode_positions(
+                    x_base[:, t, :], delta_model_t, box_size, int(_R), n_particles,
+                    return_diagnostics=True,
                 )
+                assert arc_codes is not None and arc_clamp_any is not None and arc_fine_wrap_any is not None
+                if t == 0:
+                    arc_codes[:, 0] = _arc_diag["c_curr"]
+                arc_codes[:, t + 1] = _arc_diag["c_next"]
+                arc_clamp_any |= _arc_diag["clamp_hit"]
+                arc_fine_wrap_any |= _arc_diag["fine_wrap"]
                 if periodic:
                     _arc_raw_pos = _wrap_positions_0_to_L(_arc_raw_pos, box_size)
                 delta_cart_t = _arc_raw_pos - x_base[:, t, :]
@@ -904,8 +1030,28 @@ def autoregressive_relative_delta_sample(
     if use_continuous_head:
         assert logp_continuous is not None
         out["logp_continuous"] = logp_continuous
+        # Position-space log-likelihood (exact up to the negligible L1-L4 events
+        # counted below): arc mode needs the (N-1)*log(rho) change of measure;
+        # plain delta mode has unit Jacobian. NOTE: at temperature != 1 this is
+        # the density of the TEMPERED proposal actually sampled from (correct
+        # for IS weights), not the model likelihood — use --temperature 1.0 for
+        # likelihood comparisons.
+        if arc_repr and not factorized:
+            out["logp_position"] = logp_continuous + arc_logp_position_correction(
+                n_particles, box_np.tolist()
+            )
+        else:
+            out["logp_position"] = logp_continuous.clone()
     else:
         out["logp_discrete"] = logp_discrete
+    if arc_codes is not None:
+        assert arc_clamp_any is not None and arc_fine_wrap_any is not None
+        stats = arc_canonical_stats(arc_codes)
+        out["arc_codes"] = arc_codes
+        out["arc_clamp_any"] = arc_clamp_any
+        out["arc_fine_wrap_any"] = arc_fine_wrap_any
+        out["arc_noncanonical"] = stats["noncanonical"]
+        out["arc_duplicate_code"] = stats["duplicate_code"]
     return out
 
 
@@ -1026,7 +1172,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Override checkpoint geometry. If omitted, sampling follows the checkpoint torus setting.",
     )
     ap.add_argument("--sample_mode", type=str, default="multinomial", choices=("multinomial", "argmax"))
-    ap.add_argument("--temperature", type=float, default=0.7)
+    ap.add_argument(
+        "--temperature",
+        type=float,
+        default=0.7,
+        help="Sampling temperature. NOTE: saved logp values are densities of the "
+        "TEMPERED proposal actually sampled from; for likelihood comparisons "
+        "(NLL parity, MCMC logprob) use 1.0.",
+    )
+    ap.add_argument(
+        "--arc_p0_file",
+        type=str,
+        default=None,
+        help="npz of [M,N,3] configs (key 'x_base' or 'positions'); arc sampling "
+        "draws particle 0 from the empirical lowest-Hilbert-code pool instead of "
+        "pinning it at the code-0 cell center (action-plan §1.5).",
+    )
     ap.add_argument("--top_k", type=int, default=None)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--device", type=str, default="auto", help="Sampling device: auto/cpu/cuda.")
@@ -1469,8 +1630,12 @@ def main() -> None:
         }
         if use_continuous_head:
             out["logp_continuous"] = torch.cat([c["logp_continuous"] for c in chunks_to_save], dim=0)
+            out["logp_position"] = torch.cat([c["logp_position"] for c in chunks_to_save], dim=0)
         else:
             out["logp_discrete"] = torch.cat([c["logp_discrete"] for c in chunks_to_save], dim=0)
+        for key in ("arc_clamp_any", "arc_fine_wrap_any", "arc_noncanonical", "arc_duplicate_code"):
+            if key in chunks_to_save[0]:
+                out[key] = torch.cat([c[key] for c in chunks_to_save], dim=0)
 
         os.makedirs(os.path.dirname(os.path.abspath(args.save)), exist_ok=True)
         save_kwargs = dict(
@@ -1504,10 +1669,24 @@ def main() -> None:
             save_kwargs["codebook_path"] = np.array(str(args.codebook_path))
         if use_continuous_head:
             save_kwargs["logp_continuous"] = out["logp_continuous"].cpu().numpy().astype(np.float32)
+            save_kwargs["logp_position"] = out["logp_position"].cpu().numpy().astype(np.float32)
         else:
             save_kwargs["logp_discrete"] = out["logp_discrete"].cpu().numpy().astype(np.float32)
+        if "arc_noncanonical" in out:
+            for key in ("arc_clamp_any", "arc_fine_wrap_any", "arc_noncanonical", "arc_duplicate_code"):
+                save_kwargs[key] = out[key].cpu().numpy().astype(bool)
         np.savez(args.save, **save_kwargs)
         return out
+
+    arc_p0_pool: Optional[torch.Tensor] = None
+    if args.arc_p0_file is not None:
+        if not ckpt_arc_repr:
+            raise ValueError("--arc_p0_file is only meaningful for arc_repr checkpoints.")
+        _p0_R = _rail_resolution_for_box(
+            np.asarray(box_lengths, dtype=np.float64), curve_rail_resolution, curve_rail_cell_size
+        )
+        arc_p0_pool = _load_arc_p0_pool(args.arc_p0_file, box_lengths=box_lengths, R=int(_p0_R))
+        print(f"Loaded arc particle-0 pool: {arc_p0_pool.shape[0]} positions (R={int(_p0_R)})")
 
     while done < total:
         bsz = min(chunk, total - done)
@@ -1540,6 +1719,7 @@ def main() -> None:
             curve_rail_residual_target=curve_rail_residual_target,
             continuous_input=ckpt_continuous_input,
             arc_repr=ckpt_arc_repr,
+            arc_p0_positions=arc_p0_pool,
             use_kv_cache=bool(args.kv_cache),
         )
         chunks.append(out_chunk)
@@ -1558,8 +1738,21 @@ def main() -> None:
     )
     if use_continuous_head:
         print(f"Mean logp_continuous: {out['logp_continuous'].mean().item():.6f}")
+        print(
+            f"Mean logp_position:   {out['logp_position'].mean().item():.6f} "
+            f"(arc->position change of measure applied; tempered proposal at T={float(args.temperature):g})"
+        )
     else:
         print(f"Mean logp_discrete: {out['logp_discrete'].mean().item():.6f}")
+    if "arc_noncanonical" in out:
+        rates = arc_exactness_rates(out)
+        print(
+            "Arc exactness counters (fraction of samples with >=1 event): "
+            f"clamp={rates['arc_clamp_rate']:.4f} "
+            f"fine_wrap={rates['arc_fine_wrap_rate']:.4f} "
+            f"noncanonical={rates['arc_noncanonical_rate']:.4f} "
+            f"duplicate_code={rates['arc_duplicate_code_rate']:.4f}"
+        )
 
 
 if __name__ == "__main__":

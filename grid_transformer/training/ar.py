@@ -92,7 +92,8 @@ def mdn_loss(
     *,
     pad_mask: Optional[torch.Tensor] = None,
     box_size: Optional[torch.Tensor] = None,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    return_point_nll: bool = False,
+) -> tuple[torch.Tensor, ...]:
     """
     Continuous negative log-likelihood under a diagonal-covariance Gaussian mixture.
 
@@ -100,6 +101,8 @@ def mdn_loss(
       loss: scalar mean NLL normalized by number of valid coordinates
       seq_nll: [B] summed NLL over timesteps
       coord_count: [B] number of valid coordinates contributing to each sample
+      point_nll: [B, T] per-token NLL (zeroed at padding) — only when
+        ``return_point_nll=True`` (used for jump-stratified logging)
     """
     if log_pi.ndim != 3:
         raise ValueError(f"log_pi must be [B,T,M], got {tuple(log_pi.shape)}")
@@ -192,7 +195,40 @@ def mdn_loss(
     seq_nll = point_nll.sum(dim=1)
     coord_count = valid.sum(dim=1).clamp_min(1.0) * float(coord_dim)
     loss = (seq_nll / coord_count).mean()
+    if return_point_nll:
+        return loss, seq_nll, coord_count, point_nll
     return loss, seq_nll, coord_count
+
+
+def stratified_nll_means(
+    point_nll: torch.Tensor,
+    delta_s: torch.Tensor,
+    *,
+    threshold: float = 4.0,
+    pad_mask: Optional[torch.Tensor] = None,
+) -> dict[str, Optional[float]]:
+    """Split per-token NLL into Hilbert-jump vs local strata by |Δs| (action-plan Phase 3).
+
+    The jump stratum (|Δs| > threshold) is the cheap early discriminator for the
+    geometric variants: they exist to fix jump-step conditionals, and the aggregate
+    NLL is dominated by local steps. Returns Python floats (None for an empty
+    stratum) so callers can feed self.log directly.
+    """
+    if point_nll.shape != delta_s.shape:
+        raise ValueError(
+            f"point_nll {tuple(point_nll.shape)} and delta_s {tuple(delta_s.shape)} must match"
+        )
+    valid = torch.ones_like(point_nll, dtype=torch.bool)
+    if pad_mask is not None:
+        valid &= ~pad_mask.bool()
+    jump = (delta_s.abs() > float(threshold)) & valid
+    local = (~(delta_s.abs() > float(threshold))) & valid
+    out: dict[str, Optional[float]] = {
+        "nll_jump": float(point_nll[jump].mean()) if bool(jump.any()) else None,
+        "nll_local": float(point_nll[local].mean()) if bool(local.any()) else None,
+        "jump_fraction": float(jump.sum()) / float(valid.sum().clamp_min(1)),
+    }
+    return out
 
 
 def compute_log_weight_variance(

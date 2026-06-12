@@ -45,6 +45,14 @@ cell geometry — so Arm C′ needs the normalization even on the gilbert substr
 - **P1 (gates Arm C′): bridge-normalization collapse.** Divide measured per-index
   absolute-anchor stds by `(j(N−j)/N)^(1/6)` (and global `N^(1/6)`). Pass = L3/L5/L10
   curves overlap within ~10%. Fail ⇒ replace Arm C′ with plain Arm B.
+  **RESULT 2026-06-12: PASS** (`analyze_p1_bridge_collapse.py`,
+  `figs/p1_bridge_collapse.png`). Cross-size spread 0.528 raw → **0.106** normalized
+  (prev-particle control: 0.074). Best-fit exponent α = 0.158/0.150/0.146 per size
+  (theory 1/6 ≈ 0.167) with a **universal prefactor C ≈ 0.41–0.42 (±1.3%)** across
+  N=27–1000. Note the global and per-index normalizations give identical cross-size
+  spread (they differ by a common function of j/N); prefer the per-index profile for
+  the Arm C′ target since it also flattens the within-sequence variance the head sees.
+  Optionally use the fitted α ≈ 0.15 instead of 1/6. **Arm C′ is GO.**
 - **P2: T=1.0 ablation.** Regenerate L4 (+L5 control) from `multisize_arc_fullcov`
   without tempering. Tempering sharpens a right-skewed Δs toward its sub-mean mode, and
   bites harder on the flatter held-out conditional; if Δs gen mean recovers toward 0.99,

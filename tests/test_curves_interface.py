@@ -26,6 +26,7 @@ def test_hilbert_adapter_matches_legacy_functions(R):
         codes, _hilbert3d_encode(grid[:, 0], grid[:, 1], grid[:, 2], bits=bits)
     )
     dec = curve.decode(codes)
+    assert dec.dtype == np.int64  # legacy decode is uint64; adapter must cast
     lx, ly, lz = _hilbert3d_decode(codes, bits=bits)
     np.testing.assert_array_equal(dec, np.stack([lx, ly, lz], axis=1))
     # the defining identity: code index IS the arc length for pow-2 Hilbert
@@ -55,7 +56,9 @@ def test_gilbert_encode_decode_roundtrip_all_cells(R):
     codes = curve.encode(grid)
     assert codes.dtype == np.int64
     assert sorted(codes.tolist()) == list(range(R ** 3))  # bijection
-    np.testing.assert_array_equal(curve.decode(codes), grid)
+    dec = curve.decode(codes)
+    assert dec.dtype == np.int64
+    np.testing.assert_array_equal(dec, grid)
 
 
 @pytest.mark.parametrize("R", [4, 6, 10])

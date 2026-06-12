@@ -18,6 +18,7 @@ raw code arithmetic — that is what makes the two families interchangeable.
 from __future__ import annotations
 
 import os
+import zipfile
 from pathlib import Path
 
 import numpy as np
@@ -46,12 +47,18 @@ class HilbertCurve3D:
 
     def decode(self, codes: np.ndarray) -> np.ndarray:
         x, y, z = _hilbert3d_decode(np.asarray(codes, dtype=np.int64), bits=self._bits)
-        return np.stack([x, y, z], axis=-1)
+        # _hilbert3d_decode returns uint64; cast so both curve classes return
+        # int64 and cell deltas can't silently underflow.
+        return np.stack([x, y, z], axis=-1).astype(np.int64)
 
     def arc(self, codes: np.ndarray) -> np.ndarray:
         return np.asarray(codes, dtype=np.float64)
 
     def code_from_arc(self, s: np.ndarray, *, return_clamped: bool = False):
+        """Nearest code = clip(round(s), 0, R³-1); ``clamped`` is True where
+        round(s) itself left [0, R³) — round-first semantics, byte-identical to
+        the historical sampler. NOTE: differs from GilbertCurve3D, whose
+        ``clamped`` flags s outside [0, s_max] before rounding."""
         raw = np.round(np.asarray(s, dtype=np.float64)).astype(np.int64)
         codes = np.clip(raw, 0, self.ncells - 1)
         if return_clamped:
@@ -78,12 +85,17 @@ class GilbertCurve3D:
         )
         cache_file = cache_dir / f"gilbert3d_R{R}.npz"
         if cache_file.exists():
-            with np.load(cache_file) as z:
-                return (
-                    z["coords"].astype(np.int64),
-                    z["code_lut"].astype(np.int64),
-                    z["cumlen"].astype(np.float64),
-                )
+            try:
+                with np.load(cache_file) as z:
+                    return (
+                        z["coords"].astype(np.int64),
+                        z["code_lut"].astype(np.int64),
+                        z["cumlen"].astype(np.float64),
+                    )
+            except (OSError, ValueError, KeyError, EOFError, zipfile.BadZipFile):
+                # truncated/corrupt cache (full disk, interrupted copy, format
+                # drift): fall through and rebuild rather than brick every run
+                pass
         coords = gilbert3d_path(R, R, R)  # [M, 3]
         code_lut = np.empty((R, R, R), dtype=np.int64)
         code_lut[coords[:, 0], coords[:, 1], coords[:, 2]] = np.arange(
@@ -113,6 +125,10 @@ class GilbertCurve3D:
         return self.cumlen[np.asarray(codes, dtype=np.int64)]
 
     def code_from_arc(self, s: np.ndarray, *, return_clamped: bool = False):
+        """Nearest code along the curve via searchsorted on the strictly
+        monotone ``cumlen``; ``clamped`` is True where s lay outside
+        [0, s_max]. NOTE: differs from HilbertCurve3D, whose ``clamped``
+        uses historical round-first semantics."""
         s = np.asarray(s, dtype=np.float64)
         clamped = (s < 0.0) | (s > self.s_max)
         sc = np.clip(s, 0.0, self.s_max)
@@ -134,7 +150,11 @@ _CURVE_MEMO: dict[tuple[str, int], object] = {}
 
 
 def get_curve3d(ordering: str, R: int):
-    """Memoized curve factory. ordering in {"hilbert", "gilbert"}."""
+    """Memoized curve factory. ordering in {"hilbert", "gilbert"}.
+
+    The memo is per-process and not thread-locked; DataLoader fork-workers
+    each build/load their own copy (the disk LUT cache makes that cheap).
+    """
     key = (str(ordering).strip().lower(), int(R))
     if key[0] not in ("hilbert", "gilbert"):
         raise ValueError(f"no 3D curve for ordering {ordering!r}")

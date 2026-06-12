@@ -1,0 +1,43 @@
+==============================================================================
+Gilbert vs Hilbert Δs audit — constant-cell size-invariance
+CELL = 0.046875  MAX_CONFIGS = 2000
+==============================================================================
+
+--- Resolution rules ---
+size  L      N      R_hilbert   cell_hilbert  dev_h%   R_gilbert   cell_gilbert  dev_g% 
+L3      3.0     27          64      0.046875    +0.00%          64      0.046875    +0.00%
+L4      4.0     64         128      0.031250   -33.33%          86      0.046512    -0.78%
+L5      5.0    125         128      0.039062   -16.67%         106      0.047170    +0.63%
+
+--- Gilbert diagonal-step fraction ---
+(even R expected to be 0: all steps face-adjacent)
+  L3: R=64  diagonal-step fraction = 0.000000  (fully face-continuous)
+  L4: R=86  diagonal-step fraction = 0.000000  (fully face-continuous)
+  L5: R=106  diagonal-step fraction = 0.000000  (fully face-continuous)
+
+--- Computing arc targets ---
+  hilbert  L3: L=3.0, N=27, R=64, configs=1000
+  hilbert  L4: L=4.0, N=64, R=128, configs=1000
+  hilbert  L5: L=5.0, N=125, R=128, configs=1000
+  gilbert  L3: L=3.0, N=27, R=64, configs=1000
+  gilbert  L4: L=4.0, N=64, R=86, configs=1000
+  gilbert  L5: L=5.0, N=125, R=106, configs=1000
+
+--- KS statistics vs L3 reference (per ordering) ---
+ordering  size  R       cell      dev%    mean_ds   p50_ds    p90_ds    KS_ds    KS_fine   jump_frac 
+-----------------------------------------------------------------------------------------------------
+hilbert   L3        64   0.04688   +0.00%    0.9853    0.8217    1.8302   0.0000    0.0000    0.001000
+hilbert   L4       128   0.03125  -33.33%    0.9948    0.8716    1.7902   0.0420    0.0104    0.000746
+hilbert   L5       128   0.03906  -16.67%    0.9968    0.8532    1.9003   0.0293    0.0087    0.001226
+
+gilbert   L3        64   0.04688   +0.00%    0.9855    0.8255    1.8553   0.0000    0.0000    0.001231
+gilbert   L4        86   0.04651   -0.78%    0.9944    0.8914    1.7843   0.0549    0.0111    0.000746
+gilbert   L5       106   0.04717   +0.63%    0.9971    0.8471    1.8855   0.0355    0.0081    0.001073
+
+--- Verdict ---
+KS(Δs) L4: hilbert=0.0420  gilbert=0.0549  -> hilbert < gilbert
+KS(Δs) L5: hilbert=0.0293  gilbert=0.0355  -> hilbert < gilbert
+
+VERDICT: NO-GO — gilbert does not improve KS vs hilbert at L4 (h=0.0420/g=0.0549 at L4; h=0.0293/g=0.0355 at L5).
+
+(End of audit)

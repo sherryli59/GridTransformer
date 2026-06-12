@@ -351,3 +351,78 @@ Estimated round-1 cost: roughly one full baseline training run for the entire sc
 2. **Phase 2 diagnostic** ($\Delta_{\text{rot}}$) decides whether AUG/D enter the queue at all.
 3. **Stage 1 jump-NLL** decides who gets sampled; **Stage 2 gates** decide who gets the
    multi-size run; **Stage 3 L4 OTgap ≤ 0.3** is the only success criterion.
+
+---
+
+## Gilbert curve (constant cell) — 2026-06-12
+
+### What was built
+
+The Gilbert curve (generalized Hilbert on arbitrary cubic grids) was integrated
+end-to-end through the arc representation pipeline. The `curves.py` module provides
+`GilbertCurve3D` and `HilbertCurve3D` under a common `get_curve3d(ordering, R)`
+factory; `hilbert_arc_delta` accepts a `curve=` argument so both families share the
+same Δs/fine math. The dataset (`LJTransferableDataset`), sampler (`sample_lj.py`),
+and training CLI (`train.py`) all thread `--ordering {hilbert,gilbert}` through; the
+checkpoint `hparams` carry the ordering. The s-space arc math is unchanged: `arc(c)`
+returns cumulative physical arc length in cell units (for hilbert this equals the code
+index; for gilbert it tracks the actual step lengths, with even R giving cumlen == code
+index). The nearest-even resolution rule (`resolution_for_box_rule` with
+`ordering="gilbert"`) maps L to the nearest even R = 2·round(L/cell/2), keeping cell
+size to <1% of the target — L3→R=64 (exact), L4→R=86 (0.78% off), L5→R=106 (0.63%
+off). The octahedral diagnostic (`octahedral_nll_diagnostic.py`) was routed through the
+same factory: `arc_nll_for_configs` now accepts `ordering` and `--ordering` is exposed
+in the CLI, with `ordering="hilbert"` byte-identical to the original default.
+
+### Audit table (2000 MCMC configs/size; CELL = 3/64 = 0.046875)
+
+Resolution rules:
+
+| size | L   | N   | R_hilbert | cell_hilbert | dev_h%  | R_gilbert | cell_gilbert | dev_g%  |
+|------|-----|-----|-----------|-------------|---------|-----------|-------------|---------|
+| L3   | 3.0 | 27  | 64        | 0.046875    | +0.00%  | 64        | 0.046875    | +0.00%  |
+| L4   | 4.0 | 64  | 128       | 0.031250    | -33.33% | 86        | 0.046512    | -0.78%  |
+| L5   | 5.0 | 125 | 128       | 0.039062    | -16.67% | 106       | 0.047170    | +0.63%  |
+
+KS statistics vs L3 reference:
+
+| ordering | size | R   | cell     | dev%    | mean_Δs | p50_Δs | p90_Δs | KS_Δs  | KS_fine | jump_frac  |
+|----------|------|-----|----------|---------|---------|--------|--------|--------|---------|------------|
+| hilbert  | L3   | 64  | 0.04688  | +0.00%  | 0.9853  | 0.8217 | 1.8302 | 0.0000 | 0.0000  | 0.001000   |
+| hilbert  | L4   | 128 | 0.03125  | -33.33% | 0.9948  | 0.8716 | 1.7902 | 0.0420 | 0.0104  | 0.000746   |
+| hilbert  | L5   | 128 | 0.03906  | -16.67% | 0.9968  | 0.8532 | 1.9003 | 0.0293 | 0.0087  | 0.001226   |
+| gilbert  | L3   | 64  | 0.04688  | +0.00%  | 0.9855  | 0.8255 | 1.8553 | 0.0000 | 0.0000  | 0.001231   |
+| gilbert  | L4   | 86  | 0.04651  | -0.78%  | 0.9944  | 0.8914 | 1.7843 | 0.0549 | 0.0111  | 0.000746   |
+| gilbert  | L5   | 106 | 0.04717  | +0.63%  | 0.9971  | 0.8471 | 1.8855 | 0.0355 | 0.0081  | 0.001073   |
+
+### Diagonal-step facts
+
+All three gilbert grids (R=64, 86, 106) have **diagonal-step fraction = 0.000000** —
+fully face-continuous. The nearest-even resolution rule keeps all production grids in
+the even-R regime, where GilbertCurve3D behaves identically to HilbertCurve3D in terms
+of step continuity (cumlen == code index). Odd grids would introduce multi-cell steps of
+Euclidean length up to 3; production never encounters them.
+
+### Audit verdict: NO-GO (hilbert wins marginally; both small)
+
+The hypothesis that gilbert targets are MORE size-invariant was not borne out:
+hilbert KS(Δs) at L4=0.042 and L5=0.029 are both LOWER than gilbert KS(Δs) at
+L4=0.055 and L5=0.036. The effect is small (all values well below 0.10, far below the
+0.30 threshold that triggered concern in the K=1 study), and both orderings are in the
+"no heavy tail" regime. The mechanistic explanation: the Hilbert curve's self-similarity
+at pow-2 grids means the Δs distribution is nearly invariant to cell size changes —
+the recursion scales codes and positions together, and the KS distance is driven by
+geometric differences in how particles pack at different densities, not by curve
+cell-size mismatch. Gilbert's constant-cell rule introduces a slightly different R per
+size, which changes the coarse-grid bucketing and thus the Δs statistics in a way that
+modestly increases, rather than reduces, the KS distance to the L3 reference.
+
+### Decision rule
+
+Next training action = multi-size {L3,L5}→held-out-L4 rerun with **ORDERING=hilbert**
+(the production default, which is confirmed as the tighter target) — after the in-flight
+multi-size baseline finishes and on user go-ahead. Gilbert ordering remains implemented
+and available (`--ordering gilbert`) but the Δs audit does not provide a target-quality
+motivation to switch. Any future gilbert investigation should focus on conditions where
+cell-size constancy matters for the learned conditional (large N or very different L
+ratios), not on the target marginal KS statistics.

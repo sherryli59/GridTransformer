@@ -29,9 +29,8 @@ import h5py
 import numpy as np
 import torch
 
+from grid_transformer.data.curves import get_curve3d
 from grid_transformer.data.lj_transferable import (
-    _hilbert3d_encode,
-    _hilbert_bits,
     hilbert_arc_delta,
 )
 from grid_transformer.models.ar_registry import load_ar_checkpoint
@@ -70,28 +69,33 @@ def arc_nll_for_configs(
     box_lengths: Sequence[float],
     R: int,
     batch_size: int = 256,
+    ordering: str = "hilbert",
 ) -> np.ndarray:
     """Per-config arc-repr NLL (summed over the N-1 predicted particles).
 
-    Mirrors the training pipeline exactly: wrap -> Hilbert codes at resolution R ->
+    Mirrors the training pipeline exactly: wrap -> curve codes at resolution R ->
     stable sort -> hilbert_arc_delta targets (fine in cell units) -> teacher-forced
     forward with continuous input feedback -> MDN NLL. The token stream carries only
     the SOS embedding at position 0 (continuous_input mode ignores token content at
     t >= 1), so dummy SOS ids are correct here.
+
+    Args:
+        ordering: "hilbert" (default, pow-2 classical Hilbert) or "gilbert"
+            (generalized Hilbert for arbitrary cubic grids).
     """
     device = next(model.parameters()).device
     box = np.asarray(box_lengths, dtype=np.float64)
-    bits = _hilbert_bits(R)
+    curve = get_curve3d(ordering, R)
     cell = box / float(R)
 
     coords_list, arc_list = [], []
     for cfg in np.asarray(configs, dtype=np.float64):
         wrapped = np.mod(cfg, box)
         grid = np.clip(np.floor(wrapped / cell).astype(np.int64), 0, R - 1)
-        codes = _hilbert3d_encode(grid[:, 0], grid[:, 1], grid[:, 2], bits=bits)
+        codes = curve.encode(grid)
         order = np.argsort(codes, kind="stable")
         sorted_pos = wrapped[order]
-        arc = hilbert_arc_delta(sorted_pos, codes[order], box, R, periodic=True)
+        arc = hilbert_arc_delta(sorted_pos, codes[order], box, R, periodic=True, curve=curve)
         coords_list.append(sorted_pos.astype(np.float32))
         arc_list.append(arc)
 
@@ -125,6 +129,8 @@ def main() -> None:
     ap.add_argument("--hilbert_resolution", type=int, default=64)
     ap.add_argument("--batch_size", type=int, default=256)
     ap.add_argument("--ar_arch", default="auto")
+    ap.add_argument("--ordering", choices=["hilbert", "gilbert"], default="hilbert",
+                    help="Space-filling curve for encoding (default: hilbert)")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = ap.parse_args()
 
@@ -147,7 +153,8 @@ def main() -> None:
     for k, rot in enumerate(proper_octahedral_rotations()):
         rotated = rotate_wrap(configs, rot, box)
         nll = arc_nll_for_configs(
-            model, rotated, box_lengths=box, R=args.hilbert_resolution, batch_size=args.batch_size
+            model, rotated, box_lengths=box, R=args.hilbert_resolution,
+            batch_size=args.batch_size, ordering=args.ordering,
         )
         per_coord = nll / (n - 1)
         rows.append((k, nll.mean(), per_coord.mean()))

@@ -337,35 +337,42 @@ def hilbert_arc_delta(
     R: int,
     *,
     periodic: bool = True,
+    curve=None,
 ) -> np.ndarray:
-    """Compute (Δs, fine_x, fine_y, fine_z) AR targets from Hilbert-sorted positions.
+    """Compute (Δs, fine_x, fine_y, fine_z) AR targets from curve-sorted positions.
 
-    Δs    = (c_{i+1} - c_i) / X  where X = R³ // N.  ≈1 for local steps, size-invariant.
-    fine  = (r_{i+1} - cell_center_{i+1}) / cell_size  (dimensionless, range ≈ [-0.5, 0.5]).
+    Δs    = (s_{i+1} - s_i) / X  where s = cumulative arc length (cell units)
+            and X = ncells // N.  For the pow-2 Hilbert curve s == code index,
+            so this reduces to the historical (c_{i+1} - c_i) / X byte-exactly.
+            For gilbert curves s accounts for multi-cell steps on odd grids.
+    fine  = (r_{i+1} - cell_center_{i+1}) / cell_size  (dimensionless, ~[-0.5, 0.5]).
 
-    Normalizing fine by cell_size makes it size-invariant across system sizes at the same
-    density — the distribution is identical regardless of (N, L, R) when cell_size = L/R
-    is held constant.  Decode: pos = cell_center + fine * cell_size.
+    Normalizing fine by cell_size makes it size-invariant across system sizes at the
+    same density — the distribution is identical regardless of (N, L, R) when
+    cell_size = L/R is held constant.  Decode: pos = cell_center + fine * cell_size.
 
     Returns: [N-1, 4] float32.
     """
     N = len(sorted_pos)
     if N < 2:
         return np.zeros((0, 4), dtype=np.float32)
-    bits = _hilbert_bits(R)
-    X = max(1, int(R ** 3) // N)
+    if curve is None:
+        from .curves import get_curve3d  # lazy: curves.py imports this module
 
-    ax, ay, az = _hilbert3d_decode(hilbert_codes.astype(np.int64), bits)
+        curve = get_curve3d("hilbert", R)
+    X = max(1, int(curve.ncells) // N)
+
+    codes = hilbert_codes.astype(np.int64)
     cell_size = np.asarray(box, dtype=np.float64) / float(R)
-    cell_centers = (np.stack([ax, ay, az], axis=1).astype(np.float64) + 0.5) * cell_size
+    cell_centers = (curve.decode(codes).astype(np.float64) + 0.5) * cell_size
 
     fine = sorted_pos.astype(np.float64) - cell_centers
     if periodic:
         fine = fine - np.round(fine / cell_size) * cell_size
 
-    delta_code = hilbert_codes[1:].astype(np.float64) - hilbert_codes[:-1].astype(np.float64)
-    delta_s = (delta_code / float(X)).astype(np.float32)
-    fine_dest = (fine[1:] / cell_size).astype(np.float32)  # normalized: range ≈ [-0.5, 0.5]
+    s = curve.arc(codes)
+    delta_s = ((s[1:] - s[:-1]) / float(X)).astype(np.float32)
+    fine_dest = (fine[1:] / cell_size).astype(np.float32)  # normalized: ~[-0.5, 0.5]
 
     return np.concatenate([delta_s[:, None], fine_dest], axis=1)  # [N-1, 4]
 

@@ -1,6 +1,6 @@
 ==============================================================================
 Gilbert vs Hilbert Δs audit — constant-cell size-invariance
-CELL = 0.046875  MAX_CONFIGS = 2000
+CELL = 0.046875  MAX_CONFIGS = 1000
 ==============================================================================
 
 --- Resolution rules ---
@@ -38,6 +38,7 @@ gilbert   L5       106   0.04717   +0.63%    0.9971    0.8471    1.8855   0.0355
 KS(Δs) L4: hilbert=0.0420  gilbert=0.0549  -> hilbert < gilbert
 KS(Δs) L5: hilbert=0.0293  gilbert=0.0355  -> hilbert < gilbert
 
-VERDICT: NO-GO — gilbert does not improve KS vs hilbert at L4 (h=0.0420/g=0.0549 at L4; h=0.0293/g=0.0355 at L5).
+VERDICT: MARGINALS PASS for BOTH orderings (all KS(Δs) < 0.10) — no marginal-level blocker for either curve; hilbert is marginally tighter.
+This audit does NOT decide the gilbert hypothesis (constant-cell benefit lives in the conditional, invisible to marginal KS). GO/NO-GO for gilbert requires the model-level A/B: held-out-L4 NLL/OTgap at matched cell (ORDERING=gilbert) vs the octave-cell hilbert baseline.
 
 (End of audit)

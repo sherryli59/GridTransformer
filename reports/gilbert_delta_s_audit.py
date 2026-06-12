@@ -26,7 +26,8 @@ from scipy.stats import ks_2samp
 # Constants
 # ---------------------------------------------------------------------------
 CELL = 3.0 / 64          # training cell size: 0.046875 exactly
-MAX_CONFIGS = 2000        # per file
+MAX_CONFIGS = 1000        # per file (= n_chains in the current h5 files; we take
+                          # the last frame of each independent chain)
 
 DATA_FILES = {
     "L3": "/mnt/ssd/mcmc/lj_mcmc_sweep_3d/lj3d_L3_rho1.0_N27_T1.0.h5",
@@ -223,17 +224,27 @@ def main():
     out(f"KS(Δs) L4: hilbert={h_l4:.4f}  gilbert={g_l4:.4f}  -> {'gilbert ≤ hilbert' if gilbert_wins_l4 else 'hilbert < gilbert'}")
     out(f"KS(Δs) L5: hilbert={h_l5:.4f}  gilbert={g_l5:.4f}  -> {'gilbert ≤ hilbert' if gilbert_wins_l5 else 'hilbert < gilbert'}")
 
-    if gilbert_wins_l4 and gilbert_wins_l5 and both_small:
-        out("\nVERDICT: GO — gilbert constant-cell targets are at least as size-invariant as hilbert "
-            "at both L4 and L5, and all KS values are small (< 0.10).")
-        out("Recommendation: proceed with ORDERING=gilbert for multi-size {L3,L5}→held-out-L4 rerun.")
-    elif not both_small:
+    # NOTE on what this audit can and cannot decide: it compares MARGINAL
+    # (Δs, fine) distributions. Gilbert's hypothesized benefit — constant
+    # physical cell size ℓ so the learned CONDITIONAL p(Δs, fine | context)
+    # transfers across box sizes — is structurally invisible to a marginal
+    # KS (the fine marginal is ~uniform for any ℓ << sigma). The audit can
+    # only flag a marginal-level regression; it cannot confirm or refute the
+    # conditional-level hypothesis. The decisive test is the model-level A/B:
+    # held-out L4 NLL/OTgap with ORDERING=gilbert (matched cell) vs the
+    # hilbert octave-cell baseline.
+    if not both_small:
         out(f"\nVERDICT: NO-GO — KS values are large (L4_h={h_l4:.3f}, L4_g={g_l4:.3f}, "
-            f"L5_h={h_l5:.3f}, L5_g={g_l5:.3f}). Both curves show distribution mismatch.")
+            f"L5_h={h_l5:.3f}, L5_g={g_l5:.3f}). Both curves show marginal distribution "
+            f"mismatch; investigate before any training.")
     else:
-        out(f"\nVERDICT: NO-GO — gilbert does not improve KS vs hilbert at "
-            f"{'L4' if not gilbert_wins_l4 else 'L5'} "
-            f"(h={h_l4:.4f}/g={g_l4:.4f} at L4; h={h_l5:.4f}/g={g_l5:.4f} at L5).")
+        better = "gilbert" if (gilbert_wins_l4 and gilbert_wins_l5) else "hilbert"
+        out("\nVERDICT: MARGINALS PASS for BOTH orderings (all KS(Δs) < 0.10) — no "
+            f"marginal-level blocker for either curve; {better} is marginally tighter.")
+        out("This audit does NOT decide the gilbert hypothesis (constant-cell benefit "
+            "lives in the conditional, invisible to marginal KS). GO/NO-GO for gilbert "
+            "requires the model-level A/B: held-out-L4 NLL/OTgap at matched cell "
+            "(ORDERING=gilbert) vs the octave-cell hilbert baseline.")
 
     out("\n(End of audit)")
 

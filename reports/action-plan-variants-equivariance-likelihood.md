@@ -374,7 +374,7 @@ off). The octahedral diagnostic (`octahedral_nll_diagnostic.py`) was routed thro
 same factory: `arc_nll_for_configs` now accepts `ordering` and `--ordering` is exposed
 in the CLI, with `ordering="hilbert"` byte-identical to the original default.
 
-### Audit table (2000 MCMC configs/size; CELL = 3/64 = 0.046875)
+### Audit table (1000 MCMC configs/size — last frame of each of 1000 independent chains; CELL = 3/64 = 0.046875)
 
 Resolution rules:
 
@@ -403,26 +403,36 @@ the even-R regime, where GilbertCurve3D behaves identically to HilbertCurve3D in
 of step continuity (cumlen == code index). Odd grids would introduce multi-cell steps of
 Euclidean length up to 3; production never encounters them.
 
-### Audit verdict: NO-GO (hilbert wins marginally; both small)
+### Audit verdict: MARGINALS PASS for both orderings; gilbert hypothesis UNTESTED here
 
-The hypothesis that gilbert targets are MORE size-invariant was not borne out:
-hilbert KS(Δs) at L4=0.042 and L5=0.029 are both LOWER than gilbert KS(Δs) at
-L4=0.055 and L5=0.036. The effect is small (all values well below 0.10, far below the
-0.30 threshold that triggered concern in the K=1 study), and both orderings are in the
-"no heavy tail" regime. The mechanistic explanation: the Hilbert curve's self-similarity
-at pow-2 grids means the Δs distribution is nearly invariant to cell size changes —
-the recursion scales codes and positions together, and the KS distance is driven by
-geometric differences in how particles pack at different densities, not by curve
-cell-size mismatch. Gilbert's constant-cell rule introduces a slightly different R per
-size, which changes the coarse-grid bucketing and thus the Δs statistics in a way that
-modestly increases, rather than reduces, the KS distance to the L3 reference.
+**Both orderings are size-invariant at the marginal level** (all KS(Δs) < 0.06,
+KS(fine) < 0.012 — far below the 0.30 threshold that triggered concern in the K=1
+study). Hilbert's marginal KS is statistically tighter than gilbert's (paired
+gilbert−hilbert diff at L4: 0.013, config-clustered bootstrap CI95 [0.007, 0.019],
+gilbert higher in 100% of 200 resamples — real, not noise). Mechanistic reading:
+pow-2 Hilbert self-similarity makes the Δs *marginal* nearly cell-size-invariant
+(the recursion rescales codes and X together), while gilbert's per-size R changes
+the coarse bucketing slightly.
+
+**What this audit cannot decide:** the gilbert motivation was never the marginal —
+it is that the physical cell scale ℓ (varying 33%/17% across sizes under hilbert
+octave rounding, <1% under gilbert) enters the learned **conditional**
+p(Δs, fine | context). The fine marginal is ~uniform for any ℓ ≪ σ, so a marginal
+KS is structurally insensitive to exactly the effect gilbert fixes. This audit
+therefore **neither confirms nor refutes** the gilbert hypothesis; it only
+establishes there is no marginal-level blocker for either curve. It also removes
+one suspect: any held-out-L4 degradation under hilbert is NOT explained by
+target-marginal shift.
 
 ### Decision rule
 
-Next training action = multi-size {L3,L5}→held-out-L4 rerun with **ORDERING=hilbert**
-(the production default, which is confirmed as the tighter target) — after the in-flight
-multi-size baseline finishes and on user go-ahead. Gilbert ordering remains implemented
-and available (`--ordering gilbert`) but the Δs audit does not provide a target-quality
-motivation to switch. Any future gilbert investigation should focus on conditions where
-cell-size constancy matters for the learned conditional (large N or very different L
-ratios), not on the target marginal KS statistics.
+GO/NO-GO for gilbert requires the **model-level A/B**: held-out-L4 NLL/OTgap with
+ORDERING=gilbert (matched cell, L4 eval at ℓ within 0.8% of training) vs the
+hilbert octave-cell baseline (L4 eval at ℓ 33% outside the training span) — after
+the in-flight multi-size baseline finishes and on user go-ahead. Until that A/B
+runs, hilbert remains the default on the grounds that it is the production-validated
+curve with no marginal-target degradation — **not** on the grounds that gilbert was
+shown inferior. A cheap intermediate signal: evaluate the finished multi-size hilbert
+checkpoint on L4 caches built at R=64 (ℓ=0.0625) vs R=128 (ℓ=0.03125); if those two
+readings differ materially, cell-size sensitivity is real and the gilbert A/B is
+strongly motivated.

@@ -42,7 +42,9 @@ def test_arc_delta_gilbert_roundtrip(R):
     X = max(1, curve.ncells // n)
     cell = box / R
 
-    # manual s-space decode, step by step
+    # manual s-space decode, step by step. Exactness relies on cumlen gaps
+    # (>= 1 cell) dwarfing the float32 Δs reconstruction error (~1e-4 at these
+    # magnitudes); revisit if Δs storage precision or curve density changes.
     c = codes[0]
     for i in range(n - 1):
         s_next = curve.arc(np.array([c]))[0] + float(arc[i, 0]) * X

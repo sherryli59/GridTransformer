@@ -114,63 +114,11 @@ def test_resolution_for_box_gilbert_is_nearest_even(tmp_path):
         local_bins=8,
         random_grid_shift=False,
     )
-    # gilbert: nearest_even(round(L/cell))
-    # L=3.0: round(3.0/0.046875)=64 -> nearest_even(64)=64
-    # L=4.0: round(4.0/0.046875)=85.3..->85 -> nearest_even(85)=round(85/2)*2=86
-    # L=5.0: round(5.0/0.046875)=106.6..->107 -> nearest_even(107)=round(107/2)*2=106? No:
-    #   round(107/2.0)=54 (half-even), but nearest even to 107 is 106 (even round-down)
-    #   Spec: round(n/2)*2 where n=round(L/cell)=107 -> round(107/2.0)=54 (python rounds half to even)
-    #   but 107/2=53.5 -> round to nearest even = 54 -> 54*2=108. Let me recalc:
-    #   Wait, _resolution_for_box gilbert: max(2, int(round(n/2.0))*2)
-    #   n=107: round(107/2.0)=round(53.5)=54 (banker's rounding) -> 54*2=108?
-    #   But spec says 106 for L=5.0. Let me re-read the spec:
-    #   "gilbert -> nearest EVEN integer". For 107, nearest even is 106 or 108.
-    #   The plan says 106. The formula round(n/2)*2:
-    #   107/2 = 53.5 -> Python round(53.5) = 54 (banker's rounds to even) -> 108?
-    #   Hmm. Let me use math.floor(n/2)*2 for round-down behavior:
-    #   floor(107/2)*2 = 53*2 = 106. That matches the spec!
-    #
-    # The plan says: max(2, int(round(n / 2.0)) * 2)
-    # Python: round(53.5) = 54 (half-to-even), round(42.5) = 42, round(43.5) = 44
-    # For n=85: round(85/2.0)=round(42.5)=42 (half-to-even) -> 84, not 86!
-    # So round(n/2)*2 gives 84 for L=4.0, not 86.
-    #
-    # The spec says 86 for L=4.0. This must use a different formula.
-    # nearest even to 85: could be 84 or 86, spec says 86 (round-up).
-    # Use int(round(n / 2.0 + 0.5)) * 2? No...
-    # Use (n + 1) // 2 * 2 (always round up to nearest even): 85->86, 107->108. But spec says 106.
-    # Use n // 2 * 2 (always round down): 85->84, 107->106. But spec says 86 for L=4.0.
-    #
-    # Actually "nearest even": 85 is odd, nearest even is 84 (diff 1) or 86 (diff 1). Tie -> ?
-    # 107 is odd, nearest even is 106 (diff 1) or 108 (diff 1). Tie -> ?
-    # Spec says 86 for 85 but 106 for 107. That's inconsistent with any single rounding rule...
-    # UNLESS n values are different:
-    # L=4.0, cell=0.046875: 4.0/0.046875 = 85.333... -> round = 85 -> nearest even = 86
-    # L=5.0, cell=0.046875: 5.0/0.046875 = 106.666... -> round = 107 -> nearest even = 106???
-    # Wait: 106.666 rounds to 107, nearest even to 107 is 106 or 108.
-    # But if we directly round to even: round(85.333/2)*2 = round(42.666)*2 = 43*2 = 86 ✓
-    # And: round(106.666/2)*2 = round(53.333)*2 = 53*2 = 106 ✓
-    # And: round(64/2)*2 = round(32)*2 = 32*2 = 64 ✓
-    # So the formula is: max(2, int(round(n/2.0))*2) BUT n = round(L/cell) first?
-    # NO — the plan says n = max(2, round(L/cell)), then for gilbert: max(2, round(n/2)*2)
-    # Let me recheck with n = round(L/cell) directly (not pre-rounded):
-    # L=4.0: n = max(2, round(4.0/0.046875)) = round(85.333) = 85
-    # round(85/2) = round(42.5) = 42 (banker's) -> 84. Still 84.
-    # But round(85.333/2) = round(42.666) = 43 -> 86! ✓
-    # L=5.0: round(106.666/2) = round(53.333) = 53 -> 106 ✓
-    # L=3.0: round(64/2) = round(32) = 32 -> 64 ✓
-    # So the formula should use L/cell_size DIRECTLY, not pre-rounded:
-    # n = L / cell_size; return max(2, int(round(n/2.0))*2)
-    #
-    # The plan's pseudocode: n = max(2, int(round(L / self.cell_size)))
-    # then for gilbert: max(2, int(round(n / 2.0)) * 2)
-    # With banker's rounding: n=85 -> round(42.5)=42 -> 84. Doesn't match spec.
-    #
-    # CONCLUSION: The plan's formula needs adjustment. The correct formula to match
-    # the spec (64/86/106) is: max(2, int(round(L / cell_size / 2.0)) * 2)
-    # i.e., round (L/cell)/2 directly without pre-rounding to integer.
-    # I'll implement that and write the test to match.
-
+    # gilbert rule: R = round(L/cell/2)*2, i.e. the nearest EVEN integer to the
+    # real-valued L/cell (85.33 -> 86, 106.67 -> 106). Dividing by 2 BEFORE any
+    # integer rounding is essential: pre-rounding L/cell to int (85, 107) puts
+    # the halving on exact .5 ties where Python's banker's rounding gives the
+    # FARTHER even number (85 -> 84, 107 -> 108).
     assert ds_g._resolution_for_box(np.array([3.0, 3.0, 3.0])) == 64
     assert ds_g._resolution_for_box(np.array([4.0, 4.0, 4.0])) == 86
     assert ds_g._resolution_for_box(np.array([5.0, 5.0, 5.0])) == 106

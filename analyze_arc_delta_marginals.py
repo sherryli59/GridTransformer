@@ -94,7 +94,7 @@ def main():
     print("wrote", f"{args.out}/arc_delta_ds_heatmap_{args.tag}.png")
 
     # ---------- 4. example per-index histograms ----------
-    sample_idx = [1, 30, 62, 100, 123]
+    sample_idx = sorted({1, T // 4, T // 2, (3 * T) // 4, T - 1})
     fig, axes = plt.subplots(2, len(sample_idx), figsize=(4 * len(sample_idx), 8))
     for col, t in enumerate(sample_idx):
         for row, j in enumerate([0, 1]):  # Δs and fine_x

@@ -323,10 +323,10 @@ def _validate_arc_repr_cache(*, ordering: str, periodic: bool, has_absolute_coor
         )
     if not periodic:
         raise ValueError("arc_repr=True is only supported for periodic systems.")
-    if str(ordering).strip().lower() != "hilbert":
+    if str(ordering).strip().lower() not in ("hilbert", "gilbert"):
         raise ValueError(
-            f"arc_repr=True requires a Hilbert-ordered cache, got ordering={ordering!r}. "
-            "Δs targets assume Hilbert-monotone codes along the stored particle sequence."
+            f"arc_repr=True requires a Hilbert- or Gilbert-ordered cache, got ordering={ordering!r}. "
+            "Δs targets assume space-filling-curve-monotone codes along the stored particle sequence."
         )
 
 
@@ -952,8 +952,10 @@ class LJTransferableDataset(Dataset):
         self.file_paths = _normalize_file_paths(file_paths, h5_path=h5_path)
         self.periodic = bool(periodic)
         self.ordering = str(ordering).strip().lower()
-        if self.ordering not in ("hilbert", "spectral"):
-            raise ValueError(f"ordering must be 'hilbert' or 'spectral', got {ordering!r}")
+        if self.ordering not in ("hilbert", "gilbert", "spectral"):
+            raise ValueError(
+                f"ordering must be 'hilbert', 'gilbert' or 'spectral', got {self.ordering!r}"
+            )
         self.spectral_sigma = float(spectral_sigma)
         if self.spectral_sigma <= 0.0:
             raise ValueError(f"spectral_sigma must be > 0, got {self.spectral_sigma}")
@@ -1027,6 +1029,12 @@ class LJTransferableDataset(Dataset):
                 raise ValueError(f"curve_rail_offsets must be positive integers, got {offsets}")
             if self.curve_rail_mode == "fixed_template" and self.curve_rail_k <= 0:
                 raise ValueError(f"curve_rail_k must be positive, got {self.curve_rail_k}")
+            if self.ordering == "gilbert":
+                raise NotImplementedError(
+                    "curve rail + gilbert ordering is not wired (rail waypoint decode and "
+                    "the sampler's rail mirror assume the pow-2 Hilbert curve); train rails "
+                    "with ordering='hilbert' or extend _curve_waypoints_3d via get_curve3d."
+                )
             if self.ordering != "hilbert":
                 raise ValueError("use_curve_rail=True requires ordering='hilbert'.")
             if bool(factorized) and self.curve_rail_mode != "fixed_template":
@@ -1101,13 +1109,21 @@ class LJTransferableDataset(Dataset):
 
     def _resolution_for_box(self, box: Optional[np.ndarray]) -> int:
         """Grid resolution (cells per axis) for a box. Constant cell size when
-        self.cell_size is set: R = next_pow2(round(max(L)/cell_size)); else the
-        fixed global resolution (constant cell count)."""
+        self.cell_size is set: hilbert -> next_pow2(round(max(L)/cell_size))
+        (constant only up to an octave); gilbert -> nearest EVEN integer
+        (constant to <1%, even sizes keep the curve fully face-continuous).
+        Else the fixed global resolution (constant cell count)."""
         if self.cell_size is None or box is None:
             return int(self.hilbert_resolution)
         L = float(np.max(np.asarray(box, dtype=np.float64)))
+        if self.ordering == "gilbert":
+            # Round L/cell directly to the nearest even integer to keep cell size
+            # constant to <1% across box sizes. Dividing by 2 before rounding and
+            # multiplying back avoids half-integer ties that depend on the
+            # pre-rounded integer value.
+            return max(2, int(round(L / self.cell_size / 2.0)) * 2)
         n = max(2, int(round(L / self.cell_size)))
-        return int(1 << int(math.ceil(math.log2(n))))  # next power of two
+        return int(1 << int(math.ceil(math.log2(n))))  # next power of two (hilbert)
 
     def _space_filling_codes_2d(self, grid: np.ndarray, resolution: int) -> np.ndarray:
         h = np.empty(grid.shape[0], dtype=np.int64)
@@ -1116,8 +1132,10 @@ class LJTransferableDataset(Dataset):
         return h
 
     def _space_filling_codes_3d(self, grid: np.ndarray, resolution: int) -> np.ndarray:
-        bits = _hilbert_bits(int(resolution))
-        return _hilbert3d_encode(grid[..., 0], grid[..., 1], grid[..., 2], bits=bits)
+        from .curves import get_curve3d  # lazy: curves.py may import this module
+
+        kind = "gilbert" if self.ordering == "gilbert" else "hilbert"
+        return get_curve3d(kind, int(resolution)).encode(grid)
 
     def _space_filling_codes(self, grid: np.ndarray, resolution: Optional[int] = None) -> np.ndarray:
         R = int(self.hilbert_resolution if resolution is None else resolution)
@@ -1280,7 +1298,7 @@ class LJTransferableDataset(Dataset):
         else:
             shifted = working
 
-        if self.ordering == "hilbert":
+        if self.ordering in ("hilbert", "gilbert"):
             if self.periodic:
                 order = self._hilbert_sort_periodic(shifted, box=box)
             else:
@@ -1379,8 +1397,8 @@ class LJTransferableDataset(Dataset):
     ) -> dict[str, np.ndarray]:
         if int(self.coord_dim) != 3:
             raise ValueError(f"_build_batch_3d requires coord_dim=3, got {self.coord_dim}")
-        if self.ordering != "hilbert":
-            raise ValueError(f"_build_batch_3d requires ordering='hilbert', got {self.ordering!r}")
+        if self.ordering not in ("hilbert", "gilbert"):
+            raise ValueError(f"_build_batch_3d requires ordering='hilbert' or 'gilbert', got {self.ordering!r}")
         if coords_chunk.ndim != 3 or coords_chunk.shape[-1] != 3:
             raise ValueError(
                 f"coords_chunk must have shape [B, N, 3], got {tuple(coords_chunk.shape)}"
@@ -1717,6 +1735,9 @@ class LJTransferableCachedDataset(Dataset):
         if self.cell_size is None:
             return int(self.hilbert_resolution)
         L = float(np.max(np.asarray(box, dtype=np.float64)))
+        ordering = str(self.metadata.get("ordering", "hilbert") or "hilbert").strip().lower()
+        if ordering == "gilbert":
+            return max(2, int(round(L / self.cell_size / 2.0)) * 2)
         n = max(2, int(round(L / self.cell_size)))
         return int(1 << int(math.ceil(math.log2(n))))
 
@@ -1806,21 +1827,24 @@ class LJTransferableCachedDataset(Dataset):
                 seq_len=seq_len,
             )
         if self.arc_repr:
+            from .curves import get_curve3d  # lazy to avoid circular import
+
             particle_len = int(self.particle_length_all[idx].item())
             if particle_len <= 0:
                 particle_len = int(self.absolute_coords_all.shape[1])
             abs_coords_np = self.absolute_coords_all[idx, :particle_len, :].numpy()
             box_np = self.box_size_all[idx].numpy()
             R = self._resolution_for_box(box_np)
-            bits = _hilbert_bits(R)
+            ordering = str(self.metadata.get("ordering", "hilbert") or "hilbert").strip().lower()
+            curve = get_curve3d("gilbert" if ordering == "gilbert" else "hilbert", R)
             cell_size_np = box_np.astype(np.float64) / float(R)
             grid = np.floor(
                 np.mod(abs_coords_np, box_np[None, :]).astype(np.float64) / cell_size_np
             ).astype(np.int64)
             grid = np.clip(grid, 0, R - 1)
-            codes = _hilbert3d_encode(grid[:, 0], grid[:, 1], grid[:, 2], bits=bits)
+            codes = curve.encode(grid)
             item["arc_delta"] = torch.from_numpy(
-                hilbert_arc_delta(abs_coords_np, codes, box_np, R, periodic=self.periodic)
+                hilbert_arc_delta(abs_coords_np, codes, box_np, R, periodic=self.periodic, curve=curve)
             )  # [N-1, 4]
         return item
 
@@ -1924,7 +1948,7 @@ def build_lj_transferable_cache(
     can_batch_3d = (
         int(dataset.coord_dim) == 3
         and (not augment_90deg_rotations)
-        and dataset.ordering == "hilbert"
+        and dataset.ordering in ("hilbert", "gilbert")
     )
     effective_num_augmentations = int(num_augmentations) if (can_batch_3d and bool(dataset.periodic)) else 1
     n_samples = int(base_n_samples * len(rotation_indices) * effective_num_augmentations)

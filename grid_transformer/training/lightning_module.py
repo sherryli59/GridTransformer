@@ -395,8 +395,10 @@ class LJTransferableDataModule(pl.LightningDataModule):
         self.hilbert_resolution = int(hilbert_resolution)
         self.cell_size = None if cell_size is None else float(cell_size)
         self.ordering = str(ordering).strip().lower()
-        if self.ordering not in ("hilbert", "spectral"):
-            raise ValueError(f"ordering must be 'hilbert' or 'spectral', got {ordering!r}")
+        if self.ordering not in ("hilbert", "gilbert", "spectral"):
+            raise ValueError(
+                f"ordering must be 'hilbert', 'gilbert' or 'spectral', got {ordering!r}"
+            )
         self.spectral_sigma = float(spectral_sigma)
         if self.spectral_sigma <= 0.0:
             raise ValueError(f"spectral_sigma must be > 0, got {self.spectral_sigma}")

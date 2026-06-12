@@ -5,9 +5,11 @@ Copyright (c) 2018 Jakub Červený). Unlike the classical Hilbert curve
 (grid_transformer.data.lj_transferable._hilbert3d_encode), the grid sides need
 not be powers of two, which lets the physical cell size be held ~constant across
 box lengths. The price: on odd-size grids a small fraction of consecutive steps
-are diagonal (length sqrt(2) or sqrt(3) cells) — consumers must use the
-cumulative arc length, not the code index, as the along-curve coordinate (see
-curves.py).
+span more than one cell — measured Euclidean step lengths {1, sqrt2, 2, 2*sqrt2,
+3} (e.g. a (3,0,0) jump on 5^3); even cubic grids are fully face-continuous
+(all steps length 1, verified up to R=106). Consumers must therefore use the
+cumulative arc length, not the code index, as the along-curve coordinate
+(wrapped with a disk-cached LUT by the curve abstraction built on top of this).
 """
 from __future__ import annotations
 
@@ -144,12 +146,13 @@ def gilbert3d_path(nx: int, ny: int, nz: int) -> np.ndarray:
 
     Returns an array of shape [nx*ny*nz, 3], dtype int64: row i is the grid
     cell (ix, iy, iz) visited at curve position i. The curve visits every cell
-    exactly once with steps of Chebyshev distance 1 (no jumps). On even cubic
-    grids all steps are face-adjacent (L1=1); on odd grids a small fraction
-    (~1-3 %) are diagonal.
+    exactly once. On even cubic grids all steps are face-adjacent (L1=1,
+    verified up to R=106); on odd grids a small fraction of steps (measured
+    1-8%, highest on small grids) span more than one cell, with Euclidean
+    lengths up to 3 (e.g. one (3,0,0) jump on 5^3).
 
-    Pure Python recursion; run once per resolution and cache the result (see
-    curves.py which wraps this with a disk cache).
+    Pure Python recursion; run once per resolution and cache the result (the
+    curve abstraction built on top of this wraps it with a disk-cached LUT).
 
     Args:
         nx: number of grid cells along x (>= 1).

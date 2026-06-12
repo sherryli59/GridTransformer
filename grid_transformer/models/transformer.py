@@ -294,6 +294,7 @@ class GraphormerAR(pl.LightningModule):
         curve_rail_offsets: Optional[Sequence[int]] = None,
         hilbert_resolution: int = 128,
         cell_size: Optional[float] = None,
+        ordering: str = "hilbert",
         curve_rail_mode: str = "lookahead",
         curve_rail_window: float = 1.0,
         curve_rail_reference: str = "absolute",
@@ -434,6 +435,7 @@ class GraphormerAR(pl.LightningModule):
             self.curve_rail_offsets = tuple(int(o) for o in curve_rail_offsets)
         self.hilbert_resolution = int(hilbert_resolution)
         self.cell_size = float(cell_size) if cell_size is not None else None
+        self.ordering = str(ordering).strip().lower()
         self.curve_rail_mode = str(curve_rail_mode)
         self.curve_rail_window = float(curve_rail_window)
         self.curve_rail_reference = str(curve_rail_reference)

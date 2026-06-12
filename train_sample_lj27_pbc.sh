@@ -853,6 +853,7 @@ if [[ "${RUN_SAMPLE}" == "1" ]]; then
     --sample_batch_size "${SAMPLE_BATCH_SIZE}"
     --periodic
     --ar_arch "${AR_ARCH}"
+    --ordering "${ORDERING}"
     --save "${SAMPLE_OUT}"
   )
   if [[ "${FACTORIZED}" == "1" ]]; then

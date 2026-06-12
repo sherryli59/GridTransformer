@@ -287,3 +287,70 @@ def test_rail_resolution_for_box_gilbert_rule():
     box = np.array([4.0, 4.0, 4.0])
     assert _rail_resolution_for_box(box, 64, 0.046875) == 128  # hilbert default
     assert _rail_resolution_for_box(box, 64, 0.046875, ordering="gilbert") == 86
+
+
+# ---------------------------------------------------------------------------
+# Task 6: ordering threaded through model checkpoint hparams
+# ---------------------------------------------------------------------------
+
+
+def test_model_checkpoint_stores_ordering(tmp_path):
+    """GraphormerAR stores ordering in hparams so load_from_checkpoint round-trips it.
+
+    Covers:
+    - ordering="gilbert" is accepted as a constructor kwarg.
+    - model.ordering == "gilbert" after construction.
+    - ordering lands in model.hparams (what save_hyperparameters captures;
+      this is what load_from_checkpoint uses for the hparam dict).
+    - Full checkpoint save + load_from_checkpoint round-trip returns "gilbert".
+    - Default ordering is "hilbert" (backward compat for old checkpoints that
+      lack the hparam; load_from_checkpoint falls back to the constructor default).
+    """
+    import pytorch_lightning as pl
+    from grid_transformer.models.transformer import GraphormerAR
+
+    # Minimal kwargs needed to construct a non-trivial but tiny model.
+    MINIMAL_KWARGS = dict(
+        K=65,
+        d_model=32,
+        n_layer=2,
+        n_head=4,
+        dropout=0.0,
+        sos_id=64,
+        use_edge_bias=True,
+        ida_spatial_dim=3,
+        torus=True,
+        use_continuous_head=True,
+        num_mixtures=3,
+        full_covariance=True,
+        continuous_input=True,
+        arc_repr=True,
+    )
+
+    # --- (a) ordering="gilbert" is stored on the model and in hparams ---
+    model_g = GraphormerAR(**MINIMAL_KWARGS, ordering="gilbert")
+    assert model_g.ordering == "gilbert", f"Expected 'gilbert', got {model_g.ordering!r}"
+    assert "ordering" in model_g.hparams, "ordering missing from hparams"
+    assert model_g.hparams["ordering"] == "gilbert"
+
+    # --- (b) default ordering is "hilbert" (backward compat) ---
+    model_h = GraphormerAR(**MINIMAL_KWARGS)
+    assert model_h.ordering == "hilbert"
+    assert model_h.hparams["ordering"] == "hilbert"
+
+    # --- (c) full checkpoint round-trip ---
+    ckpt_path = str(tmp_path / "test_ordering.ckpt")
+    trainer = pl.Trainer(
+        logger=False,
+        enable_checkpointing=False,
+        max_epochs=0,
+        accelerator="cpu",
+    )
+    trainer.strategy.connect(model_g)
+    trainer.save_checkpoint(ckpt_path)
+
+    loaded = GraphormerAR.load_from_checkpoint(ckpt_path)
+    assert getattr(loaded, "ordering", None) == "gilbert", (
+        f"After load_from_checkpoint, expected ordering='gilbert', "
+        f"got {getattr(loaded, 'ordering', None)!r}"
+    )

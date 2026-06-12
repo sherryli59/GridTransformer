@@ -105,9 +105,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--lj_transfer_ordering",
         type=str,
-        choices=("hilbert", "spectral"),
+        choices=("hilbert", "gilbert", "spectral"),
         default="hilbert",
-        help="Particle ordering used before relative-delta tokenization.",
+        help="Particle ordering used before relative-delta tokenization. "
+        "'gilbert' = generalized Hilbert; allows non-pow-2 R for constant cell size across box sizes.",
     )
     parser.add_argument(
         "--lj_transfer_spectral_sigma",
@@ -365,8 +366,8 @@ def parse_args() -> argparse.Namespace:
         "--arc_repr",
         type=int,
         default=0,
-        help="Use Hilbert arc-length representation (Δs, fine_x, fine_y, fine_z) as AR target "
-        "instead of (Δx, Δy, Δz). Requires --continuous_input, --ordering hilbert, --periodic. "
+        help="Use arc-length representation (Δs, fine_x, fine_y, fine_z) as AR target "
+        "instead of (Δx, Δy, Δz). Requires --continuous_input, --lj_transfer_ordering hilbert or gilbert, --periodic. "
         "The 4D target is scale-invariant with constant cell size.",
     )
     parser.add_argument(
@@ -624,15 +625,15 @@ def warm_start_from_checkpoint(model, ckpt_path: str) -> dict:
 
 
 def _validate_arc_repr_flags(args) -> None:
-    """arc_repr targets are Hilbert-code differences: they require continuous input
-    feedback and Hilbert ordering. Reads --lj_transfer_ordering (the actual CLI flag;
-    an earlier version read the nonexistent args.ordering and never fired)."""
+    """arc_repr targets are arc-length differences: they require continuous input
+    feedback and hilbert or gilbert ordering. Reads --lj_transfer_ordering (the actual
+    CLI flag; an earlier version read the nonexistent args.ordering and never fired)."""
     if not int(args.arc_repr):
         return
     if not args.continuous_input:
         raise ValueError("--arc_repr requires --continuous_input.")
-    if getattr(args, "lj_transfer_ordering", "hilbert") != "hilbert":
-        raise ValueError("--arc_repr requires --lj_transfer_ordering hilbert.")
+    if getattr(args, "lj_transfer_ordering", "hilbert") not in ("hilbert", "gilbert"):
+        raise ValueError("--arc_repr requires --lj_transfer_ordering hilbert or gilbert.")
 
 
 def main() -> None:
@@ -842,6 +843,7 @@ def main() -> None:
                 curve_rail_offsets=(curve_rail_offsets if use_curve_rail else None),
                 hilbert_resolution=curve_rail_resolution,
                 cell_size=curve_rail_cell_size,
+                ordering=args.lj_transfer_ordering,
                 curve_rail_mode=curve_rail_mode,
                 curve_rail_window=curve_rail_window,
                 curve_rail_reference=curve_rail_reference,

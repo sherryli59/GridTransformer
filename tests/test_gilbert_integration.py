@@ -354,3 +354,36 @@ def test_model_checkpoint_stores_ordering(tmp_path):
         f"After load_from_checkpoint, expected ordering='gilbert', "
         f"got {getattr(loaded, 'ordering', None)!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Final integration seam: live model -> full sampler with ordering="gilbert"
+# ---------------------------------------------------------------------------
+
+def test_sampler_end_to_end_gilbert_tiny_model():
+    """Fused seam left open by per-task tests: an actual GraphormerAR forward
+    driving the full sampling loop with ordering="gilbert" at a non-pow-2 R.
+    Asserts the run completes, positions land in the box, exactness masks have
+    the right shape, and the logp_position correction applies unchanged (it is
+    curve-family independent: (N-1) log rho)."""
+    from test_phase1_likelihood import _sample_kwargs, _tiny_arc_model
+
+    from grid_transformer.data.lj_transferable import RelativeDeltaTokenizer
+    from sample_lj import arc_logp_position_correction, autoregressive_relative_delta_sample
+
+    tok = RelativeDeltaTokenizer(window=3.0, bins=4, dim=3)
+    model = _tiny_arc_model(K=int(tok.vocab_size), sos_id=int(tok.vocab_size) - 1)
+    out = autoregressive_relative_delta_sample(
+        model, **_sample_kwargs(tok, hilbert_resolution=6, ordering="gilbert")
+    )
+
+    n, box = 8, [3.0, 3.0, 3.0]
+    x = out["x_base"]
+    assert x.shape == (4, n, 3)
+    assert torch.isfinite(x).all()
+    assert float(x.min()) >= 0.0 and float(x.max()) <= 3.0 + 1e-5
+
+    expected = out["logp_continuous"] + arc_logp_position_correction(n, box)
+    torch.testing.assert_close(out["logp_position"], expected)
+    for key in ("arc_clamp_any", "arc_fine_wrap_any", "arc_noncanonical", "arc_duplicate_code"):
+        assert out[key].shape == (4,) and out[key].dtype == torch.bool

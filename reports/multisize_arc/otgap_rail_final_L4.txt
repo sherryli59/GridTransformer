@@ -1,0 +1,24 @@
+# target = /mnt/ssd/mcmc/lj_mcmc_sweep_3d/lj3d_L4_rho1.0_N64_T1.0.h5
+# N=64 L=4.0 kT=1.0  target configs=2000  device=cpu
+# core_clamp(min_dist)=0.8  clash_threshold=0.8 sigma
+
+# OT(W2^2) calibration:  uniform->target=25.270   target->target(self,floor)=16.677
+# 1 candidates.  'OTgap': 0=matches target, 1=as far as uniform noise
+
+# TARGET    : Uc/N= -0.319 (clamped) std=0.660 | min-dist mean=0.845 clash%=0.30 | g(r) peak=1.22@0.97
+# UNIF-BASE : Uc/N= 38.885            | clash%=100.00 gr_L1=0.2986 OTgap=1.000   (flow already transports this -> upper bound)
+candidate                                         Uc/N   dUc/N   W1_Ec  clash%   gr_L1  pkErr   W1_md  OTgap   ESS%
+-------------------------------------------------------------------------------------------------------------------
+/samples_rail_final                             32.666  32.985  32.985  100.00  0.2806  423.7  0.5949  0.688   0.39
+
+# Refinability ranking (composite score, lower=better):
+#   score = OTgap + gr_L1 + 0.5*W1_md + 0.01*clash%   (heuristic)
+#    2.266  /samples_rail_final
+
+# Reading the table:
+#  * Uc/N (clamped energy) and g(r) measure STRUCTURE the flow must reproduce;
+#    bare LJ energy is omitted as a headline metric because r^-12 explodes on
+#    a few fixable overlaps (every model here has ESS~0 for that reason).
+#  * clash% vs TARGET clash% tells you how many configs have hard overlaps.
+#  * OTgap<1 means the samples are closer to the target than the uniform base
+#    the flow is ALREADY trained to transport -> in-distribution for refinement.

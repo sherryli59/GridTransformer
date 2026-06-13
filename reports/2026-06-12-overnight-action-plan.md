@@ -117,3 +117,12 @@ comparable on the P3 pacing-drift metric.
   stronger than ep2. **Gate C:** variant A launched on freed GPU (10 ep, clean warm-start,
   no epoch-0 spike — joint bias is gentler than the rail sublayer). Final rail OTgap
   pipeline (L3/L4/L5) running on CPU.
+- ~09:55 — **FINAL RAIL OTgap (definitive, all sizes, best.ckpt ep17):**
+  | size | baseline | rail final |
+  |---|---|---|
+  | L3 (train) | 0.555 | 0.536 |
+  | L4 (HELD-OUT) | 0.892 | **0.688** |
+  | L5 (train) | 0.450 | 0.423 |
+  Held-out L4 beats its own zero-shot baseline (0.795) and approaches green (≲0.6); both
+  trained sizes also improve. Rail = unambiguous win on the bottom-line refinability metric.
+  Variant A still training (epoch 0). Tracked watcher armed for variant A completion.

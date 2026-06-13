@@ -83,7 +83,10 @@ def main():
         )
         x = out["x_base"].numpy().astype(np.float32)
         path = os.path.join(OUT, f"arc_{tag}_N{N}.npz")
-        np.savez(path, x_base=x)
+        save = dict(x_base=x, L=np.float32(L))
+        if "logp_continuous" in out:
+            save["logp_continuous"] = out["logp_continuous"].numpy().astype(np.float64)
+        np.savez(path, **save)
         nonc = float(out["arc_noncanonical"].float().mean()) if "arc_noncanonical" in out else float("nan")
         print(f"{tag} N={N}: saved {x.shape} -> {path}  noncanonical={nonc:.4f}")
 

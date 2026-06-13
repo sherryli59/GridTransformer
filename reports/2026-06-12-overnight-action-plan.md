@@ -87,3 +87,9 @@ comparable on the P3 pacing-drift metric.
   signature. Mechanism-matched fix confirmed: the failure was pacing, the rail supplies
   the pacing reference as input. Expect the final (ep~19) checkpoint to be stronger.
   Remaining: OTgap confirmation (GPU, post-rail), variant A comparison, final-ckpt P3.
+- ~05:25 — **P4 rail (ep2) confirms from the closure angle:** held-out L4 closure
+  0.877→**0.977** (missing 12.2%→**2.3%**); L3 1.011, L5 0.999. Rail fixes the underfill.
+  Two independent metrics (P3 drift + P4 closure) now agree the rail works.
+- ~05:30 — benchmark_lj27 needs NO flow ckpt / NO GPU (pure scipy OT) → OTgap runs on
+  CPU. Started early rail-ep2 L4 OTgap (baseline ref 0.892). 12-core box, load ~12 with
+  training; keeping to one CPU eval at a time so as not to slow the critical-path rail.

@@ -1,0 +1,16 @@
+/home/sherryli/xsli/softwares/anaconda3/envs/lightning/lib/python3.11/site-packages/lightning_fabric/utilities/cloud_io.py:57: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+R=128  X=32768  data Δs mean=0.9947
+[rail-aware] rail active in eval: {'use_curve_rail': True, 'curve_rail_mode': 'fixed_template', 'curve_rail_k': 8, 'curve_rail_window': 1.0, 'curve_rail_reference': 'absolute', 'curve_rail_offsets': None}
+k= 0: suffix Δs mean gen=0.9737 data=0.9947  W1=0.0630  noncanonical=0.2031
+k=16: suffix Δs mean gen=0.9708 data=1.0010  W1=0.0714  noncanonical=0.1615
+k=32: suffix Δs mean gen=0.9615 data=1.0004  W1=0.0676  noncanonical=0.1094
+k=48: suffix Δs mean gen=0.9411 data=0.9972  W1=0.0906  noncanonical=0.0365
+
+wrote reports/multisize_arc/figs/p3_drift_onset_rail_final_T0.9.png
+
+=== verdict ===
+  k= 0: first-8-post-handoff gen mean 0.9804 (data 0.9793)
+  k=16: first-8-post-handoff gen mean 0.9174 (data 0.9975)
+  k=32: first-8-post-handoff gen mean 0.9091 (data 0.9835)
+  k=48: first-8-post-handoff gen mean 0.9227 (data 1.0004)
+  -> drift starts immediately at every handoff: per-step bias, compounds from step 1 (iid input noise is the matched corruption)

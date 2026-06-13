@@ -110,3 +110,10 @@ comparable on the P3 pacing-drift metric.
 - ~05:36 — Backing off all CPU eval until rail completes. Completion watcher bnn3org8s
   armed. Next wake = rail done → Gate B (final P3) + Gate C (variant A launch, full
   L3/L4/L5 OTgap on freed GPU).
+- ~09:40 — **RAIL DONE (20 epochs).** val/loss descended monotonically to 0.120 — BELOW
+  baseline 0.131 (rail improved trained-size fit too). best.ckpt = epoch 17 (val 0.1198).
+  **Gate B (final P3 on best.ckpt):** held-out L4 Δs mean (k=0) 0.867→0.974, W1 0.129→
+  0.063; k=48 mean 0.941, W1 0.091; backward-step% (k=48) 8.3→3.6. Fix is stable, slightly
+  stronger than ep2. **Gate C:** variant A launched on freed GPU (10 ep, clean warm-start,
+  no epoch-0 spike — joint bias is gentler than the rail sublayer). Final rail OTgap
+  pipeline (L3/L4/L5) running on CPU.

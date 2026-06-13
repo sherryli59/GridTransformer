@@ -620,6 +620,8 @@ def autoregressive_relative_delta_sample(
     continuous_input: bool = False,
     arc_repr: bool = False,
     arc_p0_positions: Optional[torch.Tensor] = None,
+    arc_p0_paired: bool = False,
+    teacher_prefix_deltas: Optional[torch.Tensor] = None,
     use_kv_cache: bool = True,
     ordering: str = "hilbert",
 ) -> dict[str, torch.Tensor]:
@@ -691,6 +693,28 @@ def autoregressive_relative_delta_sample(
         )
     n_predict_tokens = n_predict_particles * coord_dim if factorized else n_predict_particles
 
+    # Teacher-forced prefix (drift-onset diagnostic): the first k steps take the
+    # provided data deltas instead of sampling; decode, feedback, and KV caching
+    # proceed identically, so the free-running handoff at t=k is seamless.
+    if teacher_prefix_deltas is not None:
+        if not use_continuous_head or factorized:
+            raise ValueError(
+                "teacher_prefix_deltas requires a continuous-head, non-factorized sampler."
+            )
+        teacher_prefix_deltas = torch.as_tensor(
+            teacher_prefix_deltas, dtype=torch.float32, device=device
+        )
+        if (
+            teacher_prefix_deltas.ndim != 3
+            or teacher_prefix_deltas.shape[0] != nsamples
+            or teacher_prefix_deltas.shape[1] > n_predict_tokens
+        ):
+            raise ValueError(
+                f"teacher_prefix_deltas must be [nsamples, k<=n_predict, out_dim], got "
+                f"{tuple(teacher_prefix_deltas.shape)} for nsamples={nsamples}, "
+                f"n_predict={n_predict_tokens}."
+            )
+
     seq_out = torch.empty((nsamples, n_predict_tokens), dtype=torch.long, device=device)
     seq_in = torch.empty((nsamples, n_predict_tokens), dtype=torch.long, device=device)
     seq_in[:, 0] = sos_id
@@ -719,11 +743,21 @@ def autoregressive_relative_delta_sample(
                 raise ValueError(
                     f"arc_p0_positions must be [M, {coord_dim}], got {tuple(p0_pool.shape)}"
                 )
-            if gen is not None:
+            if arc_p0_paired:
+                # Exact pairing (teacher-forced prefixes): row i of the pool is the
+                # particle-0 position of sample i, not a random draw.
+                if p0_pool.shape[0] != nsamples:
+                    raise ValueError(
+                        f"arc_p0_paired=True requires arc_p0_positions with M == nsamples "
+                        f"({nsamples}), got M={p0_pool.shape[0]}."
+                    )
+                x_base[:, 0, :] = p0_pool
+            elif gen is not None:
                 p0_idx = torch.randint(p0_pool.shape[0], (nsamples,), generator=gen, device=device)
+                x_base[:, 0, :] = p0_pool[p0_idx]
             else:
                 p0_idx = torch.randint(p0_pool.shape[0], (nsamples,), device=device)
-            x_base[:, 0, :] = p0_pool[p0_idx]
+                x_base[:, 0, :] = p0_pool[p0_idx]
         else:
             assert arc_curve is not None
             _arc_R0 = _rail_resolution_for_box(box_np, hilbert_resolution, cell_size, ordering=ordering)
@@ -929,6 +963,9 @@ def autoregressive_relative_delta_sample(
                     delta_model_t = chosen_mu + torch.matmul(chosen_scale, noise.unsqueeze(-1)).squeeze(-1)
                 else:
                     delta_model_t = chosen_mu + chosen_scale * noise
+
+            if teacher_prefix_deltas is not None and t < int(teacher_prefix_deltas.shape[1]):
+                delta_model_t = teacher_prefix_deltas[:, t].to(dtype=delta_model_t.dtype)
 
             delta_context_t = delta_model_t
             delta_cart_t = delta_model_t

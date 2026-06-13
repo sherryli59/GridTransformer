@@ -57,9 +57,29 @@ cell geometry — so Arm C′ needs the normalization even on the gilbert substr
   without tempering. Tempering sharpens a right-skewed Δs toward its sub-mean mode, and
   bites harder on the flatter held-out conditional; if Δs gen mean recovers toward 0.99,
   fix the temperature policy before judging any arm.
+  **RESULT 2026-06-12: tempering exonerated.** T=1.0 reproduces the T=0.9 drift within
+  noise (suffix means 0.870/0.847/0.787/0.727 across k=0/16/32/48 vs
+  0.867/0.843/0.781/0.716). Only effect: backward-step (noncanonical) rate rises at
+  T=1.0 (32% vs 22% at k=0) — tempering mildly helps monotonicity. No temperature-policy
+  change needed.
 - **P3: drift-onset.** Teacher-force a data prefix of k ∈ {0, N/4, N/2, 3N/4} steps at
   L4, free-run the rest, measure Δs stats of the suffix. "Compounds from step 1" vs
   "late attractor" chooses corruption schedule for Arm B+ (iid vs scheduled).
+  **RESULT 2026-06-12 (`analyze_p3_drift_onset.py`, `figs/p3_drift_onset_T{0.9,1}.png`):
+  drift is immediate AND the bias is position-dependent, not context-dependent.** First-8
+  free-step bias: −0.06 (k=0, early curve) vs −0.25/−0.28 (k=32/48, late curve) — a
+  perfectly clean 48-step data prefix makes the next-step bias 4× WORSE than free-running
+  at early positions. Textbook exposure bias predicts the opposite. The conditional's
+  *pacing* is miscalibrated at late curve positions for the unseen size (hypothesis: the
+  model keys on absolute s-progression; at L4 position 48, cumulative s numerically
+  matches a late-L5 position). Also: 22% of free-run samples take a backward step
+  (data: 0%). **Consequences:** (i) iid-noise training (P6 in flight) attacks only the
+  small context-sensitive component — prediction: improves W1 modestly, leaves L4 Δs
+  mean well below 0.93; (ii) scheduled sampling would not fix it either (not a context
+  problem) — the B1→B2 escalation clause is expected to be moot; (iii) the template
+  anchor (C′ target / B+ rail input) directly supplies the missing pacing reference and
+  is the mechanism-matched fix; (iv) P4's mean-drift share is partially answered:
+  gen mean ≈ 0.87 at k=0 ⇒ ~13% curve underfill.
 - **P4: closure audit.** Distribution of total generated arc length vs N per size.
   Gen Δs mean 0.889 ⇒ rollouts end ~11% short ⇒ underfilled box; quantifies how much of
   L4's OTgap is mean-drift alone.
@@ -137,7 +157,7 @@ gets recorded as the ablation result.
 | observation | action |
 |---|---|
 | P1 fails to collapse | Arm C′ → plain Arm B (noise-only control) |
-| P2 recovers Δs mean at T=1.0 | fix temperature policy before judging arms |
+| P2 recovers Δs mean at T=1.0 | ~~fix temperature policy~~ RESOLVED: no recovery; keep T=0.9 |
 | P5: jump fraction varies >2× across R∈[8,20] | restrict ladder to R within 30% of nearest pow2 baseline; document |
 | P6 hits Stage-1 gates | B+ keeps iid noise; if mean stuck <0.93, scheduled feedback |
 | epoch-35 stage gate: one arm loses on both L4 Δs W1 and OTgap-128 | extend only the winner to 100 epochs |

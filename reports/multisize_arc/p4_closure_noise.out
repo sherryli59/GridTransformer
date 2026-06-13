@@ -1,0 +1,11 @@
+/home/sherryli/xsli/softwares/anaconda3/envs/lightning/lib/python3.11/site-packages/lightning_fabric/utilities/cloud_io.py:57: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+checkpoint: lj_ckpts_multisize_arc_noise/arc_noise_ds006/best.ckpt
+tag: noise  T=0.9  nsamp=192
+
+size      N  closure_mean    std    p10    p50    p90  missing%
+L3       27        0.9999  0.030  0.959  1.006  1.030      0.0%
+L4       64        0.8770  0.043  0.822  0.879  0.934     12.3%
+L5      125        0.9841  0.017  0.958  0.986  1.005      1.6%
+
+Interpretation: closure = mean Δs over the rollout; (1-closure) is the curve
+fraction left untraversed = the mean-drift share Phase-2 budget guidance can target.

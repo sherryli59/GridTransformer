@@ -37,11 +37,20 @@ When the winning rail run finishes, run the P3 teacher-prefix harness on its bes
   for user). Document the negative result clearly.
 
 ### Gate C — GPU-free window (after rail run ends, ~02:30+)
-Run on GPU in priority order:
-1. benchmark_lj27 OTgap on rail best.ckpt at L3/L4/L5 (the refinability verdict).
-2. benchmark_lj27 OTgap on noise best.ckpt at L4 (completes P6 at the OTgap level).
-3. If rail FIXED and time remains: one confirmation variant (e.g., K=16 or from-scratch
-   rail) — 20 epochs only.
+GPU is single-tenant (concurrent runs OOM), so serialize. Priority order:
+1. **Variant A probe** (user-requested) — `variantA_jointbias`, 10-epoch warm-start,
+   `--use_joint_arc_bias 1`, joint (distance, arc-sep) attention bias. Compatible with the
+   existing cache (arc_s = cumsum(input_deltas[...,0]), no rebuild); zero-init no-op warm
+   start. LR: match the rail Gate-A outcome (1e-3 if rail recovered, 2e-4 if rail needed
+   the drop). Launch ~02:35, ETA ~05:00. Watch its val trajectory like the rail probe.
+2. P3 harness (CPU, no GPU contention) on rail best.ckpt — run AT rail completion,
+   overlaps with variant A training.
+3. benchmark_lj27 OTgap on rail + noise best.ckpt at L4 — squeeze before/after variant A.
+4. P3 harness on variant A best.ckpt when it finishes (~05:00).
+
+Three-way comparison by morning: baseline vs rail (input conditioning) vs variant A
+(attention structure) — all zero-init warm starts from the same baseline, directly
+comparable on the P3 pacing-drift metric.
 
 ## CPU work to fill GPU-busy windows
 - **P4 closure audit** (`analyze_p4_closure.py`): generate samples at L3/L4/L5(/L10)
@@ -52,3 +61,15 @@ Run on GPU in priority order:
 ## Running log (newest entries appended)
 - 22:00 — Plan written. Rail probe at epoch 1/20 (~15 min/ep, ETA ~02:30). Epoch-0
   val/loss 0.195. Trajectory watcher running. Launching P4 closure audit on CPU.
+- 22:25 — P4 closure done (baseline + noise). Trained sizes traverse the full curve
+  (L3 0.0–0.2% short, L5 1.2–1.6%); **held-out L4 underfills 12.2% (baseline) / 12.3%
+  (noise)** — identical, confirming P6/noise null at the closure level too. ⇒ Phase-2
+  budget guidance can recover at most ~12% of L4's gap; the rest is mode-collapse/shape.
+- 22:30 — User requested variant A (JointEdgeBias). Verified multi-size compatible
+  (arc_s from input deltas, no cache rebuild; zero-init no-op). Prepped
+  `variantA_jointbias/launch_variantA.sh` (10-ep warm-start, lr parameterized). Queued
+  for the post-rail GPU window (Gate C #1). Rail Gate-A trajectory still pending.
+- 22:35 — **Gate A RESOLVED: RECOVERING.** Rail val/loss 0.195 (ep0) → 0.153 (ep1),
+  still descending toward baseline 0.131. The lr=1e-3 transient (rail sublayer
+  activating) is resolving, not diverging — no relaunch. Variant A confirmed to use
+  lr=1e-3 (rail recovered at it). Next: let rail finish (~02:30), then Gate B/C.

@@ -63,10 +63,16 @@ cell geometry — so Arm C′ needs the normalization even on the gilbert substr
 - **P4: closure audit.** Distribution of total generated arc length vs N per size.
   Gen Δs mean 0.889 ⇒ rollouts end ~11% short ⇒ underfilled box; quantifies how much of
   L4's OTgap is mean-drift alone.
-- **P5: gilbert motif stationarity.** Compare turn/jump statistics
-  (`analyze_hilbert_lj_jumps.py` machinery) across gilbert grids at several non-pow2 R.
-  Gilbert locality is Hilbert-*like* but not exactly self-similar; verify local curve
-  statistics are size-stationary before betting the substrate on it.
+- **P5: gilbert motif stationarity.** Measure, separately, (a) the jump fraction
+  (Δs above the jump threshold) and (b) the turn/motif histogram
+  (`analyze_hilbert_lj_jumps.py` machinery) across gilbert grids at every candidate
+  R in [8, 20], plus the resolution-matched pow2 Hilbert baselines (R=8, 16) for
+  reference. **Gate: if the jump fraction varies by more than 2× across R ∈ [8, 20],
+  restrict the training/eval ladder to R values whose jump fraction is within 30% of
+  the nearest pow2 baseline, and document the restriction in the gilbert plan.**
+  On failure, localize it: jump statistics vs turn statistics, and whether it hits
+  all non-pow2 R or a specific class (e.g., odd/prime side lengths) — the restricted-R
+  set follows from that localization, not from abandoning the substrate.
 - **P6 (in flight): exposure-bias noise readout.** `arc_noise_ds006` (Plan A iid Δs
   noise 0.06, warm-start, 20 ep) lands ~tonight. Stage-1 gates: L4 Δs gen mean → 0.99,
   L4 Δs W1 < ~0.08, clean val NLL regression ≤ +0.03, L3/L5 OTgap stay ≤ 0.6/0.65.
@@ -85,9 +91,16 @@ the train set) and shrinks per-step interpolation error, but is substrate, not f
 
 ## Phase 1 — two training arms in parallel, both on the gilbert substrate
 
-Protocol per arm: train the gilbert ladder, 100 epochs, dim 512 / depth 4 / heads 4,
-full-cov head, clean-val checkpointing (`val/loss` monitor + `save_last`, in train.py
-since 2026-06-12).
+Protocol per arm: train the gilbert ladder, dim 512 / depth 4 / heads 4, full-cov head,
+clean-val checkpointing (`val/loss` monitor + `save_last`, in train.py since 2026-06-12).
+
+**Staged budget, not a flat 100 epochs.** Prior multi-size runs showed the verdict
+forming early (EP18_STATUS: trained-size OTgap trends visible by epoch 18; arc-probe
+variants separated by epoch 10). Stage A: run both arms to **35 epochs**, then gate on
+(i) held-out L4 Δs W1 and gen mean, (ii) a reduced-sample (128) L4 OTgap read,
+(iii) trained-size val NLL health. If one arm clearly loses (worse on both (i) and (ii)
+outside run-to-run noise), extend only the winner to 100 epochs; if they're within
+noise, extend both. This halves wall-clock to a decision when the comparison is lopsided.
 
 - **Arm C′ — normalized absolute anchor** (launch iff P1 passes). Target =
   `(pos_j − decode(j·X)) / scale(j,N)` with the P1-validated bridge scale; fine component
@@ -109,8 +122,15 @@ bites), closure audit, monotonicity counters.
 Budget-aware Δs decoding: bias/reweight the mixture so the running arc sum tracks the
 remaining `(N−j)·X` budget (hard closure constraint: the rollout must reach the curve
 end). Test first on the existing checkpoint — doubles as the mean-drift vs mode-collapse
-ablation — then stack on the winning arm. Band-aid, not fix: corrects the mean, not the
-collapse.
+ablation — then stack on the winning arm.
+
+**Success criterion (set by P4):** P4's closure audit quantifies how much of the held-out
+OTgap is attributable to mean-drift underfill alone; that number is Phase 2's expected
+ceiling. **Ship** budget guidance if it recovers at least half of the P4-predicted
+OTgap share AND the held-out OTgap beats its zero-shot baseline. **Drop** it if it
+corrects the mean (gen Δs mean ≥ 0.97) but improves held-out OTgap by < 0.05 — that
+outcome is itself the answer (mode collapse dominates, mean drift is secondary) and
+gets recorded as the ablation result.
 
 ## Decision gates
 
@@ -118,8 +138,10 @@ collapse.
 |---|---|
 | P1 fails to collapse | Arm C′ → plain Arm B (noise-only control) |
 | P2 recovers Δs mean at T=1.0 | fix temperature policy before judging arms |
-| P5 shows non-stationary gilbert motifs | reconsider substrate or restrict R choices |
+| P5: jump fraction varies >2× across R∈[8,20] | restrict ladder to R within 30% of nearest pow2 baseline; document |
 | P6 hits Stage-1 gates | B+ keeps iid noise; if mean stuck <0.93, scheduled feedback |
+| epoch-35 stage gate: one arm loses on both L4 Δs W1 and OTgap-128 | extend only the winner to 100 epochs |
+| Phase 2 fixes mean (≥0.97) but OTgap gain <0.05 | drop budget guidance; record "mode collapse dominates" as the ablation result |
 | C′ green at L10 | new canonical rep; fold in Phase-2 + B+'s corruption |
 | both arms fail at L10 | next round: k-step bounded anchor (deferred: only slows accumulation) |
 

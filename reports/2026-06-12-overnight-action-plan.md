@@ -93,3 +93,20 @@ comparable on the P3 pacing-drift metric.
 - ~05:30 — benchmark_lj27 needs NO flow ckpt / NO GPU (pure scipy OT) → OTgap runs on
   CPU. Started early rail-ep2 L4 OTgap (baseline ref 0.892). 12-core box, load ~12 with
   training; keeping to one CPU eval at a time so as not to slow the critical-path rail.
+- ~05:35 — **OTgap (3rd metric) CONFIRMS: rail ep2 L4 OTgap 0.892 → 0.670** (toward the
+  green ≲0.6 refinable bar), via CPU benchmark_lj27 (no flow/GPU needed). Composite 2.319.
+  `reports/multisize_arc/otgap_rail_ep2_L4.txt`.
+
+  **THREE-METRIC EARLY VERDICT (rail best.ckpt @ epoch 2 of 20):**
+  | metric | baseline | rail ep2 | direction |
+  |---|---|---|---|
+  | L4 Δs mean (k=48) | 0.716 | 0.941 | fixed |
+  | L4 Δs W1 (k=0) | 0.129 | 0.066 | fixed |
+  | L4 closure (underfill) | 12.2% | 2.3% | fixed |
+  | L4 OTgap | 0.892 | 0.670 | toward green |
+  Rail conditioning fixes held-out size transfer. Final (ep~19) checkpoint should be
+  stronger. **Mistake noted:** my parallel CPU eval jobs (load 12/12) slowed the rail
+  training; backing off CPU now to let it finish.
+- ~05:36 — Backing off all CPU eval until rail completes. Completion watcher bnn3org8s
+  armed. Next wake = rail done → Gate B (final P3) + Gate C (variant A launch, full
+  L3/L4/L5 OTgap on freed GPU).

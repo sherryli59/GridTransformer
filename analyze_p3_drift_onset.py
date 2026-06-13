@@ -78,6 +78,22 @@ def main():
     tok = RelativeDeltaTokenizer(window=3.0, bins=64, dim=3)
     assert int(tok.vocab_size) == int(model.K), (tok.vocab_size, model.K)
 
+    # Rail-aware: a rail-trained checkpoint must be evaluated WITH the rail active —
+    # the forward skips rail_attn when curve_waypoints is None, so a rail-less eval
+    # would silently disable the rail and report a false NULL. The sampler recomputes
+    # the fixed_template waypoints at generation time when use_curve_rail=True.
+    rail_kwargs = {}
+    if bool(getattr(model, "use_curve_rail", False)) and model.rail_attn is not None:
+        rail_kwargs = dict(
+            use_curve_rail=True,
+            curve_rail_mode=str(getattr(model, "curve_rail_mode", "fixed_template")),
+            curve_rail_k=int(getattr(model, "curve_rail_k", model.rail_attn.n_rail)),
+            curve_rail_window=float(getattr(model, "curve_rail_window", 1.0)),
+            curve_rail_reference=str(getattr(model, "curve_rail_reference", "absolute")),
+            curve_rail_offsets=None,
+        )
+        print(f"[rail-aware] rail active in eval: {rail_kwargs}")
+
     results = {}
     for k in KS:
         out = autoregressive_relative_delta_sample(
@@ -101,6 +117,7 @@ def main():
             teacher_prefix_deltas=(
                 torch.from_numpy(data_arc[:, :k].astype(np.float32)) if k > 0 else None
             ),
+            **rail_kwargs,
         )
         codes = out["arc_codes"].numpy().astype(np.float64)
         gen_ds = np.diff(codes, axis=1) / X  # hilbert: arc == code index

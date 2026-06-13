@@ -304,6 +304,12 @@ class GraphormerAR(pl.LightningModule):
         use_refine_rbf_bias: bool = False,
         knn_mask_k: Optional[int] = None,
         jump_delta_s_threshold: float = 4.0,
+        continuous_input_noise_delta_s: float = 0.0,
+        continuous_input_noise_fine: float = 0.0,
+        continuous_input_noise_prob: float = 1.0,
+        continuous_input_noise_warmup_epochs: int = 0,
+        continuous_input_noise_ramp_epochs: int = 0,
+        continuous_input_drift_delta_s: float = 0.0,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -383,6 +389,12 @@ class GraphormerAR(pl.LightningModule):
         self.num_mixtures = int(num_mixtures)
         self.lambda_var = float(lambda_var)
         self.lj_kT = float(lj_kT)
+        self.continuous_input_noise_delta_s = max(float(continuous_input_noise_delta_s), 0.0)
+        self.continuous_input_noise_fine = max(float(continuous_input_noise_fine), 0.0)
+        self.continuous_input_noise_prob = min(max(float(continuous_input_noise_prob), 0.0), 1.0)
+        self.continuous_input_noise_warmup_epochs = max(int(continuous_input_noise_warmup_epochs), 0)
+        self.continuous_input_noise_ramp_epochs = max(int(continuous_input_noise_ramp_epochs), 0)
+        self.continuous_input_drift_delta_s = max(float(continuous_input_drift_delta_s), 0.0)
 
         # Phase-3 probe variants (action-plan). All are exact no-ops at init
         # (zero-init outputs / parameter-free), so they can be warm-started from a
@@ -565,6 +577,73 @@ class GraphormerAR(pl.LightningModule):
         if box_for_coords is not None:
             noisy_coords = torch.remainder(noisy_coords, box_for_coords.unsqueeze(1))
         return noisy_coords
+
+    def _continuous_input_noise_scale(self) -> float:
+        if not self.training:
+            return 0.0
+        epoch = int(getattr(self, "current_epoch", 0))
+        warmup = int(self.continuous_input_noise_warmup_epochs)
+        if epoch < warmup:
+            return 0.0
+        ramp = int(self.continuous_input_noise_ramp_epochs)
+        if ramp <= 0:
+            return 1.0
+        return min(1.0, float(epoch - warmup + 1) / float(ramp))
+
+    def _continuous_input_noise_std(self, *, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+        if self.arc_repr:
+            vals = [
+                self.continuous_input_noise_delta_s,
+                self.continuous_input_noise_fine,
+                self.continuous_input_noise_fine,
+                self.continuous_input_noise_fine,
+            ]
+        else:
+            vals = [self.continuous_input_noise_fine] * self._delta_dim
+        return torch.tensor(vals, device=device, dtype=dtype)
+
+    def _apply_continuous_input_noise(
+        self,
+        input_deltas: torch.Tensor,
+        pad_mask: Optional[torch.Tensor] = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Corrupt teacher-forced continuous feedback while leaving targets clean."""
+        scale = float(self._continuous_input_noise_scale())
+        if scale <= 0.0:
+            return input_deltas, input_deltas.new_tensor(0.0)
+
+        std = self._continuous_input_noise_std(device=input_deltas.device, dtype=input_deltas.dtype) * scale
+        use_iid_noise = bool(torch.any(std > 0))
+        use_drift = self.arc_repr and self.continuous_input_drift_delta_s > 0.0
+        if not use_iid_noise and not use_drift:
+            return input_deltas, input_deltas.new_tensor(0.0)
+
+        perturb = torch.zeros_like(input_deltas)
+        if use_iid_noise:
+            perturb = perturb + torch.randn_like(input_deltas) * std.view(1, 1, -1)
+
+        if use_drift:
+            step_std = float(self.continuous_input_drift_delta_s) * scale
+            step = torch.randn(
+                input_deltas.shape[:2],
+                device=input_deltas.device,
+                dtype=input_deltas.dtype,
+            ) * step_std
+            drift = torch.cumsum(step, dim=1) / max(float(input_deltas.shape[1]) ** 0.5, 1.0)
+            perturb[..., 0] = perturb[..., 0] + drift
+
+        mask = torch.ones(input_deltas.shape[:2], device=input_deltas.device, dtype=torch.bool)
+        mask[:, 0] = False
+        prob = float(self.continuous_input_noise_prob)
+        if prob < 1.0:
+            mask = mask & (torch.rand(input_deltas.shape[:2], device=input_deltas.device) < prob)
+        if pad_mask is not None:
+            mask = mask & (~pad_mask.to(device=input_deltas.device, dtype=torch.bool))
+        perturb = perturb * mask.unsqueeze(-1).to(dtype=input_deltas.dtype)
+
+        noisy = input_deltas + perturb
+        rms = torch.sqrt(torch.mean(perturb[..., 0].pow(2))).detach()
+        return noisy, rms
 
     def _causal_bias(
         self,
@@ -878,6 +957,14 @@ class GraphormerAR(pl.LightningModule):
         return -tok_logp.sum(dim=1)
 
     def training_step(self, batch, idx):
+        return self._shared_step(batch, idx, prefix="train")
+
+    def validation_step(self, batch, idx):
+        # Noise is gated on self.training, so validation NLL is clean-input by construction.
+        return self._shared_step(batch, idx, prefix="val")
+
+    def _shared_step(self, batch, idx, prefix: str = "train"):
+        is_train = prefix == "train"
         seq = batch.get("target_idx", batch.get("seq"))
         if seq is None:
             raise KeyError("Batch must include `target_idx` or `seq` for AR training")
@@ -925,6 +1012,27 @@ class GraphormerAR(pl.LightningModule):
             # Shift so position 0 = SOS (zeros), position t = delta_{t-1} (continuous feedback).
             zero = torch.zeros_like(tgt_deltas[:, :1, :])
             input_deltas = torch.cat([zero, tgt_deltas[:, :-1, :]], dim=1)
+            input_deltas, input_noise_rms = self._apply_continuous_input_noise(input_deltas, pad_mask=pad)
+            if is_train and (
+                self.continuous_input_noise_delta_s > 0.0
+                or self.continuous_input_noise_fine > 0.0
+                or self.continuous_input_drift_delta_s > 0.0
+            ):
+                noise_scale = input_deltas.new_tensor(float(self._continuous_input_noise_scale()))
+                self.log(
+                    "train/continuous_input_noise_scale",
+                    noise_scale,
+                    on_step=False,
+                    on_epoch=True,
+                    batch_size=seq.size(0),
+                )
+                self.log(
+                    "train/input_delta_s_noise_rms",
+                    input_noise_rms,
+                    on_step=True,
+                    on_epoch=True,
+                    batch_size=seq.size(0),
+                )
         outputs = self.forward(
             seq_in,
             coords=coords,
@@ -998,7 +1106,7 @@ class GraphormerAR(pl.LightningModule):
                 )
                 if strat["nll_jump"] is not None:
                     self.log(
-                        "train/nll_jump",
+                        f"{prefix}/nll_jump",
                         strat["nll_jump"],
                         on_step=False,
                         on_epoch=True,
@@ -1006,14 +1114,14 @@ class GraphormerAR(pl.LightningModule):
                     )
                 if strat["nll_local"] is not None:
                     self.log(
-                        "train/nll_local",
+                        f"{prefix}/nll_local",
                         strat["nll_local"],
                         on_step=False,
                         on_epoch=True,
                         batch_size=seq.size(0),
                     )
                 self.log(
-                    "train/jump_fraction",
+                    f"{prefix}/jump_fraction",
                     strat["jump_fraction"],
                     on_step=False,
                     on_epoch=True,
@@ -1055,32 +1163,32 @@ class GraphormerAR(pl.LightningModule):
             )
             loss = loss + (self.lambda_var * var_log_w)
             self.log(
-                "train/energy_var_loss",
+                f"{prefix}/energy_var_loss",
                 var_log_w.detach(),
-                on_step=True,
+                on_step=is_train,
                 on_epoch=True,
                 batch_size=target_energy.size(0),
             )
             self.log(
-                "train/target_log_p",
+                f"{prefix}/target_log_p",
                 target_log_p.mean().detach(),
-                on_step=True,
+                on_step=is_train,
                 on_epoch=True,
                 batch_size=target_energy.size(0),
             )
             self.log(
-                "train/ess_fraction",
+                f"{prefix}/ess_fraction",
                 ess_fraction.detach(),
-                on_step=True,
+                on_step=is_train,
                 on_epoch=True,
                 batch_size=target_energy.size(0),
             )
-        self.log("train/loss", loss, prog_bar=True, on_step=True, on_epoch=True, batch_size=seq.size(0))
-        self.log("train/nll", seq_nll_exact.mean(), prog_bar=True, on_step=True, on_epoch=True, batch_size=seq.size(0))
+        self.log(f"{prefix}/loss", loss, prog_bar=True, on_step=is_train, on_epoch=True, batch_size=seq.size(0))
+        self.log(f"{prefix}/nll", seq_nll_exact.mean(), prog_bar=True, on_step=is_train, on_epoch=True, batch_size=seq.size(0))
         self.log(
-            "train/bpd",
+            f"{prefix}/bpd",
             (seq_nll_exact / (coord_count * torch.log(torch.tensor(2.0, device=seq_nll_exact.device)))).mean(),
-            on_step=True,
+            on_step=is_train,
             on_epoch=True,
             batch_size=seq.size(0),
         )

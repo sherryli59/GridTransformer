@@ -9,7 +9,7 @@ from typing import Any, Dict, Optional, Sequence
 
 import torch
 import torch.nn.functional as F
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 
 import pytorch_lightning as pl
 
@@ -388,8 +388,12 @@ class LJTransferableDataModule(pl.LightningDataModule):
         curve_rail_reference: str = "absolute",
         curve_rail_residual_target: bool = False,
         arc_repr: bool = False,
+        val_frac: float = 0.0,
     ) -> None:
         super().__init__()
+        self.val_frac = float(val_frac)
+        if not (0.0 <= self.val_frac < 1.0):
+            raise ValueError(f"val_frac must be in [0, 1), got {val_frac}")
         self.data_path = data_path
         self.periodic = bool(periodic)
         self.hilbert_resolution = int(hilbert_resolution)
@@ -455,6 +459,20 @@ class LJTransferableDataModule(pl.LightningDataModule):
                 "random_grid_shift=True is unsupported for nonperiodic lj_transferable training."
             )
         self._train_ds: Optional[LJTransferableDataset | LJTransferableCachedDataset] = None
+        self._train_indices: Optional[np.ndarray] = None
+        self._val_indices: Optional[np.ndarray] = None
+
+    def _split_val(self) -> None:
+        """Deterministic train/val split (seeded) for clean-input validation NLL."""
+        if self.val_frac <= 0.0 or self._train_ds is None or self._train_indices is not None:
+            return
+        n = len(self._train_ds)
+        n_val = int(round(n * self.val_frac))
+        if n_val == 0:
+            return
+        perm = np.random.default_rng(self.seed).permutation(n)
+        self._val_indices = np.sort(perm[:n_val])
+        self._train_indices = np.sort(perm[n_val:])
 
     def setup(self, stage: Optional[str] = None) -> None:
         if stage in (None, "fit") and self._train_ds is None:
@@ -465,6 +483,11 @@ class LJTransferableDataModule(pl.LightningDataModule):
                     discrete=self.discrete,
                     codebook_path=self.codebook_path,
                     arc_repr=self.arc_repr,
+                    use_curve_rail=self.use_curve_rail,
+                    curve_rail_mode=self.curve_rail_mode,
+                    curve_rail_k=self.curve_rail_k_cfg,
+                    curve_rail_window=self.curve_rail_window,
+                    curve_rail_reference=self.curve_rail_reference,
                 )
                 cached_periodic = bool(getattr(self._train_ds, "periodic", True))
                 if cached_periodic != self.periodic:
@@ -492,6 +515,7 @@ class LJTransferableDataModule(pl.LightningDataModule):
                     )
                 # Reflect what the cache actually provides so the model is configured to match.
                 self.use_curve_rail = cached_rail
+                self._split_val()
                 return
             data_paths: str | Sequence[str]
             data_paths = self.data_path
@@ -526,6 +550,7 @@ class LJTransferableDataModule(pl.LightningDataModule):
                 curve_rail_reference=self.curve_rail_reference,
                 curve_rail_residual_target=self.curve_rail_residual_target,
             )
+            self._split_val()
 
     @property
     def vocab_size(self) -> Optional[int]:
@@ -650,15 +675,40 @@ class LJTransferableDataModule(pl.LightningDataModule):
         if self._train_ds is None:
             self.setup("fit")
         assert self._train_ds is not None
+        ds: Any = self._train_ds
+        lengths = np.asarray(self._train_ds.sample_lengths)
+        if self._train_indices is not None:
+            ds = Subset(self._train_ds, self._train_indices.tolist())
+            lengths = lengths[self._train_indices]
         batch_sampler = BucketedBatchSampler(
-            sample_lengths=self._train_ds.sample_lengths,
+            sample_lengths=lengths,
             batch_size=self.batch_size,
             shuffle=True,
             drop_last=self.drop_last,
             seed=self.seed,
         )
         return DataLoader(
-            self._train_ds,
+            ds,
+            batch_sampler=batch_sampler,
+            num_workers=self.num_workers,
+            pin_memory=self.pin_memory,
+        )
+
+    def val_dataloader(self) -> Optional[DataLoader]:
+        if self._train_ds is None:
+            self.setup("fit")
+        if self._val_indices is None:
+            return None
+        lengths = np.asarray(self._train_ds.sample_lengths)[self._val_indices]
+        batch_sampler = BucketedBatchSampler(
+            sample_lengths=lengths,
+            batch_size=self.batch_size,
+            shuffle=False,
+            drop_last=False,
+            seed=self.seed,
+        )
+        return DataLoader(
+            Subset(self._train_ds, self._val_indices.tolist()),
             batch_sampler=batch_sampler,
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,

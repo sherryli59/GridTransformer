@@ -160,6 +160,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--lj_transfer_curve_rail_residual_target", action="store_true")
     parser.add_argument(
+        "--lj_transfer_val_frac",
+        type=float,
+        default=0.05,
+        help="Held-out fraction of training samples for clean-input validation NLL "
+        "(checkpoint monitor). Set 0 to disable validation.",
+    )
+    parser.add_argument(
         "--lj_transfer_no_long_jump",
         action="store_true",
         help="Disable dedicated long-jump token and clamp out-of-window displacements instead.",
@@ -363,6 +370,44 @@ def parse_args() -> argparse.Namespace:
         "--use_continuous_head, non-factorized, non-polar).",
     )
     parser.add_argument(
+        "--continuous_input_noise_delta_s",
+        type=float,
+        default=0.0,
+        help="Train-time Gaussian noise std for the shifted arc_repr Delta s feedback input. "
+        "Targets remain clean; requires --continuous_input.",
+    )
+    parser.add_argument(
+        "--continuous_input_noise_fine",
+        type=float,
+        default=0.0,
+        help="Train-time Gaussian noise std for shifted continuous fine/displacement feedback inputs. "
+        "Targets remain clean; requires --continuous_input.",
+    )
+    parser.add_argument(
+        "--continuous_input_noise_prob",
+        type=float,
+        default=1.0,
+        help="Per-token probability of applying continuous-input feedback noise.",
+    )
+    parser.add_argument(
+        "--continuous_input_noise_warmup_epochs",
+        type=int,
+        default=0,
+        help="Number of initial epochs with continuous-input feedback noise disabled.",
+    )
+    parser.add_argument(
+        "--continuous_input_noise_ramp_epochs",
+        type=int,
+        default=0,
+        help="Linearly ramp continuous-input feedback noise to full strength over this many epochs after warmup.",
+    )
+    parser.add_argument(
+        "--continuous_input_drift_delta_s",
+        type=float,
+        default=0.0,
+        help="Optional random-walk Delta s feedback drift std for arc_repr exposure-bias training.",
+    )
+    parser.add_argument(
         "--arc_repr",
         type=int,
         default=0,
@@ -528,6 +573,7 @@ def build_data_module(args: argparse.Namespace):
             curve_rail_reference=str(args.lj_transfer_curve_rail_reference),
             curve_rail_residual_target=bool(args.lj_transfer_curve_rail_residual_target),
             arc_repr=bool(int(args.arc_repr)),
+            val_frac=float(args.lj_transfer_val_frac),
         )
         data_module.setup("fit")
         vocab_size = data_module.vocab_size
@@ -658,6 +704,19 @@ def main() -> None:
         raise ValueError("--full_covariance requires --use_continuous_head.")
     if args.continuous_input and not args.use_continuous_head:
         raise ValueError("--continuous_input currently requires --use_continuous_head.")
+    _cont_noise_requested = (
+        float(args.continuous_input_noise_delta_s) > 0.0
+        or float(args.continuous_input_noise_fine) > 0.0
+        or float(args.continuous_input_drift_delta_s) > 0.0
+    )
+    if _cont_noise_requested and not args.continuous_input:
+        raise ValueError("continuous-input noise requires --continuous_input.")
+    if not 0.0 <= float(args.continuous_input_noise_prob) <= 1.0:
+        raise ValueError("--continuous_input_noise_prob must be in [0, 1].")
+    if int(args.continuous_input_noise_warmup_epochs) < 0:
+        raise ValueError("--continuous_input_noise_warmup_epochs must be non-negative.")
+    if int(args.continuous_input_noise_ramp_epochs) < 0:
+        raise ValueError("--continuous_input_noise_ramp_epochs must be non-negative.")
     _validate_arc_repr_flags(args)
     if args.discrete:
         if args.dataset != "lj_transferable":
@@ -852,6 +911,12 @@ def main() -> None:
                 use_joint_arc_bias=bool(int(args.use_joint_arc_bias)),
                 use_refine_rbf_bias=bool(int(args.use_refine_rbf_bias)),
                 knn_mask_k=args.knn_mask_k,
+                continuous_input_noise_delta_s=float(args.continuous_input_noise_delta_s),
+                continuous_input_noise_fine=float(args.continuous_input_noise_fine),
+                continuous_input_noise_prob=float(args.continuous_input_noise_prob),
+                continuous_input_noise_warmup_epochs=int(args.continuous_input_noise_warmup_epochs),
+                continuous_input_noise_ramp_epochs=int(args.continuous_input_noise_ramp_epochs),
+                continuous_input_drift_delta_s=float(args.continuous_input_drift_delta_s),
             )
         elif ar_arch == "vanilla":
             if args.use_continuous_head:
@@ -897,13 +962,21 @@ def main() -> None:
             cheat_linear=False,
         )
 
+    # Monitor clean-input validation loss when a val split exists; train loss is computed
+    # on (possibly noise-corrupted) inputs, so min-train-loss would pin "best" to the
+    # lowest-noise epoch under input-corruption training. Requires the module to override
+    # validation_step (Lightning skips the val loop otherwise, orphaning the monitor).
+    has_val = (
+        getattr(data_module, "_val_indices", None) is not None
+        and type(lit_module).validation_step is not pl.LightningModule.validation_step
+    )
     checkpoint_cb = ModelCheckpoint(
         dirpath=args.ckpt_dir,
         filename="best",
-        monitor="train/loss_epoch",
+        monitor="val/loss" if has_val else "train/loss_epoch",
         mode="min",
         save_top_k=1,
-        save_last=False,
+        save_last=True,
         auto_insert_metric_name=False,
     )
 

@@ -72,6 +72,14 @@ class CurveRailAttention(nn.Module):
         self.out_proj = nn.Linear(self.d_model, self.d_model, bias=False)
         self.attn_drop = nn.Dropout(dropout)
 
+        # Zero-init the residual output so the module is an EXACT no-op at init:
+        # forward returns x + out_proj(out) = x. This is what makes the warm-start
+        # probe protocol causally clean — a baseline state_dict loaded with
+        # strict=False reproduces the baseline byte-for-byte at step 0, so any
+        # subsequent metric movement is attributable to the rail and not to a
+        # random perturbation of the pretrained hidden states.
+        nn.init.zeros_(self.out_proj.weight)
+
     def _featurize(self, waypoints: torch.Tensor) -> torch.Tensor:
         """[B,T,K,3] relative vectors -> [B,T,K,d_model] geometric+order features."""
         dist = torch.linalg.norm(waypoints, dim=-1)  # [B,T,K]

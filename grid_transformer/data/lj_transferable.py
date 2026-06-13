@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import warnings
 from dataclasses import dataclass
 from typing import Any, Optional, Sequence, Tuple
 
@@ -1592,6 +1593,11 @@ class LJTransferableCachedDataset(Dataset):
         discrete: bool = False,
         arc_repr: bool = False,
         codebook_path: Optional[str] = None,
+        use_curve_rail: bool = False,
+        curve_rail_mode: Optional[str] = None,
+        curve_rail_k: Optional[int] = None,
+        curve_rail_window: Optional[float] = None,
+        curve_rail_reference: Optional[str] = None,
     ) -> None:
         try:
             payload = torch.load(cache_path, map_location="cpu", weights_only=False)
@@ -1725,6 +1731,47 @@ class LJTransferableCachedDataset(Dataset):
         self.use_curve_rail = bool(self.metadata.get("use_curve_rail", False)) and (
             self.curve_waypoints_all is not None or self.curve_rail_mode == "fixed_template"
         )
+        # Fixed-template rail on a cache built WITHOUT rail geometry: the template is
+        # sample-independent (a function of N, R, box only), so it can be synthesized in
+        # __getitem__ instead of read from the cache — no rebuild needed. Lookahead mode
+        # genuinely needs per-sample geometry and still requires a rebuilt cache.
+        if use_curve_rail and not self.use_curve_rail:
+            req_mode = str(curve_rail_mode or self.curve_rail_mode)
+            if req_mode != "fixed_template":
+                raise ValueError(
+                    "use_curve_rail=True requested on a cache without rail geometry; only "
+                    "curve_rail_mode='fixed_template' can be synthesized on the fly "
+                    f"(requested {req_mode!r}). Rebuild the cache for lookahead rails."
+                )
+            self.curve_rail_mode = "fixed_template"
+            if curve_rail_k is not None:
+                self.curve_rail_k = int(curve_rail_k)
+            if self.curve_rail_k <= 0:
+                raise ValueError(
+                    f"fixed_template rail synthesis requires curve_rail_k > 0, got {self.curve_rail_k}."
+                )
+            if curve_rail_window is not None:
+                self.curve_rail_window = float(curve_rail_window)
+            if curve_rail_reference is not None:
+                self.curve_rail_reference = str(curve_rail_reference)
+            self.use_curve_rail = True
+        elif use_curve_rail and self.use_curve_rail:
+            mismatches = [
+                (name, req, got)
+                for name, req, got in (
+                    ("curve_rail_mode", curve_rail_mode, self.curve_rail_mode),
+                    ("curve_rail_k", curve_rail_k, self.curve_rail_k),
+                    ("curve_rail_window", curve_rail_window, self.curve_rail_window),
+                    ("curve_rail_reference", curve_rail_reference, self.curve_rail_reference),
+                )
+                if req is not None and type(got)(req) != got
+            ]
+            if mismatches:
+                warnings.warn(
+                    "Cache rail geometry overrides requested but the cache already carries rail "
+                    f"metadata; cache wins: {mismatches}",
+                    stacklevel=2,
+                )
         self._fixed_curve_waypoints_cache: dict[tuple[Any, ...], torch.Tensor] = {}
         self.codebook_path = self.metadata.get("codebook_path")
         self.vocab_size = int(payload["vocab_size"])

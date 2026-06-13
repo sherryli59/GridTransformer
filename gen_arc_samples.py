@@ -1,19 +1,14 @@
-"""P4 closure audit: how much of the Hilbert curve does free-running generation traverse?
+"""Generate arc_repr (optionally rail-conditioned) samples to .npz for benchmark_lj27.
 
-For each size, free-run-generate from a checkpoint and measure the closure fraction
-    closure = arc_code(last particle) / ((N-1) * X)
-which equals the mean Δs over the rollout. closure < 1 means the rollout ends short of
-the curve end (underfilled box) — the mean-drift component of the OTgap. Reports the
-distribution (mean, std, p10/p50/p90) per size, plus the implied "missing curve" fraction.
+Saves out["x_base"] (n, N, 3) absolute positions under each size, in the format
+benchmark_lj27.load_candidates expects (d["x_base"]). Rail-aware: a rail checkpoint is
+evaluated WITH the rail active (forward skips rail_attn when waypoints are None).
 
-Sets the Phase-2 budget-guidance ceiling: budget guidance can recover at most the
-mean-drift share, so 1-closure bounds its expected OTgap improvement.
-
-CPU-only. Env: P4_CKPT (default baseline), P4_TAG, P4_SIZES (e.g. "L3,L4,L5").
+Env: GEN_CKPT, GEN_OUT (dir), GEN_SIZES (default L3,L4,L5), GEN_NSAMP (default 256),
+GEN_TEMPERATURE (default 0.9).
 """
 import os
 
-import h5py
 import numpy as np
 import torch
 
@@ -25,26 +20,28 @@ from grid_transformer.data.lj_transferable import (
 from grid_transformer.models.transformer import GraphormerAR
 from sample_lj import _rail_resolution_for_box, autoregressive_relative_delta_sample
 
-CKPT = os.environ.get("P4_CKPT", "lj_ckpts_multisize_arc_L3L5/multisize_arc_fullcov/best.ckpt")
-TAG = os.environ.get("P4_TAG", "baseline")
-NSAMP = int(os.environ.get("P4_NSAMP", "192"))
-TEMPERATURE = float(os.environ.get("P4_TEMPERATURE", "0.9"))
+CKPT = os.environ["GEN_CKPT"]
+OUT = os.environ.get("GEN_OUT", "reports/multisize_arc/samples")
+NSAMP = int(os.environ.get("GEN_NSAMP", "256"))
+TEMPERATURE = float(os.environ.get("GEN_TEMPERATURE", "0.9"))
 CELL = 0.046875
 SIZES = {
     "L3": ("/mnt/ssd/mcmc/lj_mcmc_sweep_3d/lj3d_L3_rho1.0_N27_T1.0.h5", 27, 3.0),
     "L4": ("/mnt/ssd/mcmc/lj_mcmc_sweep_3d/lj3d_L4_rho1.0_N64_T1.0.h5", 64, 4.0),
     "L5": ("/mnt/ssd/mcmc/lj_mcmc_sweep_3d/lj3d_L5_rho1.0_N125_T1.0.h5", 125, 5.0),
 }
-WANT = os.environ.get("P4_SIZES", "L3,L4,L5").split(",")
+WANT = os.environ.get("GEN_SIZES", "L3,L4,L5").split(",")
 
 
 def p0_pool(h5, N, L, R, n):
+    import h5py
+
     box = np.array([L, L, L], dtype=np.float64)
     bits = _hilbert_bits(R)
     cell = box / R
     with h5py.File(h5, "r") as f:
         traj = f["traj"][:].reshape(-1, N, 3)
-    idx = np.random.RandomState(0).choice(traj.shape[0], min(n, traj.shape[0]), replace=False)
+    idx = np.random.RandomState(1).choice(traj.shape[0], min(n, traj.shape[0]), replace=False)
     p0 = []
     for i in idx:
         pos = traj[i]
@@ -55,13 +52,11 @@ def p0_pool(h5, N, L, R, n):
 
 
 def main():
-    torch.set_num_threads(8)
-    print(f"checkpoint: {CKPT}\ntag: {TAG}  T={TEMPERATURE}  nsamp={NSAMP}\n")
+    torch.set_num_threads(int(os.environ.get("OMP_NUM_THREADS", "6")))
+    os.makedirs(OUT, exist_ok=True)
     model = GraphormerAR.load_from_checkpoint(CKPT, map_location="cpu").eval()
     tok = RelativeDeltaTokenizer(window=3.0, bins=64, dim=3)
 
-    # Rail-aware (see analyze_p3_drift_onset): a rail checkpoint must be evaluated WITH
-    # the rail active, else forward() skips rail_attn and reports a false NULL.
     rail_kwargs = {}
     if bool(getattr(model, "use_curve_rail", False)) and model.rail_attn is not None:
         rail_kwargs = dict(
@@ -72,34 +67,25 @@ def main():
             curve_rail_reference=str(getattr(model, "curve_rail_reference", "absolute")),
             curve_rail_offsets=None,
         )
-        print(f"[rail-aware] rail active in eval: k={rail_kwargs['curve_rail_k']}")
+        print(f"[rail-aware] k={rail_kwargs['curve_rail_k']}")
 
-    print(f"{'size':5s} {'N':>5s} {'closure_mean':>13s} {'std':>6s} "
-          f"{'p10':>6s} {'p50':>6s} {'p90':>6s} {'missing%':>9s}")
-    rows = []
     for tag in WANT:
         h5, N, L = SIZES[tag]
         R = int(_rail_resolution_for_box(np.array([L, L, L], np.float32), 64, CELL, ordering="hilbert"))
-        X = max(1, R**3 // N)
         p0 = p0_pool(h5, N, L, R, NSAMP)
         out = autoregressive_relative_delta_sample(
             model, n_particles=N, box_lengths=[L, L, L], nsamples=NSAMP, tokenizer=tok,
-            seed=123, sample_mode="multinomial", temperature=TEMPERATURE,
+            seed=7, sample_mode="multinomial", temperature=TEMPERATURE,
             use_continuous_head=True, full_covariance=True, continuous_input=True,
             arc_repr=True, periodic=True, hilbert_resolution=64, cell_size=CELL,
             arc_p0_positions=torch.from_numpy(p0.astype(np.float32)), arc_p0_paired=True,
             **rail_kwargs,
         )
-        last_code = out["arc_codes"][:, -1].numpy().astype(np.float64)
-        closure = last_code / ((N - 1) * X)
-        m, s = closure.mean(), closure.std()
-        p10, p50, p90 = np.percentile(closure, [10, 50, 90])
-        missing = 100.0 * (1.0 - m)
-        rows.append((tag, N, m, s, p10, p50, p90, missing))
-        print(f"{tag:5s} {N:5d} {m:13.4f} {s:6.3f} {p10:6.3f} {p50:6.3f} {p90:6.3f} {missing:8.1f}%")
-
-    print("\nInterpretation: closure = mean Δs over the rollout; (1-closure) is the curve")
-    print("fraction left untraversed = the mean-drift share Phase-2 budget guidance can target.")
+        x = out["x_base"].numpy().astype(np.float32)
+        path = os.path.join(OUT, f"arc_{tag}_N{N}.npz")
+        np.savez(path, x_base=x)
+        nonc = float(out["arc_noncanonical"].float().mean()) if "arc_noncanonical" in out else float("nan")
+        print(f"{tag} N={N}: saved {x.shape} -> {path}  noncanonical={nonc:.4f}")
 
 
 if __name__ == "__main__":

@@ -72,4 +72,18 @@ comparable on the P3 pacing-drift metric.
 - 22:35 — **Gate A RESOLVED: RECOVERING.** Rail val/loss 0.195 (ep0) → 0.153 (ep1),
   still descending toward baseline 0.131. The lr=1e-3 transient (rail sublayer
   activating) is resolving, not diverging — no relaunch. Variant A confirmed to use
-  lr=1e-3 (rail recovered at it). Next: let rail finish (~02:30), then Gate B/C.
+  lr=1e-3 (rail recovered at it). Next: let rail finish, then Gate B/C.
+- (later, machine-time ~05:10) — ETA corrected by direct measurement: 15.9 min/epoch,
+  17 epochs left ⇒ rail ETA ~09:38 (NOT the earlier ~02:30 mis-estimate). Decision:
+  let it run the full 20 epochs (strongest checkpoint; killing early to save time is a
+  marginal-benefit state change). Variant A + OTgap will land midday — correctness over
+  speed.
+- ~05:15 — Caught + fixed a correctness bug: P3 (and P4) harness was NOT rail-aware;
+  forward() skips rail_attn when curve_waypoints is None, so a rail checkpoint would
+  eval rail-DISABLED = false NULL. Harness now feeds recomputed fixed_template waypoints.
+- ~05:20 — **HEADLINE: rail FIXES the held-out drift, already at epoch 2.** Rail-aware
+  P3 on rail best.ckpt (ep2, val 0.144): L4 Δs mean 0.716→**0.941** at k=48 (baseline
+  0.716), W1 0.281→**0.098**; k=48 first-8-step bias −0.28→**−0.07** = Gate-B FIXED
+  signature. Mechanism-matched fix confirmed: the failure was pacing, the rail supplies
+  the pacing reference as input. Expect the final (ep~19) checkpoint to be stronger.
+  Remaining: OTgap confirmation (GPU, post-rail), variant A comparison, final-ckpt P3.

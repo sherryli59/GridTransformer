@@ -35,7 +35,8 @@ from grid_transformer.data.lj_transferable import (
 from grid_transformer.models.transformer import GraphormerAR
 from sample_lj import _rail_resolution_for_box, autoregressive_relative_delta_sample
 
-CKPT = "lj_ckpts_multisize_arc_L3L5/multisize_arc_fullcov/best.ckpt"
+CKPT = os.environ.get("P3_CKPT", "lj_ckpts_multisize_arc_L3L5/multisize_arc_fullcov/best.ckpt")
+TAG = os.environ.get("P3_TAG", "")  # appended to the output figure name
 H5 = "/mnt/ssd/mcmc/lj_mcmc_sweep_3d/lj3d_L4_rho1.0_N64_T1.0.h5"
 OUT = "reports/multisize_arc/figs"
 N, L = 64, 4.0
@@ -131,7 +132,7 @@ def main():
     ax[1].set_xlabel("t − k"); ax[1].legend(fontsize=8)
     fig.suptitle(f"P3: drift onset at held-out L4 (T={TEMPERATURE}, {NSAMP} samples)")
     fig.tight_layout()
-    fname = f"{OUT}/p3_drift_onset_T{TEMPERATURE:g}.png"
+    fname = f"{OUT}/p3_drift_onset{('_' + TAG) if TAG else ''}_T{TEMPERATURE:g}.png"
     fig.savefig(fname, dpi=110)
     print(f"\nwrote {fname}")
 

@@ -93,11 +93,40 @@ cell geometry — so Arm C′ needs the normalization even on the gilbert substr
   On failure, localize it: jump statistics vs turn statistics, and whether it hits
   all non-pow2 R or a specific class (e.g., odd/prime side lengths) — the restricted-R
   set follows from that localization, not from abandoning the substrate.
-- **P6 (in flight): exposure-bias noise readout.** `arc_noise_ds006` (Plan A iid Δs
-  noise 0.06, warm-start, 20 ep) lands ~tonight. Stage-1 gates: L4 Δs gen mean → 0.99,
-  L4 Δs W1 < ~0.08, clean val NLL regression ≤ +0.03, L3/L5 OTgap stay ≤ 0.6/0.65.
-  Outcome scopes Arm B+: clear win ⇒ B+ keeps iid noise; NLL fine but mean stuck < 0.93
-  ⇒ escalate to scheduled feedback inside B+.
+  **RESULT 2026-06-12 (`analyze_p5_gilbert_motifs.py`, `figs/p5_gilbert_motifs.png`):
+  gate fails numerically but the cause is benign and the remedy is free.** Jump-fraction
+  max/min across R∈[8,20] is 3.1 (L4) / 5.7 (L5) — over the 2× threshold — but the spread
+  is entirely the **odd-R multi-cell-step artifact**: odd grids have Euclidean steps up to
+  ~2.8 cells (multicell fraction 0.8–3%), even grids are perfectly face-continuous
+  (multicell 0%, max step 1.0). At EVEN R the gilbert jump fraction matches the pow2
+  Hilbert baseline at every scale, including production R=86 (0.0009 vs hilbert 0.0009,
+  Δs mean 0.995). **Restriction: even R only** — which the production nearest-even-R rule
+  already enforces, so it costs nothing. Curve straight-step fraction is lower for gilbert
+  (~0.05) than Hilbert (~0.10) but stationary across R, so motif statistics are
+  size-stable on the even-R ladder.
+- **P6: exposure-bias noise readout — RESULT 2026-06-12 (`arc_noise_ds006`, 20 ep,
+  evaluated via `P3_CKPT=...noise.../best.ckpt` on the P3 harness).** Prediction confirmed,
+  in fact more strongly: the noise run did **not** move the held-out drift at all. L4
+  suffix Δs mean / W1 at k=0/16/32/48 are 0.866/0.840/0.772/0.723 and 0.129/0.162/0.230/
+  0.275 — **statistically identical to the baseline** (0.867/0.843/0.781/0.716,
+  0.129/0.160/0.221/0.281). Δs gen mean 0.866 ≪ 0.93 escalation threshold; W1 did not even
+  improve. Clean val NLL stayed flat through the full noise ramp (40.2→40.6, no regression),
+  so the conditional was undamaged — the corruption simply has no purchase on a
+  position-dependent (not context-dependent) failure. **Consequences:** (i) iid noise is
+  dropped from Arm B+; (ii) the B1→B2 scheduled-feedback escalation is moot (confirmed: not
+  a context problem); (iii) **Arm B+ collapses to rail-conditioning alone** — see P7.
+- **P7 (in flight): rail-conditioning probe.** `arc_rail_k8` (warm-start, fixed_template
+  curve rail, K=8 waypoints, `absolute` reference, NO noise, 20 ep) — the mechanism-matched
+  test of whether feeding the pacing reference as a cross-attention INPUT fixes the
+  position-dependent drift. Reuses the existing non-rail L3L5 cache via the on-the-fly
+  fixed-template synthesis unlock (`LJTransferableCachedDataset(use_curve_rail=...)`);
+  inputs need not be size-invariant, so the N^(1/6) target issue does not apply.
+  `CurveRailAttention.out_proj` is now **zero-initialized** so the warm-start is an exact
+  no-op at step 0 — any movement is causally the rail's. **Discriminating eval (CPU):** the
+  P3 teacher-prefix harness (`P3_CKPT=...rail.../best.ckpt`). Success signature: the k=48
+  first-8-step bias collapses from −0.28 toward the −0.06 early-position level, L4 Δs gen
+  mean → ≥0.93, W1 < 0.08. Outcome decides whether Arm B+ ships as rail-conditioning and
+  whether the rail input stacks onto Arm C′.
 
 ## Phase 0.5 — gilbert constant-cell substrate (in progress, user-led)
 
@@ -128,10 +157,12 @@ noise, extend both. This halves wall-clock to a decision when the comparison is 
   `curve_rail_residual_target` + `fixed_template`; delta = one scale factor at cache
   build + inverse in sampler. Watch: monotonicity is no longer structural — track
   noncanonical/backward-step counters from the likelihood audit.
-- **Arm B+ — drift-robust Δs.** Keep the tight size-invariant `(Δs, fine)` target; add
-  the absolute reference as *input* via the built D2 `rail_attn` cross-attention; train
-  with context corruption (form chosen by P3/P6). Targets must be size-invariant to
-  extrapolate; inputs need not be.
+- **Arm B+ — rail-conditioned Δs** (revised post-P6: noise dropped). Keep the tight
+  size-invariant `(Δs, fine)` target; add the absolute reference as *input* via the
+  `rail_attn` cross-attention (zero-init, fixed_template, K=8). P6 showed context
+  corruption has no purchase on the position-dependent failure, so Arm B+ is now rail
+  conditioning alone — the form validated by the P7 probe. Targets must be size-invariant
+  to extrapolate; inputs (the rail) need not be.
 
 **Shared eval battery**: teacher-forced NLL (all sizes), Δs/fine marginal W1 at held-out
 sizes, OTgap at trained + held-out sizes (reduced sample count at N=1000 if OT cost

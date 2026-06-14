@@ -1,0 +1,16 @@
+# L4 N=64 L=4.0  sweeps=200 step=0.05 device=cuda
+# TARGET (MCMC): Uc/N mean=-4.612 std=0.108
+# TARGET clash%=0.0
+
+candidate   Uc/N init  Uc/N fin   (tgt)  gr_L1 i  gr_L1 f  clash%i  clash%f   acc
+rail           21.636    -4.598  -4.612   0.4830   0.0078    100.0      0.0  0.57
+           clamped Uc/N traj (0,25,50,...sweeps): [21.64, -3.12, -4.4, -4.54, -4.58, -4.59, -4.61, -4.61, -4.6]
+baseline       24.272    -4.605  -4.612   0.4641   0.0074    100.0      0.0  0.56
+           clamped Uc/N traj (0,25,50,...sweeps): [24.27, -2.53, -4.37, -4.54, -4.58, -4.6, -4.6, -4.61, -4.6]
+uniform        27.383    -4.596  -4.612   0.5782   0.0091    100.0      0.0  0.56
+           clamped Uc/N traj (0,25,50,...sweeps): [27.38, -1.14, -4.32, -4.52, -4.56, -4.59, -4.61, -4.61, -4.6]
+TARGET-ctl     -4.617    -4.609  -4.612   0.0038   0.0066      0.0      0.0  0.60
+           clamped Uc/N traj (0,25,50,...sweeps): [-4.62, -4.61, -4.61, -4.61, -4.61, -4.61, -4.61, -4.61, -4.61]
+
+# target Uc/N = -4.612: a candidate 'recovers Boltzmann' if final Uc/N and
+# gr_L1 approach the target's, AND the cold uniform start does NOT (good init matters).

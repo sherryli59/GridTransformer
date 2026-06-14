@@ -1,0 +1,16 @@
+# L10 N=1000 L=10.0  sweeps=200 step=0.05 device=cuda
+# TARGET (MCMC): Uc/N mean=-4.917 std=0.025
+# TARGET clash%=0.0
+
+candidate   Uc/N init  Uc/N fin  std fin (tgt std)  gr_L1 f  clash%f   acc
+rail           25.334    -5.138    0.042     0.025   0.0298      0.0  0.52
+           clamped Uc/N traj (0,25,50,...sweeps): [25.33, -1.73, -4.7, -5.02, -5.1, -5.13, -5.14, -5.14, -5.14]
+uniform        27.460    -4.925    0.027     0.025   0.0049      0.0  0.56
+           clamped Uc/N traj (0,25,50,...sweeps): [27.46, -0.93, -4.57, -4.82, -4.88, -4.91, -4.92, -4.92, -4.92]
+TARGET-ctl     -4.922    -4.915    0.025     0.025   0.0015      0.0  0.60
+           clamped Uc/N traj (0,25,50,...sweeps): [-4.92, -4.92, -4.92, -4.91, -4.91, -4.92, -4.91, -4.92, -4.92]
+
+wrote reports/multisize_arc/figs/relax_energy_dist_L10.png
+# 'recovers Boltzmann' ⇒ relaxed μ AND σ match target (μ=-4.917, σ=0.025),
+# not just the mean — a too-narrow σ would mean quenching to near-identical structures.
+wrote reports/multisize_arc/figs/relax_gr_L10.png

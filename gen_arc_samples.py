@@ -29,8 +29,10 @@ SIZES = {
     "L3": ("/mnt/ssd/mcmc/lj_mcmc_sweep_3d/lj3d_L3_rho1.0_N27_T1.0.h5", 27, 3.0),
     "L4": ("/mnt/ssd/mcmc/lj_mcmc_sweep_3d/lj3d_L4_rho1.0_N64_T1.0.h5", 64, 4.0),
     "L5": ("/mnt/ssd/mcmc/lj_mcmc_sweep_3d/lj3d_L5_rho1.0_N125_T1.0.h5", 125, 5.0),
+    "L10": ("/mnt/ssd/mcmc/lj_mcmc_sweep_3d/lj3d_L10_rho1.0_N1000_T1.0.h5", 1000, 10.0),
 }
 WANT = os.environ.get("GEN_SIZES", "L3,L4,L5").split(",")
+GEN_DEVICE = os.environ.get("GEN_DEVICE", "cuda" if torch.cuda.is_available() else "cpu")
 
 
 def p0_pool(h5, N, L, R, n):
@@ -54,8 +56,9 @@ def p0_pool(h5, N, L, R, n):
 def main():
     torch.set_num_threads(int(os.environ.get("OMP_NUM_THREADS", "6")))
     os.makedirs(OUT, exist_ok=True)
-    model = GraphormerAR.load_from_checkpoint(CKPT, map_location="cpu").eval()
+    model = GraphormerAR.load_from_checkpoint(CKPT, map_location=GEN_DEVICE).eval().to(GEN_DEVICE)
     tok = RelativeDeltaTokenizer(window=3.0, bins=64, dim=3)
+    print(f"[gen] device={GEN_DEVICE}")
 
     rail_kwargs = {}
     if bool(getattr(model, "use_curve_rail", False)) and model.rail_attn is not None:
@@ -81,11 +84,11 @@ def main():
             arc_p0_positions=torch.from_numpy(p0.astype(np.float32)), arc_p0_paired=True,
             **rail_kwargs,
         )
-        x = out["x_base"].numpy().astype(np.float32)
+        x = out["x_base"].cpu().numpy().astype(np.float32)
         path = os.path.join(OUT, f"arc_{tag}_N{N}.npz")
         save = dict(x_base=x, L=np.float32(L))
         if "logp_continuous" in out:
-            save["logp_continuous"] = out["logp_continuous"].numpy().astype(np.float64)
+            save["logp_continuous"] = out["logp_continuous"].cpu().numpy().astype(np.float64)
         np.savez(path, **save)
         nonc = float(out["arc_noncanonical"].float().mean()) if "arc_noncanonical" in out else float("nan")
         print(f"{tag} N={N}: saved {x.shape} -> {path}  noncanonical={nonc:.4f}")

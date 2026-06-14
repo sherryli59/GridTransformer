@@ -27,11 +27,11 @@ STEP = float(os.environ.get("RELAX_STEP", "0.08"))
 SIGMA = 2 ** (-1 / 6)
 CORE = 0.8 * SIGMA  # clash/clamp core in absolute units (0.8 sigma)
 DEV = "cuda" if torch.cuda.is_available() else "cpu"
-SPEC = {"L3": (27, 3.0), "L4": (64, 4.0), "L5": (125, 5.0)}[SIZE]
+SPEC = {"L3": (27, 3.0), "L4": (64, 4.0), "L5": (125, 5.0), "L10": (1000, 10.0)}[SIZE]
 N, L = SPEC
 H5 = f"/mnt/ssd/mcmc/lj_mcmc_sweep_3d/lj3d_{SIZE}_rho1.0_N{N}_T1.0.h5"
 CANDS = {
-    "rail": f"reports/multisize_arc/samples_rail_final/arc_{SIZE}_N{N}.npz",
+    "rail": os.environ.get("RAIL_NPZ", f"reports/multisize_arc/samples_rail_final/arc_{SIZE}_N{N}.npz"),
     "baseline": f"reports/multisize_arc/samples_baseline/arc_{SIZE}_N{N}.npz",
 }
 

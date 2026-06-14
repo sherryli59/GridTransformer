@@ -1,0 +1,7 @@
+# L5 N=125  DISPLACEMENT mode, snapshots at [0, 80, 200] sweeps, step=0.05
+rail       | 80sw: mean=0.444 med=0.428 p90=0.693 | 200sw: mean=0.587 med=0.563 p90=0.931 
+uniform    | 80sw: mean=0.524 med=0.507 p90=0.810 | 200sw: mean=0.664 med=0.638 p90=1.042 
+TARGET-ctl | 80sw: mean=0.339 med=0.319 p90=0.552 | 200sw: mean=0.498 med=0.470 p90=0.807 
+wrote reports/multisize_arc/figs/relax_displacement_L5.png
+# TARGET-ctl is the pure-diffusion floor (started at equilibrium); a candidate's
+# EXCESS over it = the init-correction travel the relaxation had to do.

@@ -53,8 +53,9 @@ def single_particle_energy(lj, x, i):
     return (4.0 * (inv6 * inv6 - inv6)).sum(dim=-1)        # [B]
 
 
-def metropolis(lj, x0, sweeps, step, seed=0, rec=None, tgt_gr=None):
-    """If rec is a list, append (sweep, clamped Uc/N, gr_L1-vs-target) every sweep."""
+def metropolis(lj, x0, sweeps, step, seed=0, rec=None, tgt_gr=None, snapshots=None, snap_out=None):
+    """If rec is a list, append (sweep, clamped Uc/N, gr_L1-vs-target) every sweep.
+    If snapshots is a set of sweep numbers and snap_out a dict, store x.clone() at those."""
     g = torch.Generator(device=DEV).manual_seed(seed)
     x = x0.clone()
     B, n, _ = x.shape
@@ -62,6 +63,8 @@ def metropolis(lj, x0, sweeps, step, seed=0, rec=None, tgt_gr=None):
     traj_E = [lj.potential(x, min_dist=CORE, turn_off_harmonic=True).mean().item() / x.shape[1]]
     if rec is not None:
         rec.append((0, traj_E[0], float(np.abs(_gr_hist(x) - tgt_gr).mean())))
+    if snapshots and 0 in snapshots:
+        snap_out[0] = x.clone()
     for s in range(sweeps):
         for i in range(n):
             e_old = single_particle_energy(lj, x, i)
@@ -78,6 +81,8 @@ def metropolis(lj, x0, sweeps, step, seed=0, rec=None, tgt_gr=None):
         if rec is not None:
             ec = lj.potential(x, min_dist=CORE, turn_off_harmonic=True).mean().item() / n
             rec.append((s + 1, ec, float(np.abs(_gr_hist(x) - tgt_gr).mean())))
+        if snapshots and (s + 1) in snapshots:
+            snap_out[s + 1] = x.clone()
         if (s + 1) % 25 == 0:
             traj_E.append(lj.potential(x, min_dist=CORE, turn_off_harmonic=True).mean().item() / x.shape[1])
     return x, acc / (sweeps * n), traj_E
@@ -185,6 +190,63 @@ def convergence_main():
     fig.savefig(out, dpi=110)
     np.savez(f"reports/multisize_arc/relax_convergence_{SIZE}.npz", **{f"{k}_{m}": v for k, (s, e, gl) in summary.items() for m, v in (("s", s), ("e", e), ("gr", gl))})
     print(f"wrote {out}")
+
+
+def particle_disp(x0, xt):
+    """Per-particle net displacement magnitude |xt - x0|, min-image, COM-drift removed."""
+    d = xt - x0
+    d = d - torch.round(d / L) * L
+    d = d - d.mean(dim=1, keepdim=True)  # remove global translation
+    return torch.linalg.norm(d, dim=-1).reshape(-1).detach().cpu().numpy()  # [B*N]
+
+
+def disp_main():
+    """Distribution of per-particle displacement during relaxation, by init quality."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    torch.manual_seed(0)
+    lj = lj_for(N)
+    tgt = load_target(N)
+    cand = _load_candidates(lj, tgt)
+    snaps = {0, 80, 200}  # 0=init, 80≈rail convergence, 200=fully converged
+    print(f"# {SIZE} N={N}  DISPLACEMENT mode, snapshots at {sorted(snaps)} sweeps, step={STEP}")
+    colors = {"rail": "C0", "baseline": "C1", "uniform": "C2", "TARGET-ctl": "C3"}
+
+    disp = {}
+    for name, x0 in cand.items():
+        snap_out = {}
+        metropolis(lj, x0, max(snaps), STEP, seed=1, snapshots=snaps, snap_out=snap_out)
+        disp[name] = {s: particle_disp(snap_out[0], snap_out[s]) for s in snaps if s > 0}
+        line = f"{name:10s} "
+        for s in sorted(d for d in snaps if d > 0):
+            dd = disp[name][s]
+            line += f"| {s}sw: mean={dd.mean():.3f} med={np.median(dd):.3f} p90={np.percentile(dd,90):.3f} "
+        print(line)
+
+    fig, ax = plt.subplots(1, 2, figsize=(14, 5))
+    order = [k for k in ("rail", "baseline", "uniform", "TARGET-ctl") if k in disp]
+    hi = max(np.percentile(disp[k][200], 99) for k in order)
+    bins = np.linspace(0, hi, 60)
+    for k in order:
+        ax[0].hist(disp[k][200], bins=bins, density=True, histtype="step", lw=2, color=colors[k],
+                   label=f"{k} (mean={disp[k][200].mean():.3f})")
+    ax[0].set_title(f"{SIZE} N={N}: per-particle displacement init→converged (200 sweeps)")
+    ax[0].set_xlabel("|Δr| (COM-removed, min-image)"); ax[0].set_ylabel("density"); ax[0].legend(fontsize=8)
+    # right: mean displacement vs snapshot, showing rail moves least throughout
+    for k in order:
+        xs = sorted(s for s in snaps if s > 0)
+        ax[1].plot(xs, [disp[k][s].mean() for s in xs], "o-", color=colors[k], label=k)
+    ax[1].set_title(f"{SIZE}: mean particle displacement vs sweeps"); ax[1].set_xlabel("sweeps"); ax[1].set_ylabel("mean |Δr|"); ax[1].legend(fontsize=8)
+    fig.tight_layout()
+    out = f"reports/multisize_arc/figs/relax_displacement_{SIZE}.png"
+    fig.savefig(out, dpi=110)
+    np.savez(f"reports/multisize_arc/relax_displacement_{SIZE}.npz",
+             **{f"{k}_{s}": disp[k][s] for k in order for s in disp[k]})
+    print(f"wrote {out}")
+    print(f"# TARGET-ctl is the pure-diffusion floor (started at equilibrium); a candidate's")
+    print(f"# EXCESS over it = the init-correction travel the relaxation had to do.")
 
 
 def load_target(n):
@@ -309,7 +371,9 @@ def main():
 
 
 if __name__ == "__main__":
-    if os.environ.get("RELAX_CONV", "0") == "1":
+    if os.environ.get("RELAX_DISP", "0") == "1":
+        disp_main()
+    elif os.environ.get("RELAX_CONV", "0") == "1":
         convergence_main()
     else:
         main()

@@ -53,12 +53,15 @@ def single_particle_energy(lj, x, i):
     return (4.0 * (inv6 * inv6 - inv6)).sum(dim=-1)        # [B]
 
 
-def metropolis(lj, x0, sweeps, step, seed=0):
+def metropolis(lj, x0, sweeps, step, seed=0, rec=None, tgt_gr=None):
+    """If rec is a list, append (sweep, clamped Uc/N, gr_L1-vs-target) every sweep."""
     g = torch.Generator(device=DEV).manual_seed(seed)
     x = x0.clone()
     B, n, _ = x.shape
     acc = 0
     traj_E = [lj.potential(x, min_dist=CORE, turn_off_harmonic=True).mean().item() / x.shape[1]]
+    if rec is not None:
+        rec.append((0, traj_E[0], float(np.abs(_gr_hist(x) - tgt_gr).mean())))
     for s in range(sweeps):
         for i in range(n):
             e_old = single_particle_energy(lj, x, i)
@@ -72,6 +75,9 @@ def metropolis(lj, x0, sweeps, step, seed=0):
             take = u < paccept
             x[take, i, :] = prop[take, i, :]
             acc += take.float().mean().item()
+        if rec is not None:
+            ec = lj.potential(x, min_dist=CORE, turn_off_harmonic=True).mean().item() / n
+            rec.append((s + 1, ec, float(np.abs(_gr_hist(x) - tgt_gr).mean())))
         if (s + 1) % 25 == 0:
             traj_E.append(lj.potential(x, min_dist=CORE, turn_off_harmonic=True).mean().item() / x.shape[1])
     return x, acc / (sweeps * n), traj_E
@@ -125,6 +131,74 @@ def clash_pct(x, rmin=CORE):
     iu = torch.triu_indices(n, n, offset=1)
     rr = r[:, iu[0], iu[1]]
     return 100.0 * (rr < rmin).any(dim=1).float().mean().item()
+
+
+def _load_candidates(lj, tgt):
+    cand = {}
+    cand["rail"] = torch.tensor(np.load(CANDS["rail"])["x_base"], dtype=torch.float32, device=DEV)
+    if os.path.exists(CANDS["baseline"]):
+        cand["baseline"] = torch.tensor(np.load(CANDS["baseline"])["x_base"], dtype=torch.float32, device=DEV)
+    B = cand["rail"].shape[0]
+    cand["uniform"] = torch.rand(B, N, 3, generator=torch.Generator(device=DEV).manual_seed(3), device=DEV) * L
+    cand["TARGET-ctl"] = tgt[:B].clone()
+    return cand
+
+
+def convergence_main():
+    """Short-budget regime: record energy + g(r)-L1 every sweep, plot convergence vs init."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    torch.manual_seed(0)
+    lj = lj_for(N)
+    tgt = load_target(N)
+    et_m, et_s = ener_stats(lj, tgt)
+    tgt_gr = _gr_hist(tgt)
+    floor = float(np.abs(_gr_hist(tgt[: tgt.shape[0] // 2]) - _gr_hist(tgt[tgt.shape[0] // 2:])).mean())
+    cand = _load_candidates(lj, tgt)
+    print(f"# {SIZE} N={N}  CONVERGENCE mode, sweeps={SWEEPS} step={STEP}")
+    print(f"# target Uc/N={et_m:.3f}; gr_L1 finite-sample floor≈{floor:.4f}")
+
+    fig, ax = plt.subplots(1, 2, figsize=(14, 5))
+    colors = {"rail": "C0", "baseline": "C1", "uniform": "C2", "TARGET-ctl": "C3"}
+    summary = {}
+    for name, x0 in cand.items():
+        rec = []
+        metropolis(lj, x0, SWEEPS, STEP, seed=1, rec=rec, tgt_gr=tgt_gr)
+        s, e, gl = np.array([r[0] for r in rec]), np.array([r[1] for r in rec]), np.array([r[2] for r in rec])
+        summary[name] = (s, e, gl)
+        ax[0].plot(s, e, color=colors[name], lw=2, label=name)
+        ax[1].plot(s, gl, color=colors[name], lw=2, label=name)
+        # sweeps to reach within 1% of target energy and within 2x the gr floor
+        n_e = next((int(si) for si, ei in zip(s, e) if ei <= et_m + 0.01 * abs(et_m)), None)
+        n_g = next((int(si) for si, gi in zip(s, gl) if gi <= 2 * floor), None)
+        print(f"{name:10s} sweeps→1%-energy={n_e}  sweeps→2×gr-floor={n_g}  "
+              f"(gr_L1 @5={gl[min(5,len(gl)-1)]:.3f} @10={gl[min(10,len(gl)-1)]:.3f} @20={gl[min(20,len(gl)-1)]:.3f})")
+    ax[0].axhline(et_m, ls="--", color="k", lw=1, label=f"target {et_m:.2f}")
+    ax[0].set_title(f"{SIZE} N={N}: energy vs sweeps"); ax[0].set_xlabel("sweeps"); ax[0].set_ylabel("Uc/N"); ax[0].legend(fontsize=8)
+    ax[0].set_ylim(et_m - 0.5, min(8, max(e.max() for _, e, _ in summary.values())))
+    ax[1].axhline(floor, ls="--", color="k", lw=1, label=f"gr floor {floor:.4f}")
+    ax[1].set_title(f"{SIZE}: g(r) L1 vs target vs sweeps"); ax[1].set_xlabel("sweeps"); ax[1].set_ylabel("g(r) L1"); ax[1].set_yscale("log"); ax[1].legend(fontsize=8)
+    fig.tight_layout()
+    out = f"reports/multisize_arc/figs/relax_convergence_{SIZE}.png"
+    fig.savefig(out, dpi=110)
+    np.savez(f"reports/multisize_arc/relax_convergence_{SIZE}.npz", **{f"{k}_{m}": v for k, (s, e, gl) in summary.items() for m, v in (("s", s), ("e", e), ("gr", gl))})
+    print(f"wrote {out}")
+
+
+def load_target(n):
+    with h5py.File(H5, "r") as f:
+        traj = f["traj"]
+        nt, ns = traj.shape[0], traj.shape[1]
+        rng = np.random.default_rng(0)
+        idx = np.sort(rng.choice(nt * ns, size=512, replace=False))
+        ti, si = np.divmod(idx, ns)
+        xt = np.empty((len(idx), n, 3), dtype=np.float32)
+        for t in np.unique(ti):
+            m = ti == t
+            xt[m] = traj[t, si[m]]
+    return torch.tensor(xt, dtype=torch.float32, device=DEV)
 
 
 def main():
@@ -235,4 +309,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if os.environ.get("RELAX_CONV", "0") == "1":
+        convergence_main()
+    else:
+        main()

@@ -1,0 +1,7 @@
+# L4 N=64  CONVERGENCE mode, sweeps=50 step=0.05
+# target Uc/N=-4.612; gr_L1 finite-sample floor≈0.0077
+rail       sweeps→1%-energy=None  sweeps→2×gr-floor=None  (gr_L1 @5=0.335 @10=0.285 @20=0.194)
+baseline   sweeps→1%-energy=None  sweeps→2×gr-floor=None  (gr_L1 @5=0.356 @10=0.305 @20=0.217)
+uniform    sweeps→1%-energy=None  sweeps→2×gr-floor=None  (gr_L1 @5=0.395 @10=0.333 @20=0.237)
+TARGET-ctl sweeps→1%-energy=0  sweeps→2×gr-floor=0  (gr_L1 @5=0.008 @10=0.007 @20=0.006)
+wrote reports/multisize_arc/figs/relax_convergence_L4.png

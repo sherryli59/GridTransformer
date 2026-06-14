@@ -96,10 +96,15 @@ def gr_l1(x, target, bins=60):
     return float(np.abs(_gr_hist(x, bins) - _gr_hist(target, bins)).mean())
 
 
+def ener_arr(lj, x):
+    """Per-config core-clamped Uc/N (a numpy array, one value per config)."""
+    return (lj.potential(x, min_dist=CORE, turn_off_harmonic=True) / N).detach().cpu().numpy()
+
+
 def ener_stats(lj, x):
     # core-clamped (r floored at 0.8σ) like benchmark_lj27: raw r^-12 explodes on a few
     # healable overlaps, so the clamped energy is the stable structural metric.
-    e = lj.potential(x, min_dist=CORE, turn_off_harmonic=True) / N
+    e = ener_arr(lj, x)
     return float(e.mean()), float(e.std())
 
 
@@ -145,19 +150,54 @@ def main():
 
     gt_clash = clash_pct(tgt)
     print(f"# TARGET clash%={gt_clash:.1f}")
-    print(f"\n{'candidate':10s} {'Uc/N init':>10s} {'Uc/N fin':>9s} {'(tgt)':>7s} "
-          f"{'gr_L1 i':>8s} {'gr_L1 f':>8s} {'clash%i':>8s} {'clash%f':>8s} {'acc':>5s}")
+    print(f"\n{'candidate':10s} {'Uc/N init':>10s} {'Uc/N fin':>9s} {'std fin':>8s} {'(tgt std)':>9s} "
+          f"{'gr_L1 f':>8s} {'clash%f':>8s} {'acc':>5s}")
+    e_tgt = ener_arr(lj, tgt)
+    energies = {"target": e_tgt}
     for name, x0 in cand.items():
-        ei_m, _ = ener_stats(lj, x0)
+        ei = ener_arr(lj, x0)
         gi = gr_l1(x0, tgt); ci = clash_pct(x0)
         xf, accept, trajE = metropolis(lj, x0, SWEEPS, STEP, seed=1)
-        ef_m, _ = ener_stats(lj, xf)
+        ef = ener_arr(lj, xf)
         gf = gr_l1(xf, tgt); cf = clash_pct(xf)
-        print(f"{name:10s} {ei_m:10.3f} {ef_m:9.3f} {et_m:7.3f} {gi:8.4f} {gf:8.4f} "
-              f"{ci:8.1f} {cf:8.1f} {accept:5.2f}")
+        energies[f"{name}_init"] = ei
+        energies[f"{name}_final"] = ef
+        print(f"{name:10s} {ei.mean():10.3f} {ef.mean():9.3f} {ef.std():8.3f} {et_s:9.3f} "
+              f"{gf:8.4f} {cf:8.1f} {accept:5.2f}")
         print(f"           clamped Uc/N traj (0,25,50,...sweeps): {[round(v,2) for v in trajE]}")
-    print(f"\n# target Uc/N = {et_m:.3f}: a candidate 'recovers Boltzmann' if final Uc/N and")
-    print(f"# gr_L1 approach the target's, AND the cold uniform start does NOT (good init matters).")
+
+    # ---- plot the energy distributions ----
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    np.savez(f"reports/multisize_arc/relax_energies_{SIZE}.npz", **energies)
+    order = [k for k in ("rail", "baseline", "uniform", "TARGET-ctl") if f"{k}_final" in energies]
+    lo = min(e_tgt.min(), min(energies[f"{k}_final"].min() for k in order)) - 0.05
+    hi = max(e_tgt.max(), max(energies[f"{k}_final"].max() for k in order)) + 0.05
+    bins = np.linspace(lo, hi, 50)
+    fig, ax = plt.subplots(1, 2, figsize=(14, 5))
+    # left: final relaxed distributions vs target
+    ax[0].hist(e_tgt, bins=bins, density=True, alpha=0.45, color="k", label=f"target (μ={et_m:.3f} σ={et_s:.3f})")
+    for k, c in zip(order, ["C0", "C1", "C2", "C3"]):
+        ef = energies[f"{k}_final"]
+        ax[0].hist(ef, bins=bins, density=True, histtype="step", lw=2, color=c,
+                   label=f"{k} relaxed (μ={ef.mean():.3f} σ={ef.std():.3f})")
+    ax[0].set_title(f"{SIZE} N={N}: energy distribution AFTER {SWEEPS} sweeps vs target")
+    ax[0].set_xlabel("core-clamped Uc/N"); ax[0].set_ylabel("density"); ax[0].legend(fontsize=8)
+    # right: rail init -> final vs target (shows the relaxation pulling onto Boltzmann)
+    ri, rf = energies["rail_init"], energies["rail_final"]
+    ax[1].hist(np.clip(ri, lo, 40), bins=40, density=True, alpha=0.4, color="C0", label=f"rail init (μ={ri.mean():.1f})")
+    ax[1].hist(rf, bins=bins, density=True, histtype="step", lw=2, color="C0", label=f"rail relaxed (μ={rf.mean():.3f})")
+    ax[1].hist(e_tgt, bins=bins, density=True, alpha=0.45, color="k", label="target")
+    ax[1].set_title(f"{SIZE}: rail init (clashy, off-scale) → relaxed → onto target")
+    ax[1].set_xlabel("core-clamped Uc/N"); ax[1].legend(fontsize=8)
+    fig.tight_layout()
+    out = f"reports/multisize_arc/figs/relax_energy_dist_{SIZE}.png"
+    fig.savefig(out, dpi=110)
+    print(f"\nwrote {out}")
+    print(f"# 'recovers Boltzmann' ⇒ relaxed μ AND σ match target (μ={et_m:.3f}, σ={et_s:.3f}),")
+    print(f"# not just the mean — a too-narrow σ would mean quenching to near-identical structures.")
 
 
 if __name__ == "__main__":

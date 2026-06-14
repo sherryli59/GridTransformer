@@ -1,0 +1,24 @@
+# DW4 ESS benchmark
+# DW params: a=0.9 b=-4.0 c=0.0 offset=4.0 kT=1.0 (dim=8, n_particles=4)
+# target data: /mnt/ssd/mcmc/dw_mcmc_sweep/dw4_N4_T1.0_dim2.h5
+# energy sanity (real MCMC data, 5000 configs): mean U = -22.565, std = 1.861, range [-25.74, -11.31]
+# sampling at temperature 1.0, nsamples=10000
+
+#   sampling continuous_nonfactorized (MDN, fullcov) -> dw4_nopbc_0505/dw4_continuous_nonfactorized/samples_dw4_ess_T1.npz
+#   sampling discrete_factorized (binned, factorized) -> dw4_nopbc_0505/dw4_discrete_factorized/samples_dw4_ess_T1.npz
+#   sampling codebook_nonfactorized (codebook 4096) -> dw4_nopbc_0505/dw4_codebook_nonfactorized/samples_dw4_ess_T1.npz
+#   sampling discrete_factorized_bins256 (binned-256, factorized) -> dw4_nopbc_0505/dw4_discrete_factorized_bins256/samples_dw4_ess_T1.npz
+
+========================================================================================
+architecture                                   ckpt                        n    meanU    ESS%
+----------------------------------------------------------------------------------------
+TARGET (real MCMC data)                        -                           -  -22.565   100.0
+continuous_nonfactorized (MDN, fullcov)        best_for_sampling.ckpt  10000  -21.583    2.26
+discrete_factorized (binned, factorized)       best_for_sampling.ckpt  10000  -21.728    0.90
+codebook_nonfactorized (codebook 4096)         best_for_sampling.ckpt  10000  -19.654    0.07
+discrete_factorized_bins256 (binned-256, factorized) best.ckpt               10000  -21.937    0.61
+========================================================================================
+# best architecture ESS = 2.26%  (BELOW the 40% bar)
+# WARNING: no architecture cleared ~40% ESS on this EASY benchmark.
+#          Treat this as a likely pipeline bug (energy / logq sign /
+#          coordinate gauge), not a real model result, before trusting it.

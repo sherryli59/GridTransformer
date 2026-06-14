@@ -52,7 +52,10 @@ class ParticleGNNConditioner(nn.Module):
             nn.Linear(hidden, hidden), nn.SiLU(),
             nn.Linear(hidden, d * params_per_dim),
         )
-        nn.init.zeros_(self.node_mlp[-1].weight)
+        # SMALL (not zero) output init: near-identity start for stability AND non-zero
+        # gradient to the message network (a zero output weight would zero the gradient
+        # to edge_mlp -> the GNN could never learn). See diagnose_particles.py.
+        nn.init.normal_(self.node_mlp[-1].weight, std=1e-2)
         nn.init.zeros_(self.node_mlp[-1].bias)
 
     def forward(self, cond_pos: torch.Tensor) -> torch.Tensor:

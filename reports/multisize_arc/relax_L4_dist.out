@@ -15,3 +15,4 @@ TARGET-ctl     -4.617    -4.609    0.098     0.107   0.0066      0.0  0.60
 wrote reports/multisize_arc/figs/relax_energy_dist_L4.png
 # 'recovers Boltzmann' ⇒ relaxed μ AND σ match target (μ=-4.612, σ=0.107),
 # not just the mean — a too-narrow σ would mean quenching to near-identical structures.
+wrote reports/multisize_arc/figs/relax_gr_L4.png

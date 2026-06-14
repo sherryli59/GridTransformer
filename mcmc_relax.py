@@ -92,8 +92,17 @@ def _gr_hist(x, bins=60):
     return counts / (npairs * shell * rho * 0.5)
 
 
+def gr_centers(bins=60):
+    edges = np.linspace(0.0, L / 2, bins + 1)
+    return 0.5 * (edges[:-1] + edges[1:])
+
+
 def gr_l1(x, target, bins=60):
     return float(np.abs(_gr_hist(x, bins) - _gr_hist(target, bins)).mean())
+
+
+def gr_l1_from(g, gt):
+    return float(np.abs(g - gt).mean())
 
 
 def ener_arr(lj, x):
@@ -154,6 +163,7 @@ def main():
           f"{'gr_L1 f':>8s} {'clash%f':>8s} {'acc':>5s}")
     e_tgt = ener_arr(lj, tgt)
     energies = {"target": e_tgt}
+    grcurves = {"target": _gr_hist(tgt)}
     for name, x0 in cand.items():
         ei = ener_arr(lj, x0)
         gi = gr_l1(x0, tgt); ci = clash_pct(x0)
@@ -162,6 +172,8 @@ def main():
         gf = gr_l1(xf, tgt); cf = clash_pct(xf)
         energies[f"{name}_init"] = ei
         energies[f"{name}_final"] = ef
+        grcurves[f"{name}_init"] = _gr_hist(x0)
+        grcurves[f"{name}_final"] = _gr_hist(xf)
         print(f"{name:10s} {ei.mean():10.3f} {ef.mean():9.3f} {ef.std():8.3f} {et_s:9.3f} "
               f"{gf:8.4f} {cf:8.1f} {accept:5.2f}")
         print(f"           clamped Uc/N traj (0,25,50,...sweeps): {[round(v,2) for v in trajE]}")
@@ -198,6 +210,28 @@ def main():
     print(f"\nwrote {out}")
     print(f"# 'recovers Boltzmann' ⇒ relaxed μ AND σ match target (μ={et_m:.3f}, σ={et_s:.3f}),")
     print(f"# not just the mean — a too-narrow σ would mean quenching to near-identical structures.")
+
+    # ---- plot g(r) ----
+    r = gr_centers()
+    figg, axg = plt.subplots(1, 2, figsize=(14, 5))
+    # left: relaxed g(r) vs target
+    axg[0].plot(r, grcurves["target"], color="k", lw=3, alpha=0.6, label="target")
+    for k, c in zip(order, ["C0", "C1", "C2", "C3"]):
+        axg[0].plot(r, grcurves[f"{k}_final"], color=c, lw=1.6,
+                    label=f"{k} relaxed (L1={gr_l1_from(grcurves[f'{k}_final'], grcurves['target']):.4f})")
+    axg[0].set_title(f"{SIZE} N={N}: g(r) AFTER {SWEEPS} sweeps vs target")
+    axg[0].set_xlabel("r"); axg[0].set_ylabel("g(r)"); axg[0].legend(fontsize=8)
+    # right: rail init -> final vs target (relaxation builds the liquid structure)
+    axg[1].plot(r, grcurves["rail_init"], color="C0", ls=":", lw=1.6, label="rail init (clashy)")
+    axg[1].plot(r, grcurves["rail_final"], color="C0", lw=2, label="rail relaxed")
+    axg[1].plot(r, grcurves["target"], color="k", lw=3, alpha=0.6, label="target")
+    axg[1].set_title(f"{SIZE}: rail g(r) init → relaxed → onto target")
+    axg[1].set_xlabel("r"); axg[1].legend(fontsize=8)
+    figg.tight_layout()
+    outg = f"reports/multisize_arc/figs/relax_gr_{SIZE}.png"
+    figg.savefig(outg, dpi=110)
+    np.savez(f"reports/multisize_arc/relax_gr_{SIZE}.npz", r=r, **grcurves)
+    print(f"wrote {outg}")
 
 
 if __name__ == "__main__":

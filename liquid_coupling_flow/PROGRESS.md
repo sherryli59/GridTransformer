@@ -23,6 +23,7 @@ scale; locality (cutoff) for size transfer because a homogeneous liquid is local
 | `flow.py` | Flow: `sample()`, `log_prob()`, `forward_kld()` | `test_flow_core`: logp(sample)==logp(eval) 1e-6, log-det==autograd 1e-7 |
 | `smc.py` | **annealed SMC/AIS corrector** + periodic RW-Metropolis | `test_smc`: ESS 6.5%→**99.3%**, mean 1.993 (true 2.0) |
 | `energy.py` | periodic LJ energy (the Boltzmann target) | `test_energy`: two-body analytic, transl-inv 4e-16, min −1 |
+| `particles.py` | **augmented local particle coupling flow** (cutoff GNN) | `test_particles`: joint invertibility 6e-14, joint log-det==autograd **1e-15** |
 
 ### Demo results (proof-of-concept)
 - **Phase A** (`demo_phaseA.py`): affine flow learns `eight_gaussians`, NLL 3.85→1.29 (affine is the
@@ -64,12 +65,30 @@ The toys prove the machinery. The integration piece is a flow over PARTICLE conf
   homogeneity ⇒ size transfer (the whole point).
 
 Build order:
-1. `particles.py`: ParticleGNNConditioner + AugmentedCouplingLayer + ParticleFlow (joint sample/log_prob).
-2. Tests (CRITICAL, same as toys): joint invertibility + joint log-det vs autograd on a tiny N=4 2D system.
-3. Train on a small 2D LJ liquid (N≈16–32), reweight against `energy.py`, report ESS + g(r).
-4. **Size-transfer test**: train at small N, evaluate joint-space ESS / g(r) at larger N with the SAME
-   weights (the headline claim). Pair with `smc.py` to rescue ESS at the larger sizes.
-5. Then 3D, then energy-based training (reverse-KL / energy-weighted FM) to drop the data requirement.
+1. ✅ DONE `particles.py`: ParticleGNNConditioner + AugmentedCouplingLayer + ParticleFlow.
+2. ✅ DONE `test_particles.py`: joint invertibility (6e-14) + joint log-det vs autograd (1e-15). PASS.
+3. ⚠️ OPEN ISSUE — particle-flow TRAINING does not yet converge (machinery is proven; this is
+   localized to the GNN conditioner / augmented optimisation, NOT the flow framework):
+   - `demo_particles.py` (reverse-KL, N=16 2D, soft core): hot/slow anneal got `<U>/N` 93→11 but it
+     stalls clumped at the soft-core floor, ESS 0%. Reverse-KL is mode-seeking (known-hard).
+   - `demo_particles_mle.py` (forward-KL on 32k MCMC configs, data `<U>/N = −1.56`, correct fluid):
+     **`−log q` plateaus at 103.0 from step 400 = exactly the uniform-base constant `2Nd·log L`** →
+     **the flow never leaves the identity map** (samples uniform, 72% overlap, ESS 0%).
+   - **Diagnosis:** the SAME Flow/spline/training code fits the torus toy to 97.6% ESS, so the bug is
+     in `particles.py` — the GNN conditioner produces ~no gradient/variance (flow stays volume-
+     preserving). DEBUG NEXT, in order: (a) check `ParticleGNNConditioner` output variance + grad norm
+     on data; (b) non-zero / smaller-scale init of `node_mlp` last layer (zero-init may be a flat
+     start *for the GNN specifically*); (c) try **split-particle coupling** (condition x-updates on a
+     structured subset of x) instead of a uniform-noise auxiliary `a` — conditioning x on *noise* a
+     can't inject x–x correlations, the likely root cause; (d) larger lr / more layers.
+4. **Size-transfer test (the headline claim)** — only after (3): train small N, evaluate joint ESS /
+   g(r) at larger N with the SAME weights (local conditioner ⇒ should transfer). Pair with `smc.py`.
+5. Then 3D; add rotation equivariance (v1).
+
+**Honest status:** the exact-likelihood periodic coupling-flow + SMC + energy stack is verified and the
+toys prove the thesis (torus ESS 97.6%, SMC 6.5%→99.3%). The particle *integration* is scaffolded and
+its likelihood is proven exact, but training is stuck at identity — a concrete, isolated bug for the
+next session, with the split-particle-vs-noise-auxiliary hypothesis as the prime suspect.
 
 ## Open decisions for you
 - **Auxiliary `a`**: torus-uniform (both sets spatial, clean neighbour graphs) vs. Gaussian (Scalable-BG

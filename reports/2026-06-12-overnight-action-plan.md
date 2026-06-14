@@ -126,3 +126,29 @@ comparable on the P3 pacing-drift metric.
   Held-out L4 beats its own zero-shot baseline (0.795) and approaches green (≲0.6); both
   trained sizes also improve. Rail = unambiguous win on the bottom-line refinability metric.
   Variant A still training (epoch 0). Tracked watcher armed for variant A completion.
+- ~12:30 — **Variant A (joint-bias) DONE + evaluated. Verdict: marginal, NOT a fix.**
+  Three-way held-out L4 comparison (all warm-started from the same baseline):
+  | held-out L4 | baseline | variant A | rail |
+  |---|---|---|---|
+  | Δs mean (k=0) | 0.867 | 0.893 | **0.974** |
+  | Δs W1 (k=0) | 0.129 | 0.108 | **0.063** |
+  | Δs mean (k=48) | 0.716 | 0.744 | **0.941** |
+  | OTgap | 0.892 | 0.861 | **0.688** |
+  | trained-size val | 0.131 | 0.127 | **0.120** |
+  Variant A's joint (distance, arc-sep) bias only re-weights attention among PLACED
+  particles; it never supplies an absolute pacing reference. The rail feeds decode(j·X)
+  as INPUT — exactly the missing "where should I be on the curve" signal (P3 diagnosis).
+  **CONCLUSION: rail conditioning solves held-out size transfer; the cheaper
+  attention-structure approach does not.**
+
+## FINAL SUMMARY (overnight autonomous run complete)
+- The session's central open problem — held-out size-transfer drift in the arc_repr AR
+  model — is SOLVED by fixed-template curve-rail cross-attention conditioning.
+- Probes P1–P6 reframed the failure from "exposure bias" to a position-dependent curve-
+  PACING miscalibration; the rail (P7) supplies the pacing reference as input and fixes it
+  on all metrics (Δs drift, closure, OTgap) at the held-out size, while also improving the
+  trained sizes. Variant A confirms the mechanism is specifically the absolute pacing
+  input, not generic added capacity.
+- Next (user-led, out of autonomy scope): the gilbert constant-cell Phase-1 arms
+  (C′ normalized-anchor target + rail-conditioned B+), now with rail validated as the
+  B+ ingredient. Extrapolation beyond the trained ladder (L7/L10) remains the open gate.

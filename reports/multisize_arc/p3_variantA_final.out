@@ -1,0 +1,15 @@
+/home/sherryli/xsli/softwares/anaconda3/envs/lightning/lib/python3.11/site-packages/lightning_fabric/utilities/cloud_io.py:57: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+R=128  X=32768  data Δs mean=0.9947
+k= 0: suffix Δs mean gen=0.8932 data=0.9947  W1=0.1077  noncanonical=0.2188
+k=16: suffix Δs mean gen=0.8726 data=1.0010  W1=0.1334  noncanonical=0.1927
+k=32: suffix Δs mean gen=0.8220 data=1.0004  W1=0.1842  noncanonical=0.1354
+k=48: suffix Δs mean gen=0.7443 data=0.9972  W1=0.2545  noncanonical=0.0469
+
+wrote reports/multisize_arc/figs/p3_drift_onset_variantA_final_T0.9.png
+
+=== verdict ===
+  k= 0: first-8-post-handoff gen mean 0.9195 (data 0.9793)
+  k=16: first-8-post-handoff gen mean 0.9066 (data 0.9975)
+  k=32: first-8-post-handoff gen mean 0.8041 (data 0.9835)
+  k=48: first-8-post-handoff gen mean 0.7296 (data 1.0004)
+  -> drift starts immediately at every handoff: per-step bias, compounds from step 1 (iid input noise is the matched corruption)

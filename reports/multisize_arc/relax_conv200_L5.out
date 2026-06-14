@@ -1,0 +1,6 @@
+# L5 N=125  CONVERGENCE mode, sweeps=200 step=0.05
+# target Uc/N=-4.775; gr_L1 finite-sample floor≈0.0051
+rail       sweeps→1%-energy=88  sweeps→2×gr-floor=112  (gr_L1 @5=0.230 @10=0.190 @20=0.122)
+uniform    sweeps→1%-energy=99  sweeps→2×gr-floor=132  (gr_L1 @5=0.331 @10=0.277 @20=0.209)
+TARGET-ctl sweeps→1%-energy=0  sweeps→2×gr-floor=0  (gr_L1 @5=0.004 @10=0.004 @20=0.005)
+wrote reports/multisize_arc/figs/relax_convergence_L5.png

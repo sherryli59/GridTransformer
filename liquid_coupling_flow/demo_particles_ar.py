@@ -34,7 +34,7 @@ def main(device="cpu", steps=4000, lr=1e-3):
     U_data = (lj_energy(data, L, cutoff=cutoff, shift=True) / N).mean().item()
     print(f"data <U>/N {U_data:.3f}")
 
-    flow = ARParticleFlow(N=N, L=L, num_bins=8, hidden=64, cutoff=cutoff).to(device)
+    flow = ARParticleFlow(N=N, L=L, num_bins=16, hidden=128, cutoff=cutoff).to(device)
     # correctness: invertibility
     xs, lp_s = flow.sample(64, device=device)
     inv = (lp_s - flow.log_prob(xs)).abs().max().item()
@@ -83,4 +83,4 @@ def main(device="cpu", steps=4000, lr=1e-3):
 
 
 if __name__ == "__main__":
-    main(device="cuda" if torch.cuda.is_available() else "cpu")
+    main(device="cuda" if torch.cuda.is_available() else "cpu", steps=5000)

@@ -67,7 +67,7 @@ class ARParticleFlow(nn.Module):
             [torch.sin(2 * math.pi * placed[:, :, 1:2] / self.L),
              torch.cos(2 * math.pi * placed[:, :, 1:2] / self.L)], dim=-1)  # [B,k,2]
         msg = self.edge1(torch.cat([rbf, yfeat], dim=-1))            # [B,k,hidden]
-        w = torch.exp(-(d0 ** 2) / (2 * 0.5 ** 2))[..., None]        # localise in coord-0
+        w = torch.exp(-(d0 ** 2) / (2 * 0.3 ** 2))[..., None]        # localise in coord-0
         return (msg * w).sum(dim=1)
 
     def log_prob(self, x):  # x [B,N,2] -> [B]

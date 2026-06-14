@@ -1,5 +1,30 @@
 # liquid_coupling_flow — overnight progress (2026-06-14)
 
+## UPDATE 13:50 — particle flow RESOLVED to autoregressive placement (was: stuck at identity)
+
+The "stuck at identity" particle-training bug is understood and largely fixed:
+- **Diagnosis:** a coupling/augmented flow cannot create *excluded volume* because each
+  particle's update is conditioned on a variable that is NOT its real neighbours at
+  generation time (uniform or noisy auxiliary). Noisy-aux *fit* the density (−logq 103→50)
+  but generation broke (train/test mismatch, ESS 0.01%). Confirmed via `diagnose_particles.py`.
+- **Fix = autoregressive placement** (`particles_ar.py`): place particles one at a time, each
+  drawn from a circular-spline conditional shaped by the REAL already-placed particles. Exact
+  triangular log q(x), clean reweighting (no auxiliary). Conditioning variables exist at
+  generation time ⇒ no bootstrap.
+- **Monotone trajectory** (N=16 2D LJ, forward-KL on MCMC data, x-space ESS = reweight to LJ):
+  overlaps **0.71 → 0.34 → 0.12 → 0.061**, ESS **0% → 0.01% → 0.13% → 0.60%** as the
+  conditional sharpens (bins/capacity). Clearly works; needs more sharpness to reach usable ESS.
+- **Next levers (in flight / ordered):** more bins/capacity/steps (a bins=24 9000-step run is
+  running → `/tmp/lcf_ar3.out`, artifact `phaseE_ar.png`); then **apply the SMC corrector**
+  (`smc.py`) to rescue residual ESS; then the **size-transfer test** (train small N, eval larger
+  N — the conditioner is local, so it should transfer). A sharper 2D conditional (couple the two
+  coords more strongly, or kNN-local context) is the main modelling lever.
+- Demos: `demo_particles_ar.py` (AR, the live one), `demo_particles_mle.py` (augmented, for the
+  record), `diagnose_particles.py` (the gradient/excluded-volume diagnostic).
+
+---
+
+
 **Branch:** `liquid-coupling-flow`
 **Context:** the pivot from the stuck AR-over-Hilbert-curve transformer to a *local,
 exact-likelihood coupling normalizing flow* for size-transferable Boltzmann sampling of

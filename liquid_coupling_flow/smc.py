@@ -50,7 +50,10 @@ class RWMetropolis:
                 prop = torch.remainder(prop, self.L)
             logp_p = log_pi_fn(prop)
             accept = torch.log(torch.rand(x.shape[0], device=x.device)) < (logp_p - logp_x)
-            x = torch.where(accept[:, None], prop, x)
+            # broadcast the accept mask over all trailing dims (works for x of any rank:
+            # [M, D] scalar toys AND [M, N, d] particle configs)
+            acc_mask = accept.view(-1, *([1] * (x.dim() - 1)))
+            x = torch.where(acc_mask, prop, x)
             logp_x = torch.where(accept, logp_p, logp_x)
             acc_rates.append(accept.float().mean())
         return x, float(torch.stack(acc_rates).mean())

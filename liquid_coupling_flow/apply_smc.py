@@ -25,7 +25,8 @@ import torch
 from liquid_coupling_flow.particles_ar import ARParticleFlow
 from liquid_coupling_flow.energy import lj_energy
 from liquid_coupling_flow.particles import min_image
-from liquid_coupling_flow.smc import anneal_smc, RWMetropolis, systematic_resample
+from liquid_coupling_flow.smc import (anneal_smc, RWMetropolis,
+                                      SingleParticleMetropolis, systematic_resample)
 from liquid_coupling_flow.demo_particles_mle import get_data
 from liquid_coupling_flow.plot_ar_diagnostics import compute_gr, energy_pdf
 
@@ -40,7 +41,7 @@ def overlap_frac(x, L, N, thresh=0.8):
 
 
 def main(device="cuda" if torch.cuda.is_available() else "cpu",
-         M=4000, n_bridge=40, n_steps=6, step=0.12):
+         M=4000, n_bridge=40, n_steps=1, step=0.15, kernel_kind="single"):
     ck = torch.load(CKPT, map_location=device)
     cfg = ck["config"]
     N, L, kT, cutoff = cfg["N"], cfg["L"], cfg["kT"], cfg["cutoff"]
@@ -62,10 +63,14 @@ def main(device="cuda" if torch.cuda.is_available() else "cpu",
     t = time.time()
     with torch.no_grad():
         _ = logq_fn(x0)
-    print(f"one logq eval on {M}: {time.time()-t:.2f}s  "
-          f"(~{n_bridge*(n_steps+2)} evals total)", flush=True)
+    per_beta = (N * n_steps + 1) if kernel_kind == "single" else (n_steps + 1)
+    print(f"one logq eval on {M}: {time.time()-t:.2f}s  kernel={kernel_kind}  "
+          f"(~{n_bridge*per_beta} evals total)", flush=True)
 
-    kernel = RWMetropolis(step=step, n_steps=n_steps, L=L)
+    if kernel_kind == "single":
+        kernel = SingleParticleMetropolis(step=step, n_sweeps=n_steps, L=L)
+    else:
+        kernel = RWMetropolis(step=step, n_steps=n_steps, L=L)
     t = time.time()
     res = anneal_smc(x0, logq_fn, log_target_fn, kernel, n_bridge=n_bridge,
                      resample_thresh=0.5, schedule="linear", verbose=True)
@@ -127,16 +132,18 @@ def main(device="cuda" if torch.cuda.is_available() else "cpu",
     ax[2].set_title(f"ESS along anneal (acc {np.mean(res['acc_history']):.2f})")
     ax[2].legend(fontsize=9)
 
-    fig.suptitle(f"AR flow + SMC — 2D LJ N={N} L={L} kT={kT}  |  "
+    fig.suptitle(f"AR flow + SMC ({kernel_kind} moves) — 2D LJ N={N} L={L} kT={kT}  |  "
                  f"ESS {100*res['plain_is_ess']:.2f}% -> {100*res['ess']:.1f}%, "
-                 f"overlaps {ov_flow:.3f} -> {ov_smc:.3f}", fontsize=12)
+                 f"overlaps {ov_flow:.3f} -> {ov_smc:.3f}, acc {np.mean(res['acc_history']):.2f}",
+                 fontsize=12)
     fig.tight_layout()
-    out = os.path.join(ART, "ar_smc_corrected.png")
+    out = os.path.join(ART, f"ar_smc_{kernel_kind}.png")
     fig.savefig(out, dpi=120)
     print(f"saved {out}", flush=True)
     torch.save({"x_smc": x_smc.cpu(), "weights": res["weights"].cpu(),
-                "ess": res["ess"], "plain_is_ess": res["plain_is_ess"]},
-               os.path.join(ART, "smc_result.pt"))
+                "ess": res["ess"], "plain_is_ess": res["plain_is_ess"],
+                "acc": float(np.mean(res["acc_history"]))},
+               os.path.join(ART, f"smc_result_{kernel_kind}.pt"))
 
 
 if __name__ == "__main__":

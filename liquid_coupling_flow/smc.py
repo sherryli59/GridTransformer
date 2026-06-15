@@ -59,6 +59,41 @@ class RWMetropolis:
         return x, float(torch.stack(acc_rates).mean())
 
 
+class SingleParticleMetropolis:
+    """Single-particle random-walk Metropolis for [M, N, d] particle configs.
+
+    Proposes ONE particle at a time (sweeping over all N), so acceptance does not
+    collapse as (single-particle-acc)^N the way a whole-config move does in a dense
+    liquid. Calls `log_pi_fn` on the full config after each proposal, so the exact
+    bridge density `(1-beta) log q + beta log_target` is preserved (no bias). For an
+    autoregressive flow that means a full log q recompute per particle index -- the
+    cost of an exact, genuinely-rejuvenating kernel.
+    """
+
+    def __init__(self, step: float = 0.15, n_sweeps: int = 1, L: float | None = None):
+        self.step = float(step)
+        self.n_sweeps = int(n_sweeps)
+        self.L = L
+
+    def __call__(self, x: torch.Tensor, log_pi_fn) -> tuple[torch.Tensor, float]:
+        M, N, d = x.shape
+        logp_x = log_pi_fn(x)
+        acc_rates = []
+        for _ in range(self.n_sweeps):
+            for j in range(N):
+                prop = x.clone()
+                pj = prop[:, j, :] + self.step * torch.randn(M, d, device=x.device)
+                if self.L is not None:
+                    pj = torch.remainder(pj, self.L)
+                prop[:, j, :] = pj
+                logp_p = log_pi_fn(prop)
+                accept = torch.log(torch.rand(M, device=x.device)) < (logp_p - logp_x)
+                x = torch.where(accept.view(-1, 1, 1), prop, x)
+                logp_x = torch.where(accept, logp_p, logp_x)
+                acc_rates.append(accept.float().mean())
+        return x, float(torch.stack(acc_rates).mean())
+
+
 def anneal_smc(x0, logq_fn, log_target_fn, kernel, n_bridge: int = 50,
                resample_thresh: float = 0.5, schedule: str = "linear", verbose: bool = False):
     """Run annealed SMC from samples x0 ~ q to the target.

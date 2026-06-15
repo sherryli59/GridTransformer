@@ -1,5 +1,33 @@
 # liquid_coupling_flow — overnight progress (2026-06-14)
 
+## UPDATE (cont.) — SMC corrector VALIDATED on particles: AR flow -> Boltzmann, ESS 96.7%
+
+The end-to-end claim now holds on the 2D LJ liquid (N=16, L=5, kT=1): the AR flow is a
+size-local proposal with exact log q, and annealed SMC corrects it to the Boltzmann target.
+
+- **Diagnostic plots** (`plot_ar_diagnostics.py` -> `artifacts/ar_energy_gr.png`): the raw AR
+  flow reproduces medium-range structure (g(r) tracks MCMC beyond the first shell) but has a
+  SOFT hard core -- spurious g(r) below 0.9 sigma, under-built first peak, 41% of configs above
+  the energy cap. ~5% per-particle overlaps -> r^-12 wrecks energy -> x-ESS ~0.2%. (g(r) 2D
+  shell normalization validated on a uniform ideal gas: flat g=1.000.)
+- **SMC fixes it** (`apply_smc.py`): bridge (1-beta) log q + beta (-U/kT), resample + MCMC.
+  | kernel | ESS | acc | unique configs | energy median U/N |
+  | flow alone (plain IS) | 0.17% | - | - | +0.92 |
+  | global RW moves       | 84.6% | 0.01 | 1402/4000 (35%) | -1.60 |
+  | **single-particle**   | **96.7%** | **0.47** | **3688/4000 (92%)** | **-1.572** (MCMC -1.559) |
+  Energy + g(r) of the single-particle SMC ensemble are indistinguishable from MCMC
+  (`artifacts/ar_smc_single.png`).
+- **Two bugs found + fixed:** (1) `smc.py` RWMetropolis accept-mask assumed flat [M,D] toy
+  inputs -> broke on [M,N,d] particle configs (latent: toys never exercised the rank). Fixed to
+  broadcast over trailing dims. (2) global whole-config moves give acc ~ (single-acc)^N ~ 0.01
+  in a dense liquid -> SMC degenerated to resampling-only (diversity 35%, high ESS was
+  misleading). Added `SingleParticleMetropolis` (one particle at a time, exact bridge via full
+  log q recompute) -> acc 0.47, genuine rejuvenation, 92% unique.
+- **Why this matters for the thesis:** single-particle SMC *relaxes* overlaps instead of
+  discarding them, so it does NOT depend on the flow having a clean tail to resample -> it should
+  keep working at larger N where the flow alone degrades. NEXT: the size-transfer test (train
+  small N, SMC-correct at larger N) and then 3D.
+
 ## UPDATE 13:50 — particle flow RESOLVED to autoregressive placement (was: stuck at identity)
 
 The "stuck at identity" particle-training bug is understood and largely fixed:

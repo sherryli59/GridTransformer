@@ -29,8 +29,24 @@ only, weights load at any N (no N-dependent shapes). Results:
 - ROOT CAUSE (both runs triangulate it): the coord-0 context `_ctx0` is a GLOBAL DeepSets SUM
   over placed particles -> extensive, ~Nx magnitude at larger N -> pushes head0 off-manifold ->
   proposal collapses to uniform. 3D works because it's evaluated at the train size (in-distribution).
-- FIX (next): make `_ctx0` intensive/local (mean not sum, or kNN/cutoff-windowed) and retrain;
-  re-test transfer. Also bump SMC budget at large N to confirm the bias is just under-relaxation.
+- FIX TRIED: made `_ctx0` intensive (mean not sum), retrained N=16, re-ran transfer. RESULT =
+  LATERAL, not the hoped win. mean helped large-N (overlaps N64 0.43->0.37, energy bias
+  0.039->0.007) but HURT train size (-logq 31.5->32.8, overlaps 0.055->0.092, SMC ESS 83->63%).
+  `_ctx0` was NOT the sole culprit.
+- METRIC INSIGHT: plain-IS ESS is SATURATED by the r^-12 tail (any >few% overlap -> one bad pair
+  dominates weights), so flow (0.37 overlaps) and uniform (0.72) BOTH read 0.04% -- it cannot see
+  transfer. The honest transfer metric is RAW OVERLAPS vs the uniform baseline (~0.72 at all N):
+  by that measure the flow DOES partially transfer (N64 0.37 vs 0.72 uniform, ~2x better than
+  noise) at BOTH sum and mean. Always check a structural observable, not ESS alone.
+- SMC budget firm-up (3D, `firm_3d.py`): n_bridge 30->50 lifted 3D ESS 53%->85% and fixed the
+  energy bias (-2.759->-2.776 vs MCMC -2.770) -- confirms residual energy bias = under-relaxation.
+- REMAINING BOTTLENECK (next levers): (1) `_ctx_c` excluded-volume context is still L-EXTENSIVE
+  (Gaussian-weights over a coord-0 strip spanning the full box height -> message sum grows with L);
+  only `_ctx0` was fixed. (2) AR placement is inherently OOD at larger N (late particles see far
+  more placed neighbours than at train size). Fixing (1) = normalize/cap `_ctx_c` to a true local
+  2D neighbourhood. Net: exactness-at-scale SOLID (flow+SMC matches Boltzmann 2D N16->64 AND 3D);
+  locality->STRONG flow transfer only PARTIAL (flow beats noise but still a weak large-N proposal,
+  SMC essential).
 
 ## UPDATE (cont.) — SMC corrector VALIDATED on particles: AR flow -> Boltzmann, ESS 96.7%
 

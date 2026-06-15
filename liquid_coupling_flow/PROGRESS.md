@@ -40,13 +40,22 @@ only, weights load at any N (no N-dependent shapes). Results:
   noise) at BOTH sum and mean. Always check a structural observable, not ESS alone.
 - SMC budget firm-up (3D, `firm_3d.py`): n_bridge 30->50 lifted 3D ESS 53%->85% and fixed the
   energy bias (-2.759->-2.776 vs MCMC -2.770) -- confirms residual energy bias = under-relaxation.
-- REMAINING BOTTLENECK (next levers): (1) `_ctx_c` excluded-volume context is still L-EXTENSIVE
-  (Gaussian-weights over a coord-0 strip spanning the full box height -> message sum grows with L);
-  only `_ctx0` was fixed. (2) AR placement is inherently OOD at larger N (late particles see far
-  more placed neighbours than at train size). Fixing (1) = normalize/cap `_ctx_c` to a true local
-  2D neighbourhood. Net: exactness-at-scale SOLID (flow+SMC matches Boltzmann 2D N16->64 AND 3D);
-  locality->STRONG flow transfer only PARTIAL (flow beats noise but still a weak large-N proposal,
-  SMC essential).
+- `_ctx_c` intensive fix TRIED (`run_ctxc.py`, ctx0=sum + ctxc=mean) -> BACKFIRED. Raw overlaps:
+  N16 0.070, N36 0.279, N64 0.471 -- WORSE at large N than both sum/sum (0.433) and ctx0=mean
+  (0.366). Direct magnitude check confirmed the mechanism (ctxc sum: k5->k20 = 0.021->0.145
+  extensive; mean: 0.043->0.041 flat) -- but intensifying HURT. Interpretation: the extensive sum
+  was SIGNAL (encodes local crowdedness, useful for excluded volume), not a bug; mean threw it away.
+- CONCLUSION: two single-knob intensive fixes both FAIL (ctx0=mean lateral, ctxc=mean worse), and
+  they pull in OPPOSITE directions -> the transfer barrier is NOT context extensivity. It is the
+  AR-placement OOD regime (late particles at large N see far more placed neighbours than at train
+  size). No aggregation tweak fixes querying the conditioner out-of-distribution.
+- SCORECARD (firm): exactness-at-scale SOLID (flow+SMC = Boltzmann, 2D N16->64 AND 3D);
+  locality->STRONG flow transfer NOT achievable via architecture tweaks.
+- REAL NEXT LEVER: MULTI-SIZE TRAINING -- train on a RANGE of N (e.g. 12/16/24/32) so the
+  conditioner sees varied neighbour counts and large-N eval is in-distribution. (Or a different
+  generative parameterization.) Bug fixed: size_transfer.py had a `tag` var collision (per-panel
+  loop clobbered the filename tag) -> figure had saved as size_transfer_gr_.png; renamed to
+  size_transfer_gr_ctx0sum_ctxcmean.png, loop var renamed panel_tag.
 
 ## UPDATE (cont.) — SMC corrector VALIDATED on particles: AR flow -> Boltzmann, ESS 96.7%
 

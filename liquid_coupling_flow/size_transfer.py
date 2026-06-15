@@ -110,8 +110,8 @@ def main(device="cuda" if torch.cuda.is_available() else "cpu",
         ax.axvline(2 ** (1 / 6), color="grey", ls="--", lw=1)
         ax.axhline(1.0, color="k", lw=0.5, ls=":")
         ax.set_xlim(0, rmax); ax.set_xlabel(r"$r/\sigma$"); ax.set_ylabel("g(r)")
-        tag = " (TRAIN SIZE)" if N == 16 else ""
-        ax.set_title(f"N={N}, L={L}{tag}\nSMC ESS {100*res['ess']:.0f}%, "
+        panel_tag = " (TRAIN SIZE)" if N == 16 else ""
+        ax.set_title(f"N={N}, L={L}{panel_tag}\nSMC ESS {100*res['ess']:.0f}%, "
                      f"<U>/N {mu_rw:.3f} (MCMC {U_mcmc.mean():.3f})")
         ax.legend(fontsize=8)
 

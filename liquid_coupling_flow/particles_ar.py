@@ -28,11 +28,16 @@ def _wrap(d, L):
 
 
 class ARParticleFlow(nn.Module):
-    def __init__(self, N, L, num_bins=8, hidden=64, n_rbf=16, cutoff=2.4):
+    def __init__(self, N, L, num_bins=8, hidden=64, n_rbf=16, cutoff=2.4,
+                 ctx0_reduce="sum"):
         super().__init__()
         self.N = N
         self.L = float(L)
         self.cutoff = float(cutoff)
+        # how the coord-0 DeepSets context aggregates over placed particles:
+        # "sum" is extensive (grows with N -> breaks size transfer); "mean" is
+        # intensive (size-invariant, the fix for transferring to larger N).
+        self.ctx0_reduce = ctx0_reduce
         self.spline = CircularRQSplineElementwise(num_bins=num_bins, L=L)
         P = self.spline.params_per_dim
         self.register_buffer("centers", torch.linspace(0.0, cutoff, n_rbf))
@@ -54,7 +59,8 @@ class ARParticleFlow(nn.Module):
         B = placed.shape[0]
         if placed.shape[1] == 0:
             return torch.zeros(B, self.node[-2].out_features, device=placed.device, dtype=placed.dtype)
-        return self.node(self._periodic(placed)).sum(dim=1)
+        h = self.node(self._periodic(placed))
+        return h.mean(dim=1) if self.ctx0_reduce == "mean" else h.sum(dim=1)
 
     def _ctx1(self, placed, x0):  # placed [B,k,2], x0 [B] -> [B,hidden]
         B = placed.shape[0]

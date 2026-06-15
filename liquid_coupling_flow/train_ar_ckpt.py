@@ -25,19 +25,20 @@ CKPT = os.path.join(ART, "ar_flow_ckpt.pt")
 
 
 def main(device="cuda", steps=7000, lr=1e-3, num_bins=24, hidden=128, n_samples=8000,
-         ctx0_reduce="sum", out_name="ar_flow_ckpt.pt"):
+         ctx0_reduce="sum", ctxc_reduce="sum", out_name="ar_flow_ckpt.pt"):
     os.makedirs(ART, exist_ok=True)
     torch.manual_seed(0)
     cfg = dict(N=16, L=5.0, kT=1.0, cutoff=2.4, num_bins=num_bins, hidden=hidden,
-               ctx0_reduce=ctx0_reduce)
+               ctx0_reduce=ctx0_reduce, ctxc_reduce=ctxc_reduce)
     N, L, kT, cutoff = cfg["N"], cfg["L"], cfg["kT"], cfg["cutoff"]
 
     data = get_data(N, L, kT, cutoff, device).to(device)
     U_data = (lj_energy(data, L, cutoff=cutoff, shift=True) / N).mean().item()
-    print(f"data {data.shape[0]} configs  <U>/N {U_data:.3f}  ctx0_reduce={ctx0_reduce}", flush=True)
+    print(f"data {data.shape[0]} configs  <U>/N {U_data:.3f}  "
+          f"ctx0={ctx0_reduce} ctxc={ctxc_reduce}", flush=True)
 
     flow = ARParticleFlow(N=N, L=L, num_bins=num_bins, hidden=hidden, cutoff=cutoff,
-                          ctx0_reduce=ctx0_reduce).to(device)
+                          ctx0_reduce=ctx0_reduce, ctxc_reduce=ctxc_reduce).to(device)
     opt = torch.optim.Adam(flow.parameters(), lr=lr)
     B = 512
     t0 = time.time()

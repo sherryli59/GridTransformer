@@ -29,7 +29,7 @@ def _wrap(d, L):
 
 class ARParticleFlow(nn.Module):
     def __init__(self, N, L, num_bins=8, hidden=64, n_rbf=16, cutoff=2.4,
-                 ctx0_reduce="sum"):
+                 ctx0_reduce="sum", ctxc_reduce="sum"):
         super().__init__()
         self.N = N
         self.L = float(L)
@@ -38,6 +38,10 @@ class ARParticleFlow(nn.Module):
         # "sum" is extensive (grows with N -> breaks size transfer); "mean" is
         # intensive (size-invariant, the fix for transferring to larger N).
         self.ctx0_reduce = ctx0_reduce
+        # how the coord-1 (excluded-volume) context aggregates: the coord-0 strip
+        # spans the full box height, so "sum" grows with L (extensive); "mean" =
+        # weight-normalized (intensive) -> size-invariant message magnitude.
+        self.ctxc_reduce = ctxc_reduce
         self.spline = CircularRQSplineElementwise(num_bins=num_bins, L=L)
         P = self.spline.params_per_dim
         self.register_buffer("centers", torch.linspace(0.0, cutoff, n_rbf))
@@ -74,7 +78,10 @@ class ARParticleFlow(nn.Module):
              torch.cos(2 * math.pi * placed[:, :, 1:2] / self.L)], dim=-1)  # [B,k,2]
         msg = self.edge1(torch.cat([rbf, yfeat], dim=-1))            # [B,k,hidden]
         w = torch.exp(-(d0 ** 2) / (2 * 0.3 ** 2))[..., None]        # localise in coord-0
-        return (msg * w).sum(dim=1)
+        agg = (msg * w).sum(dim=1)
+        if self.ctxc_reduce == "mean":                               # intensive: weighted mean
+            agg = agg / (w.sum(dim=1) + 1e-6)
+        return agg
 
     def log_prob(self, x):  # x [B,N,2] -> [B]
         B = x.shape[0]

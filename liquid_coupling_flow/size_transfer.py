@@ -48,8 +48,10 @@ def main(device="cuda" if torch.cuda.is_available() else "cpu",
     torch.manual_seed(0)
     ck = torch.load(os.path.join(ART, ckpt_name), map_location=device)
     cfg = ck["config"]
-    reduce = cfg.get("ctx0_reduce", "sum")
-    print(f"checkpoint {ckpt_name}  ctx0_reduce={reduce}", flush=True)
+    reduce0 = cfg.get("ctx0_reduce", "sum")
+    reducec = cfg.get("ctxc_reduce", "sum")
+    tag = f"ctx0{reduce0}_ctxc{reducec}"
+    print(f"checkpoint {ckpt_name}  ctx0={reduce0} ctxc={reducec}", flush=True)
     rows = []
     fig, axes = plt.subplots(1, len(SIZES), figsize=(6 * len(SIZES), 4.6), squeeze=False)
 
@@ -62,7 +64,7 @@ def main(device="cuda" if torch.cuda.is_available() else "cpu",
         print(f"MCMC {data.shape[0]} configs  <U>/N {U_mcmc.mean():.3f}", flush=True)
 
         flow = ARParticleFlow(N=N, L=L, num_bins=cfg["num_bins"], hidden=cfg["hidden"],
-                              cutoff=CUTOFF, ctx0_reduce=reduce).to(device)
+                              cutoff=CUTOFF, ctx0_reduce=reduce0, ctxc_reduce=reducec).to(device)
         flow.load_state_dict(ck["state_dict"])  # trained at N=16, loads at any N
         flow.eval()
 
@@ -113,10 +115,11 @@ def main(device="cuda" if torch.cuda.is_available() else "cpu",
                      f"<U>/N {mu_rw:.3f} (MCMC {U_mcmc.mean():.3f})")
         ax.legend(fontsize=8)
 
-    fig.suptitle(f"Size transfer at constant density (rho=0.64): AR flow (ctx0={reduce}) "
-                 f"trained at N=16 only, + single-particle SMC", fontsize=12)
+    fig.suptitle(f"Size transfer at constant density (rho=0.64): AR flow "
+                 f"(ctx0={reduce0}, ctxc={reducec}) trained at N=16 only, + single-particle SMC",
+                 fontsize=12)
     fig.tight_layout()
-    out = os.path.join(ART, f"size_transfer_gr_{reduce}.png")
+    out = os.path.join(ART, f"size_transfer_gr_{tag}.png")
     fig.savefig(out, dpi=120)
     print(f"\nsaved {out}", flush=True)
 
@@ -124,7 +127,7 @@ def main(device="cuda" if torch.cuda.is_available() else "cpu",
     for (N, rho, rov, isf, isu, se, sov, mu, semu, umc) in rows:
         print(f"{N:3d} {rho:.3f}  {rov:.3f}  {100*isf:6.2f}%  {100*isu:6.2f}%  "
               f"{100*se:5.1f}%  {sov:.3f}  {mu:6.3f}+/-{semu:.3f}  {umc:6.3f}", flush=True)
-    torch.save(rows, os.path.join(ART, f"size_transfer_rows_{reduce}.pt"))
+    torch.save(rows, os.path.join(ART, f"size_transfer_rows_{tag}.pt"))
 
 
 if __name__ == "__main__":

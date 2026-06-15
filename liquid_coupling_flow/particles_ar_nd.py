@@ -26,11 +26,12 @@ def _wrap(delta, L):
 
 class ParticleARFlowND(nn.Module):
     def __init__(self, N, L, d=2, num_bins=24, hidden=128, n_rbf=16, cutoff=2.4,
-                 local_w=0.3, ctx0_reduce="sum"):
+                 local_w=0.3, ctx0_reduce="sum", ctxc_reduce="sum"):
         super().__init__()
         self.N, self.L, self.d, self.cutoff = int(N), float(L), int(d), float(cutoff)
         self.local_w = float(local_w)
         self.ctx0_reduce = ctx0_reduce  # "sum" (extensive) | "mean" (size-invariant)
+        self.ctxc_reduce = ctxc_reduce  # coord->c excluded-volume context: same choice
         self.spline = CircularRQSplineElementwise(num_bins=num_bins, L=L)
         P = self.spline.params_per_dim
         self.register_buffer("centers", torch.linspace(0.0, cutoff, n_rbf))
@@ -70,7 +71,10 @@ class ParticleARFlowND(nn.Module):
         pc = self._periodic(placed[:, :, c:c + 1])                       # [B,k,2]
         msg = self.edges[c - 1](torch.cat([rbf, pc], dim=-1))            # [B,k,hidden]
         w = torch.exp(-(dist ** 2) / (2 * self.local_w ** 2))[..., None]
-        return (msg * w).sum(dim=1)
+        agg = (msg * w).sum(dim=1)
+        if self.ctxc_reduce == "mean":
+            agg = agg / (w.sum(dim=1) + 1e-6)
+        return agg
 
     def _params(self, placed, xi_partial, c):
         ctx = self._ctx0(placed) if c == 0 else self._ctx_c(placed, xi_partial, c)

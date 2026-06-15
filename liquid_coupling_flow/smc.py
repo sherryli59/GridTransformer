@@ -95,7 +95,8 @@ class SingleParticleMetropolis:
 
 
 def anneal_smc(x0, logq_fn, log_target_fn, kernel, n_bridge: int = 50,
-               resample_thresh: float = 0.5, schedule: str = "linear", verbose: bool = False):
+               resample_thresh: float = 0.5, schedule: str = "linear", verbose: bool = False,
+               observable_fn=None):
     """Run annealed SMC from samples x0 ~ q to the target.
 
     Returns dict with final samples, normalised weights, ESS history, and the
@@ -117,8 +118,10 @@ def anneal_smc(x0, logq_fn, log_target_fn, kernel, n_bridge: int = 50,
 
     x = x0.clone()
     logw = torch.zeros(M, device=device)
-    ess_hist, acc_hist = [], []
+    ess_hist, acc_hist, obs_hist = [], [], []
     with torch.no_grad():
+        if observable_fn is not None:
+            obs_hist.append(observable_fn(x))          # beta=0 (the bare proposal)
         logq_x = logq_fn(x)
         logt_x = log_target_fn(x)
         for k in range(1, len(betas)):
@@ -139,6 +142,8 @@ def anneal_smc(x0, logq_fn, log_target_fn, kernel, n_bridge: int = 50,
 
             x, acc = kernel(x, log_pi)
             acc_hist.append(acc)
+            if observable_fn is not None:
+                obs_hist.append(observable_fn(x))
             logq_x = logq_fn(x)
             logt_x = log_target_fn(x)
             if verbose and (k % max(1, len(betas) // 10) == 0):
@@ -149,5 +154,5 @@ def anneal_smc(x0, logq_fn, log_target_fn, kernel, n_bridge: int = 50,
     return {
         "x": x, "log_weights": logw, "weights": w,
         "ess": final_ess, "ess_history": ess_hist, "acc_history": acc_hist,
-        "plain_is_ess": plain_ess,
+        "obs_history": obs_hist, "plain_is_ess": plain_ess,
     }

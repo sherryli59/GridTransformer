@@ -1,5 +1,37 @@
 # liquid_coupling_flow — overnight progress (2026-06-14)
 
+## UPDATE (cont.) — 3D works; size-transfer is SMC-carried (raw flow does not transfer)
+
+Two parallel runs. Code: `mcmc.py` (d-general MCMC), `particles_ar_nd.py` (d-general AR
+flow, reduces to 2D ARParticleFlow, invertibility ~1e-6 at d=2 AND d=3), `size_transfer.py`,
+`train_3d.py`. Figures: `artifacts/size_transfer_gr.png`, `artifacts/lj3d_smc_reweighted.png`.
+
+**3D LJ (N=32, rho*=0.65, T*=1.0) — SUCCESS.** d-general flow trains in 3D (-logq 126.8->78.8,
+well below base 124.7 -> genuinely learning), raw overlaps 0.088 (learns 3D excluded volume),
+flow+single-particle SMC reproduces energy AND g(r): reweighted <U>/N -2.759+/-0.004 (MCMC
+-2.770), SMC ESS 53.1%. Architecture generalizes to 3D. (Box small: cutoff 1.8 ~ L/2, g(r) to
+first shell only; bigger N / more steps would tighten ESS + the mild ~0.4% energy under-relax.)
+
+**Size transfer (2D, const rho=0.64, N=16->36->64) — PARTIAL / diagnostic.** Trained at N=16
+only, weights load at any N (no N-dependent shapes). Results:
+  N   raw_ov  IS_flow  IS_unif  SMC_ESS  <U>/N_rw (MCMC)
+  16  0.055   0.31%    0.04%    82.9%    -1.553 (-1.559)
+  36  0.219   0.04%    0.04%   100.0%*   -1.555 (-1.571)
+  64  0.433   0.04%    0.04%   100.0%*   -1.538 (-1.577)
+- g(r) transfers well at ALL sizes (reweighted tracks MCMC through all shells, even N=64=4x).
+- BUT the RAW FLOW does NOT transfer: plain-IS ESS collapses to the uniform-noise level (0.04%
+  = uniform) by N=36; flow advantage (8x over uniform at N=16) vanishes. Overlaps balloon to 0.43.
+- Energy is biased high and the bias GROWS with N (Dlt 0.006->0.016->0.039) = under-relaxation:
+  SMC does all the work (proposal ~ uniform) and a fixed 24-step bridge under-builds the first
+  peak more as N grows. *The "SMC ESS 100%" is a MISLEADING post-terminal-resample artifact;
+  the honest metric is the reweighted observable, which shows the bias. Always check an
+  observable alongside ESS.*
+- ROOT CAUSE (both runs triangulate it): the coord-0 context `_ctx0` is a GLOBAL DeepSets SUM
+  over placed particles -> extensive, ~Nx magnitude at larger N -> pushes head0 off-manifold ->
+  proposal collapses to uniform. 3D works because it's evaluated at the train size (in-distribution).
+- FIX (next): make `_ctx0` intensive/local (mean not sum, or kNN/cutoff-windowed) and retrain;
+  re-test transfer. Also bump SMC budget at large N to confirm the bias is just under-relaxation.
+
 ## UPDATE (cont.) — SMC corrector VALIDATED on particles: AR flow -> Boltzmann, ESS 96.7%
 
 The end-to-end claim now holds on the 2D LJ liquid (N=16, L=5, kT=1): the AR flow is a

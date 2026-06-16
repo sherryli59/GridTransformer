@@ -1,5 +1,11 @@
 # liquid_coupling_flow — overnight progress (2026-06-14)
 
+> **READ FIRST: honest consolidation in `reports/2026-06-16-liquid-coupling-flow-consolidation.md`.**
+> TL;DR — exactness-at-scale works (flow+SMC = Boltzmann, 2D & 3D); the flow does NOT size-transfer,
+> and a flow-vs-uniform control shows the flow barely helps SMC at an easy state point (SMC is the
+> workhorse + size-agnostic). Decisive untested experiment: the same control at a HARD state point.
+> Sections below are the running log that led there.
+
 ## UPDATE (cont.) — 3D works; size-transfer is SMC-carried (raw flow does not transfer)
 
 Two parallel runs. Code: `mcmc.py` (d-general MCMC), `particles_ar_nd.py` (d-general AR

@@ -99,6 +99,29 @@ the approach has a real niche (and *then* multi-size training / a full-position 
 worth pursuing). If it ties there too, the flow approach does not pay for this problem — a clean
 negative.
 
+## 6b. Phase-1 gate (2026-06-16): NO-GO for simple LJ — premise not met
+
+Before testing the flow at a "hard" state point, gated on whether one exists: ran uniform+SMC
+vs MCMC (from an ordered grid IC and from a disordered uniform IC) across 2D LJ state points
+easy→hard, N=16 (`hard_state_scan.py`, `hard_state_scan.png`):
+
+| T\* | ρ | MCMC ordered IC | MCMC uniform IC | uniform+SMC@80 | ESS@80 | gap |
+|---|---|---|---|---|---|---|
+| 1.00 | 0.64 | −1.558 | −1.557 | −1.560 | 94% | −0.002 |
+| 0.70 | 0.80 | −2.067 | −2.064 | −2.063 | 92% | +0.004 |
+| 0.50 | 0.90 | −2.197 | −2.199 | −2.192 | 87% | +0.005 |
+| 0.35 | 1.00 | −1.579 | −1.582 | −1.568 | 51% | +0.011 |
+
+At every point the ordered and disordered ICs **coincide** (ergodic — no missed basin) and
+uniform+SMC converges onto them (gap≈0); only ESS degrades (94→51%) = onset of difficulty, not
+failure. **No annealing-hard regime exists for monatomic 2D LJ at this size.** Two reasons: N=16
+is too small for metastability (no nucleation/glass barriers), and monatomic LJ anneals readily
+(crystal-former). The regimes where a learned proposal beats annealing are *frustrated*
+(binary glass-formers, proteins). So simple LJ liquids are the wrong target to demonstrate a
+flow's value — SMC-from-uniform already solves them. This + §4b close the LJ-liquid question.
+**To actually test the flow's value would require a frustrated system (e.g. Kob–Andersen binary
+glass, N≳64) — a different, bigger problem.**
+
 ## 7. Index
 
 Code (branch `liquid-coupling-flow`): `particles_ar.py`, `particles_ar_nd.py`, `smc.py`, `energy.py`,

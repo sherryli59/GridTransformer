@@ -26,8 +26,11 @@ def _pair_energy_one(ri, x, i, L, cutoff):
 
 
 def mcmc_lj(N, L, kT, cutoff, d=2, device="cpu", n_chains=4096, n_equil=300,
-            n_collect=200, every=25, step=0.15):
-    x = torch.rand(n_chains, N, d, device=device) * L
+            n_collect=200, every=25, step=0.15, x0=None):
+    if x0 is None:
+        x = torch.rand(n_chains, N, d, device=device) * L
+    else:                                            # start every chain from a given IC
+        x = x0.to(device).expand(n_chains, N, d).clone()
     snaps = []
     for sweep in range(n_equil + n_collect):
         for i in range(N):

@@ -76,32 +76,37 @@ def parallel_tempering(N, L, sd, T_ladder, device, n_per=8, n_equil=3000, n_coll
 def main(device="cuda" if torch.cuda.is_available() else "cpu"):
     N = 256; L = (N / RHO) ** 0.5; T = 0.5
     sd = make_species(N, FRACB).to(device)
-    T_ladder = torch.tensor([0.50, 0.60, 0.72, 0.87, 1.05, 1.25])    # cold->hot, geometric-ish
-    reps = []
+    T_ladder = 0.5 * (1.25 / 0.5) ** (torch.arange(10) / 9)          # 10-level geometric 0.5->1.25
+    reps, trajs = [], []
     fig, ax = plt.subplots(1, 2, figsize=(12, 4.4))
     for seed in (0, 1):
         cfg, traj, ex = parallel_tempering(N, L, sd, T_ladder, device, n_per=8,
-                                           n_equil=3000, n_collect=80, seed=seed)
+                                           n_equil=5000, n_collect=80, seed=seed)
         U = (ka_energy(cfg, sd, L) / N).mean().item()
         se = (ka_energy(cfg, sd, L) / N).std().item() / np.sqrt(cfg.shape[0])
-        reps.append((U, se))
+        reps.append((U, se)); trajs.append(traj)
         ax[0].plot([t for t, _ in traj], [u for _, u in traj], "-o", label=f"seed {seed} (exch {ex:.2f})")
         print(f"seed {seed}: cold <U>/N = {U:.4f} +/- {se:.4f}  exch_acc={ex:.2f}", flush=True)
-    # convergence verdict: independent runs agree within ~3 sigma + plateau
-    d = abs(reps[0][0] - reps[1][0]); tol = 3 * (reps[0][1] + reps[1][1])
-    o2_unif = -3.0876   # the O2 uniform-IC value at N=256 (plain MC, 4000 sweeps)
-    ok = d < max(tol, 0.01)
+    # verdict: independent runs agree (within ~3 sigma) AND the cold energy has plateaued
+    d = abs(reps[0][0] - reps[1][0]); tol = max(3 * (reps[0][1] + reps[1][1]), 0.01)
+
+    def plateau_drift(tr):
+        u = [x for _, x in tr]
+        return abs(np.mean(u[-2:]) - np.mean(u[-4:-2]))             # last-2 vs prev-2 mean
+    plat = max(plateau_drift(trajs[0]), plateau_drift(trajs[1]))
+    agree, flat = d < tol, plat < 0.01
+    ok = agree and flat
+    o2_unif = -3.0876
     ax[0].axhline(o2_unif, color="grey", ls=":", label=f"O2 plain-MC uniform {o2_unif:.3f}")
     ax[0].set_xlabel("cold-level sweep"); ax[0].set_ylabel("<U>/N"); ax[0].legend(fontsize=8)
-    ax[0].set_title(f"PT cold-level energy (converged={'YES' if ok else 'NO'})")
+    ax[0].set_title(f"PT cold energy (agree={agree}, plateau={flat}, drift={plat:.3f})")
     ax[1].bar([0, 1], [r[0] for r in reps], yerr=[r[1] for r in reps], capsize=5)
     ax[1].set_xticks([0, 1]); ax[1].set_xticklabels(["seed 0", "seed 1"])
-    ax[1].set_ylabel("cold <U>/N"); ax[1].set_title(f"independent-run agreement (|diff|={d:.4f})")
+    ax[1].set_ylabel("cold <U>/N"); ax[1].set_title(f"agreement |diff|={d:.4f}")
     fig.tight_layout(); fig.savefig(os.path.join(ART, "ka_reference_pt.png"), dpi=120)
-    print(f"PT REFERENCE: cold <U>/N seed0 {reps[0][0]:.4f} seed1 {reps[1][0]:.4f} |diff| {d:.4f} "
-          f"(tol {max(tol,0.01):.4f}) -> {'CONVERGED' if ok else 'NOT CONVERGED'}", flush=True)
-    print(f"  vs O2 plain-MC uniform-IC {o2_unif:.4f} (PT should reach LOWER if it equilibrates better)",
-          flush=True)
+    print(f"PT REFERENCE: seed0 {reps[0][0]:.4f} seed1 {reps[1][0]:.4f} |diff| {d:.4f} (tol {tol:.4f}); "
+          f"plateau drift {plat:.4f} -> {'CONVERGED' if ok else 'NOT CONVERGED'}", flush=True)
+    print(f"  vs O2 plain-MC uniform {o2_unif:.4f}", flush=True)
 
 
 if __name__ == "__main__":

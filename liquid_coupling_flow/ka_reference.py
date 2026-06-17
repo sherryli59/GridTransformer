@@ -77,14 +77,14 @@ def main(device="cuda" if torch.cuda.is_available() else "cpu"):
     N = 256; L = (N / RHO) ** 0.5; T = 0.5
     sd = make_species(N, FRACB).to(device)
     T_ladder = 0.5 * (1.25 / 0.5) ** (torch.arange(10) / 9)          # 10-level geometric 0.5->1.25
-    reps, trajs = [], []
+    reps, trajs, cfgs = [], [], []
     fig, ax = plt.subplots(1, 2, figsize=(12, 4.4))
     for seed in (0, 1):
         cfg, traj, ex = parallel_tempering(N, L, sd, T_ladder, device, n_per=8,
-                                           n_equil=5000, n_collect=80, seed=seed)
+                                           n_equil=12000, n_collect=150, every=40, seed=seed)
         U = (ka_energy(cfg, sd, L) / N).mean().item()
         se = (ka_energy(cfg, sd, L) / N).std().item() / np.sqrt(cfg.shape[0])
-        reps.append((U, se)); trajs.append(traj)
+        reps.append((U, se)); trajs.append(traj); cfgs.append(cfg)
         ax[0].plot([t for t, _ in traj], [u for _, u in traj], "-o", label=f"seed {seed} (exch {ex:.2f})")
         print(f"seed {seed}: cold <U>/N = {U:.4f} +/- {se:.4f}  exch_acc={ex:.2f}", flush=True)
     # verdict: independent runs agree (within ~3 sigma) AND the cold energy has plateaued
@@ -107,6 +107,13 @@ def main(device="cuda" if torch.cuda.is_available() else "cpu"):
     print(f"PT REFERENCE: seed0 {reps[0][0]:.4f} seed1 {reps[1][0]:.4f} |diff| {d:.4f} (tol {tol:.4f}); "
           f"plateau drift {plat:.4f} -> {'CONVERGED' if ok else 'NOT CONVERGED'}", flush=True)
     print(f"  vs O2 plain-MC uniform {o2_unif:.4f}", flush=True)
+    # persist the equilibrated cold-level configs as the N=256 reference (both seeds combined)
+    ref = torch.cat(cfgs, 0)
+    torch.save({"x": ref.cpu(), "s": sd.cpu(), "N": N, "L": L, "T": T,
+                "U_per_N": (ka_energy(ref, sd, L) / N).mean().item(),
+                "converged": ok, "plateau_drift": plat, "seed_diff": d},
+               os.path.join(ART, "ka_reference_N256.pt"))
+    print(f"saved {ref.shape[0]} reference configs -> artifacts/ka_reference_N256.pt", flush=True)
 
 
 if __name__ == "__main__":

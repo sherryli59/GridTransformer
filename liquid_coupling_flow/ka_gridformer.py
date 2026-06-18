@@ -101,15 +101,18 @@ class KAGridformer(nn.Module):
         h = self.tr(seq, mask=mask)                                      # [B,N,d], h_j sees <j
         return h + self.sp_emb(s)                                        # add species_j to predict particle j
 
-    def log_prob(self, x, s):
+    def log_prob(self, x, s, input_noise=0.0):
         s = s.long(); B, N = x.shape[0], x.shape[1]
         s = s.expand(B, N).clone() if s.dim() == 1 else s
         order = curve_order(x, self.L, self.R)                           # [B,N] canonicalise
         x = torch.gather(x, 1, order[..., None].expand(-1, -1, self.d))
         s = torch.gather(s, 1, order)
         dlt = to_displacements(x, self.L)
-        bx, by = self._bin(dlt[..., 0]), self._bin(dlt[..., 1])
-        h = self._context(dlt, s)                                        # [B,N,d]
+        bx, by = self._bin(dlt[..., 0]), self._bin(dlt[..., 1])          # CLEAN targets
+        # exposure-bias mitigation: feed NOISY displacements as context (simulating the
+        # drifted inputs seen at sampling time) while predicting the clean target bins.
+        dlt_ctx = dlt + input_noise * torch.randn_like(dlt) if input_noise > 0 else dlt
+        h = self._context(dlt_ctx, s)                                    # [B,N,d]
         lx = F.log_softmax(self.head_x(h), -1)
         ly = F.log_softmax(self.head_y(h + self.bin_x_emb(bx)), -1)
         lp = lx.gather(-1, bx[..., None]).squeeze(-1) + ly.gather(-1, by[..., None]).squeeze(-1)

@@ -18,7 +18,8 @@ def overlap_frac(x, L, N, thresh=0.7):
     return float((r.min(dim=2).values.reshape(-1) < thresh).float().mean())
 
 
-def main(N=100, steps=5000, device="cuda" if torch.cuda.is_available() else "cpu"):
+def main(N=100, steps=15000, eval_every=5000, input_noise=0.1,
+         device="cuda" if torch.cuda.is_available() else "cpu"):
     ref = torch.load(os.path.join(ART, f"ka_reference_N{N}.pt"), map_location=device)
     data, s, L = ref["x"].to(device), ref["s"].to(device), ref["L"]
     U_ref = (ka_energy(data, s, L) / N).mean().item()
@@ -26,17 +27,33 @@ def main(N=100, steps=5000, device="cuda" if torch.cuda.is_available() else "cpu
     print(f"reference N={N}: {data.shape[0]} configs, <U>/N {U_ref:.3f}, overlaps {ov_ref:.3f}", flush=True)
 
     m = KAGridformer(L=L, n_bins=96, d_model=192, n_head=6, n_layer=6, R=32).to(device)
-    print(f"gridformer {sum(p.numel() for p in m.parameters())/1e6:.2f}M params", flush=True)
+    print(f"gridformer {sum(p.numel() for p in m.parameters())/1e6:.2f}M params, "
+          f"input_noise={input_noise} (bin_w={m.bin_w:.3f})", flush=True)
     opt = torch.optim.AdamW(m.parameters(), lr=3e-4, weight_decay=1e-4)
     B, t0 = 128, time.time()
+
+    def eval_overlaps(n=256):
+        m.eval()
+        with torch.no_grad():
+            xe, _ = m.sample(n, s, device=device)
+        m.train()
+        return overlap_frac(xe, L, N)
+
+    traj = []
     for step in range(steps):
         idx = torch.randint(0, data.shape[0], (B,), device=device)
-        loss = -m.log_prob(data[idx], s).mean()
+        loss = -m.log_prob(data[idx], s, input_noise=input_noise).mean()
         opt.zero_grad(); loss.backward()
         torch.nn.utils.clip_grad_norm_(m.parameters(), 5.0)
         opt.step()
-        if step % 500 == 0 or step == steps - 1:
-            print(f"  step {step:4d} -logq {loss.item():.1f} (base {2*N*math.log(L):.1f}) {time.time()-t0:.0f}s", flush=True)
+        if step % 500 == 0:
+            print(f"  step {step:5d} -logq {loss.item():.1f} {time.time()-t0:.0f}s", flush=True)
+        if (step + 1) % eval_every == 0:
+            ov_s = eval_overlaps()
+            traj.append((step + 1, loss.item(), ov_s))
+            print(f"  >> step {step+1}: sample overlaps {ov_s:.3f} (ref {ov_ref:.3f})  "
+                  f"[DROP=undertrained, PLATEAU=exposure-bias]", flush=True)
+    print(f"OVERLAP TRAJECTORY (step, -logq, overlaps): {[(s,round(l,1),round(o,3)) for s,l,o in traj]}", flush=True)
     m.eval()
     with torch.no_grad():
         x, _ = m.sample(1000, s, device=device)

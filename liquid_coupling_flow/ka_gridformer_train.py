@@ -70,11 +70,14 @@ def main(N=100, steps=15000, eval_every=5000, input_noise=0.1,
         ax[k].set_title(f"g_{['A','B'][p[0]]}{['A','B'][p[1]]}(r)"); ax[k].set_xlabel("r"); ax[k].legend(fontsize=8)
     fig.suptitle(f"GridFormer in-distribution N={N}: overlaps {ov:.3f} (ref {ov_ref:.3f}) "
                  f"-- {'REPRODUCES' if ov < 0.05 else 'FAILS'}", fontsize=13)
-    fig.tight_layout(); out = os.path.join(ART, "ka_gridformer_indist.png")
+    fig.tight_layout(); out = os.path.join(ART, f"ka_gridformer_indist_N{N}.png")
     fig.savefig(out, dpi=120); print(f"saved {out}", flush=True)
     torch.save({"state_dict": m.state_dict(), "L": L, "s": s.cpu(), "N": N,
                 "overlaps": ov, "U_median": Um}, os.path.join(ART, f"ka_gridformer_N{N}.pt"))
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    N = int(sys.argv[1]) if len(sys.argv) > 1 else 100
+    noise = float(sys.argv[2]) if len(sys.argv) > 2 else 0.0   # default: NO noise (it hurt)
+    main(N=N, input_noise=noise)

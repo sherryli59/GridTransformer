@@ -32,8 +32,10 @@ def main(N=256, n_levels=10, n_equil=8000, n_collect=4000, n_per=16,
 if __name__ == "__main__":
     import sys
     N = int(sys.argv[1]) if len(sys.argv) > 1 else 256
+    n_per = int(sys.argv[2]) if len(sys.argv) > 2 else 16          # chains/level -> #configs
+    n_collect = int(sys.argv[3]) if len(sys.argv) > 3 else 4000
     # smaller N equilibrates faster and needs fewer ladder levels
     if N <= 128:
-        main(N=N, n_levels=8, n_equil=5000, n_collect=4000, n_per=16)
+        main(N=N, n_levels=8, n_equil=5000, n_collect=n_collect, n_per=n_per)
     else:
-        main(N=N)
+        main(N=N, n_collect=n_collect, n_per=n_per)

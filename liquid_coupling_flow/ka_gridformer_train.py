@@ -18,7 +18,24 @@ def overlap_frac(x, L, N, thresh=0.7):
     return float((r.min(dim=2).values.reshape(-1) < thresh).float().mean())
 
 
-def main(N=100, steps=15000, eval_every=5000, input_noise=0.1,
+# D4 (square point group): 4 rotations + 4 reflections; det +/-1 signed permutations.
+_D4 = torch.tensor([
+    [[1, 0], [0, 1]], [[0, -1], [1, 0]], [[-1, 0], [0, -1]], [[0, 1], [-1, 0]],
+    [[1, 0], [0, -1]], [[-1, 0], [0, 1]], [[0, 1], [1, 0]], [[0, -1], [-1, 0]]],
+    dtype=torch.float32)
+
+
+def augment(x, L):
+    """Random translation + random D4 rotation/reflection per config. Both are exact
+    symmetries of the periodic KA box (energy-invariant), so the Boltzmann distribution
+    is preserved while coverage of the configuration manifold is multiplied."""
+    B = x.shape[0]
+    M = _D4.to(x)[torch.randint(8, (B,), device=x.device)]          # [B,2,2]
+    t = torch.rand(B, 1, 2, device=x.device) * L
+    return torch.remainder(torch.einsum("bij,bnj->bni", M, x) + t, L)
+
+
+def main(N=100, steps=15000, eval_every=5000, input_noise=0.0, augment_data=True,
          device="cuda" if torch.cuda.is_available() else "cpu"):
     ref = torch.load(os.path.join(ART, f"ka_reference_N{N}.pt"), map_location=device)
     data, s, L = ref["x"].to(device), ref["s"].to(device), ref["L"]
@@ -28,7 +45,7 @@ def main(N=100, steps=15000, eval_every=5000, input_noise=0.1,
 
     m = KAGridformer(L=L, n_bins=96, d_model=192, n_head=6, n_layer=6, R=32).to(device)
     print(f"gridformer {sum(p.numel() for p in m.parameters())/1e6:.2f}M params, "
-          f"input_noise={input_noise} (bin_w={m.bin_w:.3f})", flush=True)
+          f"input_noise={input_noise}, augment={augment_data}, data={data.shape[0]} configs", flush=True)
     opt = torch.optim.AdamW(m.parameters(), lr=3e-4, weight_decay=1e-4)
     B, t0 = 128, time.time()
 
@@ -42,7 +59,8 @@ def main(N=100, steps=15000, eval_every=5000, input_noise=0.1,
     traj = []
     for step in range(steps):
         idx = torch.randint(0, data.shape[0], (B,), device=device)
-        loss = -m.log_prob(data[idx], s, input_noise=input_noise).mean()
+        batch = augment(data[idx], L) if augment_data else data[idx]
+        loss = -m.log_prob(batch, s, input_noise=input_noise).mean()
         opt.zero_grad(); loss.backward()
         torch.nn.utils.clip_grad_norm_(m.parameters(), 5.0)
         opt.step()

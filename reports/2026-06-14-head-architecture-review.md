@@ -15,32 +15,38 @@ normalization constant), which is best, and what would improve them?
 
 ## Exact-likelihood analysis (the load-bearing question)
 
-The downstream use (ESS / importance reweighting / Boltzmann matching) needs a proper
-**continuous density** q(x) over displacement space, exact up to a global constant.
+The real test is NOT "is q a continuous density" — for ESS, q only has to be correct **up
+to a single GLOBAL constant** (the constant cancels in `w = p/q`). The discriminator is
+therefore *constant vs non-constant* missing normalization, not density vs mass.
 
-- **Continuous MDN — YES, a proper continuous density.** `mdn_loss` evaluates a Gaussian
-  (full or diagonal covariance via `scale_tril`) mixture log-density with the correct
-  Gaussian normalizer + Cholesky log-det. The relative→absolute reconstruction is a unit-
-  Jacobian cumsum, so logq over positions = logq over deltas + const. Exact up to a
-  constant. **This is the only head that is a continuous density.**
+- **Continuous MDN — exact up to a constant.** `mdn_loss` evaluates a Gaussian (full or
+  diagonal covariance via `scale_tril`) mixture log-density with the correct Gaussian
+  normalizer + Cholesky log-det. The relative→absolute reconstruction is a unit-Jacobian
+  cumsum, so logq over positions = logq over deltas + const. The only missing factors (the
+  partition function Z, the Jacobian) are global constants → cancel. ✓ Best on resolution
+  and expressiveness.
 
-- **Binned-discrete — an exact PMF, a density only after dequantization.** It is a
-  categorical over a *uniform* grid (`cell_size = box/R`, constant volume). As a continuous
-  density it is `PMF / cell_volume` — piecewise-constant — *if* you assume uniform-within-
-  cell. But the sampler places each draw at the **cell center** (`delta_t =
-  codebook.index_select(...)`, sample_lj.py:1051) with **no dequantization**, so the model's
-  realized support is a grid (a discrete measure), not a density. For ESS this still *works*
-  (the constant cell volume cancels, so `logq = log PMF` gives a valid ESS that measures how
-  well the PMF matches the cell-integrated target), but it is **resolution-limited**: the
-  model can never resolve structure finer than a bin, which caps achievable ESS.
+- **Binned-discrete — ALSO exact up to a constant** (earlier draft wrongly demoted this).
+  It is a categorical over a *uniform* grid (`cell_size = box/R`). Its implied density is
+  `PMF / cell_volume`, and because the grid is uniform, `cell_volume` is **one global
+  constant** → it cancels exactly like Z. So `logq = log PMF` gives a perfectly valid ESS:
+  you are importance-sampling against the *bin-discretized* Boltzmann target, exact up to a
+  constant. The cell-center placement (`delta_t = codebook.index_select(...)`,
+  sample_lj.py:1051, no dequantization) does not break this — within a uniform cell the
+  dequantized density is flat, so evaluating it at the center is consistent with evaluating
+  `U` at the center. The ONLY real cost is **resolution**: you match a coarse-grained
+  target, capped by bin size. Not an exactness problem. ✓ (coarser than continuous)
 
-- **Codebook — NOT a valid continuous density; ESS is also biased.** The support is K
-  learned vectors with **unequal Voronoi volumes**. (a) A finite point set can never place a
-  sample where a continuous Boltzmann target wants it → structural ceiling. (b) The implied
-  density `PMF / Voronoi_volume` has a *non-constant* volume term that does **not** cancel in
-  ESS, so the naive `logq = log PMF` ESS is biased, not just low. The codebook is the right
-  tool for genuinely categorical/VQ data (images), but it is a **category error for
-  continuous molecular coordinates**.
+- **Codebook — the genuine outlier: off by a NON-constant.** It is a categorical over K
+  *learned, irregularly-spaced* vectors, so its implied density is
+  `PMF / Voronoi_volume(code)` and the Voronoi volumes are **unequal across codes**. The
+  missing factor is therefore **not a single global constant** — it is a per-sample quantity
+  `log Voronoi_volume(code_i)` that rides along in every log-weight and does **not** cancel.
+  So `logq = log PMF` gives a **biased** ESS, not merely a coarse one. The fix isn't "train
+  better" — it is "use equal-volume cells," at which point it is just (non-factorized)
+  uniform binning again. The codebook is the right tool for genuinely categorical/VQ data
+  (images); for continuous coordinates it buys nothing over uniform bins and corrupts the
+  importance weights. ✗
 
 ### Factorized or not — both exact for the continuous head
 `is_factorized` sets `continuous_out_dim=1` + an `axis_emb`, i.e. predict each spatial axis
@@ -49,7 +55,8 @@ approximation — so factorized-continuous is a proper density too, just a diffe
 cheaper) parameterization than the joint full-covariance MDN. For **discrete**, factorized =
 a per-axis categorical (vocab = bins, tractable); the non-factorized joint discrete would
 need bins^dim categories (intractable), which is exactly why the **codebook** exists — it is
-the workaround for "non-factorized discrete," bought at the cost of the density validity above.
+the workaround for "non-factorized discrete," bought at the cost of the non-constant
+Voronoi normalization above.
 
 ## The permutation caveat — applies to ALL heads, and is the prime suspect for low ESS
 
@@ -73,10 +80,12 @@ issue and **not** model miscalibration. For DW4, N=4 ⇒ 24 orderings, so a perm
 | binned-256, factorized | 0.61 |
 | codebook (4096) | 0.07 |
 
-**The ordering is exactly what the likelihood theory predicts**: continuous (true density) >
-binned (resolution-limited PMF) > codebook (invalid density + biased ESS). The codebook's
-0.07% is structural, not bad luck. **But the absolute values are ~20× below the ≥40% an easy
-system should allow** — and that gap is *not* explained by the head choice (continuous is
+**The ordering matches the likelihood theory**: continuous (exact-up-to-const, fine
+resolution) > binned (exact-up-to-const, coarse) > codebook (biased by non-constant Voronoi
+normalization). NOTE the continuous and binned numbers are directly comparable *valid* ESS
+estimates; the codebook's 0.07% is a **biased** estimate (the per-code volume term is
+omitted), so it should not be compared head-to-head — it is suspect, not merely low.
+**But the absolute values are ~20× below the ≥40% an easy system should allow** — and that gap is *not* explained by the head choice (continuous is
 already best). Two testable causes, not yet separated:
 - **Permutation leak** (above): its magnitude depends on the *non-canonical generation
   rate* — for samples the model emits in canonical order, the single-ordering logq already
@@ -91,13 +100,14 @@ permutation correction is measured.
 
 ## Conclusions
 
-- **Which is best:** the continuous MDN head — the only proper continuous density, and
-  empirically the best ESS. Full covariance over diagonal where correlations matter.
-- **Codebook:** drop it for continuous coordinates; it cannot represent a continuous
-  Boltzmann density and its ESS is biased by unequal Voronoi volumes.
-- **Binned-discrete:** defensible as a simple/robust baseline, but resolution-capped; if
-  used for likelihood work, **dequantize at sampling** (uniform-in-cell) so the realized
-  distribution is the density the logq claims.
+- **Which is best:** the continuous MDN head — exact up to a constant AND finest resolution,
+  and empirically the best ESS. Full covariance over diagonal where correlations matter.
+- **Binned-discrete:** also exact up to a constant (uniform cell volume cancels), just
+  resolution-capped — a legitimate, valid baseline; its ESS numbers are trustworthy. Finer
+  bins → closer to the continuous head.
+- **Codebook:** drop it for continuous coordinates. Not because of "finite support" per se,
+  but because its *unequal Voronoi volumes* are a non-constant normalization that biases the
+  importance weights. Equal-volume cells = uniform binning, so the codebook buys nothing here.
 
 ## Improvements (ranked)
 
@@ -109,7 +119,9 @@ permutation correction is measured.
 3. **More expressive exact density per step**: a small normalizing flow head (exact,
    invertible) instead of / on top of the GMM captures curved, multimodal conditionals the
    GMM smears — strictly better than adding mixtures past saturation.
-4. **If keeping discrete, add sampling dequantization** so its likelihood is a real density.
+4. **If keeping binned-discrete**, it's already ESS-valid; add sampling dequantization only
+   if you need genuine continuous *samples* (uniform-in-cell), and use finer bins to lift the
+   resolution cap toward the continuous head.
 5. **Train quality**: the continuous model's own samples sit ~1 energy unit above the target
    mean with a heavy low-logq tail — more/better training (and the items above) should lift
    the absolute ESS toward the easy-system expectation.

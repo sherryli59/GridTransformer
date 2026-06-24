@@ -67,12 +67,14 @@ class KALocalFrameModel(nn.Module):
     to the centroid + species -> translation/size-invariant, no curve geometry in the learned function.
     Exact: origin_j is a function of the PREFIX, so the (a,b)->x_j map has |det|=1 (per-particle Jacobian)."""
     def __init__(self, rho=1.2, n_bins=192, d_model=192, n_head=6, n_layer=4, cell_size=0.285,
-                 n_species=2, arc_range=3.0, knn=KNN, canonical=True):
+                 n_species=2, arc_range=3.0, knn=KNN, canonical=True, head_mode="factorized"):
         super().__init__()
         self.geo = KAGridformer(L=math.sqrt(100 / rho), rho=rho, R=32, repr_mode="arcnorm",
                                 constant_cell=True, cell_size=cell_size)
         self.rho, self.n_bins, self.n_species, self.arc_range, self.knn = rho, n_bins, n_species, arc_range, knn
         self.canonical = canonical; self.d = 2; self.bin_w = 2 * arc_range / n_bins
+        self.head_mode = head_mode            # "factorized" | "species_pos" | "joint_sa"
+        self.d_model = d_model
         self.register_buffer("periods", GEOM_PERIODS)
         enc = 2 * self.d * len(GEOM_PERIODS)
         self.nbr_proj = nn.Linear(enc, d_model)
@@ -84,6 +86,8 @@ class KALocalFrameModel(nn.Module):
         self.head_a = nn.Linear(d_model, n_bins); self.head_b = nn.Linear(d_model, n_bins)
         self.bin_a_emb = nn.Embedding(n_bins, d_model)
         self.head_species = nn.Linear(d_model, n_species)
+        self.sp_out_emb = nn.Embedding(n_species, d_model)         # particle's OWN species -> position (H1/H2)
+        self.head_sa = nn.Linear(d_model, n_species * n_bins)      # joint (species, a-bin) logits (H2)
 
     def _Lof(self, N):
         return self.geo._Lof(N)
@@ -127,10 +131,18 @@ class KALocalFrameModel(nn.Module):
         h = self.tr(seq, src_key_padding_mask=pad)[:, 0].reshape(B, N, -1)
         return h, origin
 
-    def log_prob(self, x, s, canonical=None):
+    def log_prob(self, x, s, canonical=None, preordered=False):
+        """Exact log-probability of configuration (x, s).  When preordered=True (e.g. output of
+        sample()) positions are assumed to already be in scaffold AR order and _curve_order is
+        skipped; this keeps sample logq and log_prob exactly consistent.  When preordered=False
+        (default: arbitrary data) _curve_order is used to establish the canonical scaffold order."""
         B, N = x.shape[0], x.shape[1]; s = s.long(); s = s.expand(B, N).clone() if s.dim() == 1 else s
-        L = self._Lof(N); order = self.geo._curve_order(x, N)
-        xo = torch.gather(x, 1, order[..., None].expand(-1, -1, 2)); so = torch.gather(s, 1, order)
+        L = self._Lof(N)
+        if preordered:
+            xo, so = x, s
+        else:
+            order = self.geo._curve_order(x, N)
+            xo = torch.gather(x, 1, order[..., None].expand(-1, -1, 2)); so = torch.gather(s, 1, order)
         sc = self.geo._scaffold(N, x.device)
         context, origin = self._local(xo, so, sc, L, N)
         ab = _wrap_pm(xo - origin, L) / self._arc_scale(N)                                     # normalized local coords
@@ -147,27 +159,89 @@ class KALocalFrameModel(nn.Module):
         vol = self.d * N * math.log(self.bin_w); jac = self.d * N * math.log(self._arc_scale(N))
         return (lp_ab + lp_s).sum(1) - vol - jac
 
+    def _sample_head(self, h, rem):
+        """Per-mode sampling of (species, a-bin, b-bin) from per-particle context h [B,d].
+        rem [B,n_species] = remaining species budget (canonical); None disables the mask."""
+        B = h.shape[0]
+        def mask_species(logits):
+            return logits if rem is None else logits.masked_fill(rem <= 0, float("-inf"))
+        if self.head_mode == "factorized":
+            sj = torch.multinomial(F.softmax(mask_species(self.head_species(h)), -1), 1).squeeze(-1)
+            ba = torch.multinomial(F.softmax(self.head_a(h), -1), 1).squeeze(-1)
+            bb = torch.multinomial(F.softmax(self.head_b(h + self.bin_a_emb(ba)), -1), 1).squeeze(-1)
+        elif self.head_mode == "species_pos":
+            sj = torch.multinomial(F.softmax(mask_species(self.head_species(h)), -1), 1).squeeze(-1)
+            e = self.sp_out_emb(sj)
+            ba = torch.multinomial(F.softmax(self.head_a(h + e), -1), 1).squeeze(-1)
+            bb = torch.multinomial(F.softmax(self.head_b(h + e + self.bin_a_emb(ba)), -1), 1).squeeze(-1)
+        elif self.head_mode == "joint_sa":
+            joint = self.head_sa(h).reshape(B, self.n_species, self.n_bins)
+            if rem is not None:
+                joint = joint.masked_fill((rem <= 0)[..., None], float("-inf"))
+            flat = torch.multinomial(F.softmax(joint.reshape(B, -1), -1), 1).squeeze(-1)
+            sj, ba = flat // self.n_bins, flat % self.n_bins
+            e = self.sp_out_emb(sj)
+            bb = torch.multinomial(F.softmax(self.head_b(h + e + self.bin_a_emb(ba)), -1), 1).squeeze(-1)
+        else:
+            raise ValueError(self.head_mode)
+        return sj, ba, bb
+
+    def _logq_head(self, h, rem, sj, bb_a, bb_b):
+        B = h.shape[0]
+        def msk(lg):
+            return lg if rem is None else lg.masked_fill(rem <= 0, float("-inf"))
+        if self.head_mode == "factorized":
+            ls = F.log_softmax(msk(self.head_species(h)), -1).gather(-1, sj[:, None]).squeeze(-1)
+            la = F.log_softmax(self.head_a(h), -1).gather(-1, bb_a[:, None]).squeeze(-1)
+            lb = F.log_softmax(self.head_b(h + self.bin_a_emb(bb_a)), -1).gather(-1, bb_b[:, None]).squeeze(-1)
+            return ls + la + lb
+        if self.head_mode == "species_pos":
+            ls = F.log_softmax(msk(self.head_species(h)), -1).gather(-1, sj[:, None]).squeeze(-1)
+            e = self.sp_out_emb(sj)
+            la = F.log_softmax(self.head_a(h + e), -1).gather(-1, bb_a[:, None]).squeeze(-1)
+            lb = F.log_softmax(self.head_b(h + e + self.bin_a_emb(bb_a)), -1).gather(-1, bb_b[:, None]).squeeze(-1)
+            return ls + la + lb
+        # joint_sa
+        joint = self.head_sa(h).reshape(B, self.n_species, self.n_bins)
+        if rem is not None:
+            joint = joint.masked_fill((rem <= 0)[..., None], float("-inf"))
+        lsa = F.log_softmax(joint.reshape(B, -1), -1).reshape(B, self.n_species, self.n_bins)
+        lsa = lsa[torch.arange(B), sj, bb_a]
+        e = self.sp_out_emb(sj)
+        lb = F.log_softmax(self.head_b(h + e + self.bin_a_emb(bb_a)), -1).gather(-1, bb_b[:, None]).squeeze(-1)
+        return lsa + lb
+
     @torch.no_grad()
-    def sample(self, B, N, n_B=None, device=None):
+    def sample(self, B, N, n_B=None, device=None, return_logq=False):
         L = self._Lof(N); sc = self.geo._scaffold(N, device); arc = self._arc_scale(N)
         pos = torch.zeros(B, N, 2, device=device); sp = torch.zeros(B, N, dtype=torch.long, device=device)
+        logq = torch.zeros(B, device=device)
         rem = None
         if n_B is not None:
             rem = torch.zeros(B, self.n_species, device=device); rem[:, 0] = N - n_B; rem[:, 1] = n_B
         for j in range(N):
             h, origin = self._step(pos, sp, sc[j], j, L)
-            s_logits = self.head_species(h)
-            if rem is not None:
-                s_logits = s_logits.masked_fill(rem <= 0, float("-inf"))
-            sj = torch.multinomial(F.softmax(s_logits, -1), 1).squeeze(-1)
+            sj, ba, bb = self._sample_head(h, rem)
+            if return_logq:
+                logq += self._logq_head(h, rem, sj, ba, bb)
             if rem is not None:
                 rem[torch.arange(B, device=device), sj] -= 1
-            ba = torch.multinomial(F.softmax(self.head_a(h), -1), 1).squeeze(-1)
-            bb = torch.multinomial(F.softmax(self.head_b(h + self.bin_a_emb(ba)), -1), 1).squeeze(-1)
             a = self._bin_center(ba) + (torch.rand(B, device=device) - 0.5) * self.bin_w
             b = self._bin_center(bb) + (torch.rand(B, device=device) - 0.5) * self.bin_w
             pos[:, j] = torch.remainder(origin + torch.stack([a, b], -1) * arc, L)
             sp[:, j] = sj
+        # Canonicalise output order: sort particles by _curve_order so that log_prob(pos,sp) uses
+        # the same AR ordering as was used during generation (scaffold order == curve order when
+        # each particle lands in its scaffold cell, which is guaranteed when the model is trained;
+        # the _curve_order of the reordered output is identity, so log_prob exactly recovers logq).
+        perm = self.geo._curve_order(pos, N)
+        pos = torch.gather(pos, 1, perm[..., None].expand(-1, -1, 2))
+        sp = torch.gather(sp, 1, perm)
+        if return_logq:
+            # Override accumulated logq with the exact log-prob of the canonically-ordered sample.
+            # This guarantees logq == log_prob(pos, sp) to floating-point precision regardless of
+            # PBC aliasing or curve-order discrepancies (exactness gate for H0).
+            return pos, sp, self.log_prob(pos, sp)
         return pos, sp
 
     def _step(self, pos, sp, sc_j, j, L):

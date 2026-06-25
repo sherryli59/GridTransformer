@@ -176,3 +176,50 @@ def site_propose(m, ctx_j, origin_j, arc, L):
     b = m._bin_center(bb) + (torch.rand(B, device=ctx_j.device) - 0.5) * m.bin_w
     xj = torch.remainder(origin_j + torch.stack([a, b], -1) * arc, L)
     return xj, site_logq(m, ctx_j, origin_j, xj, arc, L)
+
+
+from liquid_coupling_flow.ka_observables import partial_gr
+from liquid_coupling_flow.ka_energy import ka_energy
+
+
+def _gbb(pos, s, L):
+    """g_BB peak height and spurious contacts (mean g below 0.88)."""
+    rc, gg = partial_gr(pos, s, L, min(L / 2, 4.0), 60, (1, 1))
+    import numpy as np
+    rc = np.asarray(rc); gg = np.asarray(gg)
+    return float(gg.max()), float(gg[rc < 0.88].mean())
+
+
+def _overlap(pos, L, thr=0.7):
+    """Fraction of nearest-neighbour pairs closer than thr (clash indicator)."""
+    d = pos[:, :, None, :] - pos[:, None, :, :]; d = d - L * torch.round(d / L)
+    r = (d ** 2).sum(-1).sqrt(); N = pos.shape[1]
+    r = r + torch.eye(N, device=pos.device)[None] * 1e3
+    return float((r.min(2).values.reshape(-1) < thr).float().mean())
+
+
+@torch.no_grad()
+def run_chain(m, pos, s, sc, L, N, kT, n_sweeps, record_every, n_swap, kind, step, arc, rng):
+    """Run a chain of MH sweeps, recording observables every record_every sweeps.
+
+    kind="learned" -> learned_position_sweep; else -> uniform_position_sweep.
+    Returns dict with trajectory lists {sweeps, U, gbb_peak, gbb_spur, overlap, accept} and x_final.
+    """
+    out = {"sweeps": [], "U": [], "gbb_peak": [], "gbb_spur": [], "overlap": [], "accept": []}
+    for sweep in range(n_sweeps + 1):
+        if sweep % record_every == 0:
+            out["sweeps"].append(sweep)
+            out["U"].append(float((ka_energy(pos, s, L) / N).median()))
+            p, q = _gbb(pos, s, L)
+            out["gbb_peak"].append(p); out["gbb_spur"].append(q)
+            out["overlap"].append(_overlap(pos, L))
+        if sweep == n_sweeps:
+            break
+        if kind == "learned":
+            pos, na = learned_position_sweep(m, pos, s, sc, L, N, kT, arc, rng)
+        else:
+            pos, na = uniform_position_sweep(pos, s, L, N, kT, step, rng)
+        out["accept"].append(na / (N * pos.shape[0]))
+        pos, _ = swap_sweep(pos, s, L, kT, n_swap, rng)
+    out["x_final"] = pos
+    return out

@@ -179,3 +179,20 @@ def test_context_independent_of_xj():
         assert (ori2[:, j] - ori0[:, j]).abs().max() == 0, j
         other = torch.ones(N, dtype=torch.bool, device=DEV); other[j] = False
         assert (ctx2[:, other] - ctx0[:, other]).abs().max() > 0, f"vacuous: no other slice changed at j={j}"
+
+
+def test_stationarity_no_sustained_drift_from_reference():
+    import numpy as np
+    m = _load_model(); ref = torch.load(f"{ART}/ka_reference_N100.pt", map_location=DEV, weights_only=False)
+    s = ref["s"].to(DEV).long(); L = ref["L"]; N = ref["x"].shape[1]; sc = m.geo._scaffold(N, DEV); arc = m._arc_scale(N)
+    B = 24; idx = torch.randint(0, ref["x"].shape[0], (B,), device=DEV)   # small B/n_sweeps for test runtime (DB rigorously gated at tiny-N in Task 5; this is corroborating)
+    pos = ref["x"][idx].to(DEV).clone()
+    g = torch.Generator(device=DEV).manual_seed(0)
+    tj = K.run_chain(m, pos, s, sc, L, N, 0.5, n_sweeps=40, record_every=8, n_swap=N // 8,
+                     kind="learned", step=0.0, arc=arc, rng=g)
+    sw = np.array(tj["sweeps"], float); u = np.array(tj["U"], float)
+    A = np.vstack([sw, np.ones_like(sw)]).T
+    slope = np.linalg.lstsq(A, u, rcond=None)[0][0]
+    resid = u - A @ np.linalg.lstsq(A, u, rcond=None)[0]
+    se = (resid.std() / sw.std() / len(sw) ** 0.5)
+    assert abs(slope) < 3 * se + 1e-4, (slope, se)   # zero-slope: no sustained drift

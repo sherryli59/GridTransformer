@@ -63,3 +63,64 @@ def test_sampler_evaluator_roundtrip():
     xj_new, logq_new = K.site_propose(m, ctx[:, j], origin[:, j], arc, L)
     logq_new_eval = K.site_logq(m, ctx[:, j], origin[:, j], xj_new, arc, L)
     assert torch.allclose(logq_new, logq_new_eval, atol=1e-4), (logq_new - logq_new_eval).abs().max()
+
+
+def _grid_total(m, ctx_j, origin_j, B, L, arc, g=200, chunk=256):
+    """Integral of q over the PHYSICAL torus for each of B configs (post-fold), chunked + vectorized over
+    grid points. Used ONLY for the injected-UNIFORM density below (a uniform density integrates exactly on
+    any grid, so Riemann alignment is a non-issue here — unlike the peaked real conditional, which Task 2
+    normalizes via the alignment-free bin-sum)."""
+    dev = ctx_j.device
+    xs = (torch.arange(g, device=dev) + 0.5) * (L / g)
+    gx, gy = torch.meshgrid(xs, xs, indexing="ij"); pts = torch.stack([gx.reshape(-1), gy.reshape(-1)], -1)
+    cell = (L / g) ** 2; G = pts.shape[0]; tot = torch.zeros(B, device=dev)
+    with torch.no_grad():
+        for c in range(0, G, chunk):
+            blk = pts[c:c + chunk]; nb = blk.shape[0]
+            cj = ctx_j[:, None, :].expand(B, nb, -1).reshape(B * nb, -1)
+            oj = origin_j[:, None, :].expand(B, nb, -1).reshape(B * nb, 2)
+            xj = blk[None].expand(B, nb, 2).reshape(B * nb, 2)
+            tot = tot + K.site_logq(m, cj, oj, xj, arc, L).reshape(B, nb).exp().sum(1) * cell
+    return tot
+
+
+class _UniformHead(torch.nn.Module):
+    """Stub nn.Module that returns zero logits (uniform softmax) for any input."""
+    def __init__(self, nb): super().__init__(); self.nb = nb
+    def forward(self, x): return torch.zeros(*x.shape[:-1], self.nb, device=x.device)
+
+def test_fold_normalizes_with_injected_wrap_mass():
+    """The trained model never proposes in the wrap region (0% mass), so the fold ships untested. Inject
+    UNIFORM bin logits so the wrap-region bins (|center|>L/2/arc) carry real mass -> the fold MUST fire and
+    must conserve mass (fold aliased bins onto their physical partner, no double-count) -> total over the
+    physical torus == 1. (Uniform density -> any grid resolves it; the g=200 default is ample.)"""
+    m, xo, so, ctx, origin, L, N = _ctx(_load_model()); arc = m._arc_scale(N); j = 7; nb = m.n_bins
+    m.head_a = _UniformHead(nb)   # uniform over all bins (incl. wrap)
+    m.head_b = _UniformHead(nb)
+    total = _grid_total(m, ctx[:, j], origin[:, j], xo.shape[0], L, arc)
+    assert torch.allclose(total, torch.ones_like(total), atol=3e-2), total
+
+
+def test_zero_outside_range():
+    """Genuine zero outside support (NOT clamped edge-bin mass). Shrink arc_range so the grid under-covers the
+    torus (arc_range*arc=2.58 < L/2=4.56); then a query whose wrapped offset exceeds arc_range must get q=0
+    (logq ~ log(1e-30) ~ -69), while an in-range query stays finite. Targeted check (no grid integral)."""
+    m, xo, so, ctx, origin, L, N = _ctx(_load_model()); arc = m._arc_scale(N); j = 7
+    m.arc_range = 1.2; m.bin_w = 2 * m.arc_range / m.n_bins
+    oj = origin[:, j]
+    inside = torch.remainder(oj + 0.3 * arc, L)                    # |offset| ~0.3 arc < 1.2 -> in range
+    outside = torch.remainder(oj + 2.0 * arc, L)                   # |offset| ~2.0 arc > 1.2 -> out of range -> q=0
+    assert (K.site_logq(m, ctx[:, j], oj, inside, arc, L) > -50).all()
+    assert (K.site_logq(m, ctx[:, j], oj, outside, arc, L) < -60).all()
+
+
+def test_context_independent_of_xj():
+    m = _load_model(); N = 100; ref = torch.load(f"{ART}/ka_reference_N100.pt", map_location=DEV, weights_only=False)
+    s = ref["s"].to(DEV).long(); pos = ref["x"][:4].to(DEV); L = ref["L"]; sc = m.geo._scaffold(N, DEV)
+    sp = s.expand(4, N)
+    ctx0, ori0 = m._local(pos, sp, sc, N=N, L=L)
+    for j in (0, 1, 50, 99):
+        p2 = pos.clone(); p2[:, j] = torch.remainder(p2[:, j] + torch.tensor([1.3, -0.7], device=DEV), L)
+        ctx2, ori2 = m._local(p2, sp, sc, N=N, L=L)
+        assert (ctx2[:, j] - ctx0[:, j]).abs().max() == 0, j
+        assert (ori2[:, j] - ori0[:, j]).abs().max() == 0, j

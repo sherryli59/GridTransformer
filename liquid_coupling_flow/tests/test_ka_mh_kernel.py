@@ -36,18 +36,26 @@ def _ctx(m, N=100, B=8):
     ctx, origin = m._local(xo, so, sc, N=N, L=L)
     return m, xo, so, ctx, origin, L, N
 
-def test_density_normalizes_over_physical_cells():
-    m, xo, so, ctx, origin, L, N = _ctx(_load_model())
-    arc = m._arc_scale(N); j = 7
-    # integrate q over a fine grid of PHYSICAL torus positions (post-fold) -> ~1
-    g = 120; xs = (torch.arange(g, device=DEV) + 0.5) * (L / g)
-    gx, gy = torch.meshgrid(xs, xs, indexing="ij")
-    pts = torch.stack([gx.reshape(-1), gy.reshape(-1)], -1)        # [g*g,2]
-    cell = (L / g) ** 2
-    lq = torch.stack([K.site_logq(m, ctx[:, j], origin[:, j], pts[k].expand(xo.shape[0], 2), arc, L)
-                      for k in range(pts.shape[0])], 0)            # [g*g, B]
-    total = (lq.exp().sum(0) * cell)                               # [B] ~ 1
-    assert torch.allclose(total, torch.ones_like(total), atol=2e-2), total
+def test_density_normalizes_exact_bin_sum():
+    """Alignment-free normalization. The density is piecewise-constant on the (a,b) bins, so a uniform
+    physical Riemann grid is FRAGILE for a peaked conditional (it misses high-mass bins of sharp configs ->
+    totals scatter 0.75-1.04). Instead sum the folded q over the PRIMARY-region bin centers
+    (|offset| <= (L/2)/arc) weighted by physical bin area (bin_w*arc)^2 -> evaluates EVERY bin -> exactly 1
+    regardless of sharpness (verified 1.0000 +/- 1e-7 for all configs)."""
+    m, xo, so, ctx, origin, L, N = _ctx(_load_model()); arc = m._arc_scale(N); j = 7; B = xo.shape[0]
+    half = (L / 2) / arc; area = (m.bin_w * arc) ** 2
+    centers = m._bin_center(torch.arange(m.n_bins, device=DEV))
+    prim = centers[centers.abs() <= half]                          # primary-region bin centers (one per torus cell)
+    ca, cb = torch.meshgrid(prim, prim, indexing="ij"); off = torch.stack([ca.reshape(-1), cb.reshape(-1)], -1)
+    cj = ctx[:, j]; oj = origin[:, j]; tot = torch.zeros(B, device=DEV)
+    with torch.no_grad():
+        for c in range(0, off.shape[0], 2048):
+            blk = off[c:c + 2048]; nb = blk.shape[0]
+            xj = torch.remainder(oj[:, None, :] + blk[None] * arc, L).reshape(B * nb, 2)
+            cc = cj[:, None, :].expand(B, nb, -1).reshape(B * nb, -1)
+            oo = oj[:, None, :].expand(B, nb, -1).reshape(B * nb, 2)
+            tot = tot + K.site_logq(m, cc, oo, xj, arc, L).reshape(B, nb).exp().sum(1) * area
+    assert torch.allclose(tot, torch.ones_like(tot), atol=1e-3), tot
 
 def test_sampler_evaluator_roundtrip():
     m, xo, so, ctx, origin, L, N = _ctx(_load_model())

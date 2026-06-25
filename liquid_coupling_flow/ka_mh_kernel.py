@@ -139,6 +139,33 @@ def swap_sweep(pos, s, L, kT, n_swap, rng):
 
 
 @torch.no_grad()
+def preflight(m, ref_path, kT=0.5, B=32, n_warm=40):
+    ref = torch.load(ref_path, map_location=next(m.parameters()).device, weights_only=False)
+    dev = next(m.parameters()).device
+    s = ref["s"].to(dev).long(); L = ref["L"]; N = ref["x"].shape[1]
+    arc = m._arc_scale(N); sc = m.geo._scaffold(N, dev)
+    geom_ok = bool(m.arc_range * arc >= L / 2)
+    assert geom_ok, f"GEOMETRIC FAIL: arc_range*arc={m.arc_range*arc:.3f} < L/2={L/2:.3f}; enlarge arc_range"
+    # equilibrium out-of-range fraction (curve-ordered reference)
+    x = ref["x"][:512].to(dev); order = m.geo._curve_order(x, N)
+    xo = torch.gather(x, 1, order[..., None].expand(-1, -1, 2)); so = torch.gather(s.expand(x.shape[0], N), 1, order)
+    _, origin = m._local(xo, so, sc, N=N, L=L)
+    off = (_wrap_pm(xo - origin, L) / arc).abs().amax(-1)
+    oor = float((off > m.arc_range).float().mean())
+    assert oor == 0.0, f"COVERAGE FAIL: out-of-range {oor:.4%} > 0; enlarge arc_range / add fallback move"
+    # warm acceptance + reverse-zero fraction from a uniform seed
+    pos = torch.rand(B, N, 2, device=dev) * L
+    g = torch.Generator(device=dev).manual_seed(0); acc_tot = 0; rz = 0; rz_den = 0
+    for _ in range(n_warm):
+        pos, na = learned_position_sweep(m, pos, s, sc, L, N, kT, arc, g); acc_tot += na
+        ctx, ori = m._local(pos, s.expand(B, N), sc, N=N, L=L)     # sample reverse-zero on current config
+        for j in (0, N // 2, N - 1):
+            rz += int((site_logq(m, ctx[:, j], ori[:, j], pos[:, j], arc, L) < -60).sum()); rz_den += B
+    return {"geom_ok": geom_ok, "out_of_range_frac": oor,
+            "accept_frac": acc_tot / (n_warm * N * B), "reverse_zero_frac": rz / max(rz_den, 1)}
+
+
+@torch.no_grad()
 def site_propose(m, ctx_j, origin_j, arc, L):
     """Sample xj' ~ q(.|x_{-j}); return (xj' [B,2], logq' [B]) with logq' the folded density at xj'."""
     la, lb = _bin_probs(m, ctx_j); B = ctx_j.shape[0]

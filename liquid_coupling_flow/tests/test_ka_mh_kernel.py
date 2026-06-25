@@ -158,6 +158,15 @@ def test_tinyN_detailed_balance_preserves_pi(mode):
     assert abs(U_after - U_before) < 5 * sem, (mode, U_before, U_after, sem)
 
 
+def test_preflight_passes_on_real_model():
+    m = _load_model()
+    res = K.preflight(m, f"{ART}/ka_reference_N100.pt", kT=0.5, B=16, n_warm=10)  # acceptance ~0.2-0.5 (probed) >> 5% gate; n_warm small for test speed
+    assert res["geom_ok"]
+    assert res["out_of_range_frac"] == 0.0, res
+    assert res["reverse_zero_frac"] < 1e-6, res
+    assert res["accept_frac"] >= 0.05, res
+
+
 def test_context_independent_of_xj():
     m = _load_model(); N = 100; ref = torch.load(f"{ART}/ka_reference_N100.pt", map_location=DEV, weights_only=False)
     s = ref["s"].to(DEV).long(); pos = ref["x"][:4].to(DEV); L = ref["L"]; sc = m.geo._scaffold(N, DEV)

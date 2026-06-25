@@ -132,6 +132,32 @@ def test_sweeps_relax_energy_from_hot_start():
     assert ka_energy(posu, s, L).mean() < U0u, "uniform sweep did not reduce energy"
 
 
+def _pi_samples(N=5, B=4000, kT=0.5, n_eq=400):
+    torch.manual_seed(1); L = (N / 1.2) ** 0.5
+    s = torch.zeros(N, dtype=torch.long, device=DEV); s[:2] = 1; s = s[torch.randperm(N)]
+    pos = torch.rand(B, N, 2, device=DEV) * L
+    g = torch.Generator(device=DEV).manual_seed(2)
+    for _ in range(n_eq):
+        pos, _ = K.uniform_position_sweep(pos, s, L, N, kT, 0.25, g)
+        pos, _ = K.swap_sweep(pos, s, L, kT, 1, g)
+    return pos, s, L
+
+@pytest.mark.parametrize("mode", ["position", "swap", "interleaved"])
+def test_tinyN_detailed_balance_preserves_pi(mode):
+    from liquid_coupling_flow.ka_energy import ka_energy
+    pos, s, L = _pi_samples(); N = pos.shape[1]; kT = 0.5
+    U_before = ka_energy(pos, s, L).mean().item()
+    g = torch.Generator(device=DEV).manual_seed(3)
+    for _ in range(60):                                           # apply the kernel under test
+        if mode in ("position", "interleaved"):
+            pos, _ = K.mock_position_sweep(pos, s, L, N, kT, 0.25, g)
+        if mode in ("swap", "interleaved"):
+            pos, _ = K.swap_sweep(pos, s, L, kT, 1, g)
+    U_after = ka_energy(pos, s, L).mean().item()
+    sem = ka_energy(pos, s, L).std().item() / pos.shape[0] ** 0.5
+    assert abs(U_after - U_before) < 5 * sem, (mode, U_before, U_after, sem)
+
+
 def test_context_independent_of_xj():
     m = _load_model(); N = 100; ref = torch.load(f"{ART}/ka_reference_N100.pt", map_location=DEV, weights_only=False)
     s = ref["s"].to(DEV).long(); pos = ref["x"][:4].to(DEV); L = ref["L"]; sc = m.geo._scaffold(N, DEV)

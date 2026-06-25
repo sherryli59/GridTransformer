@@ -95,6 +95,50 @@ def uniform_position_sweep(pos, s, L, N, kT, step, rng):
     return pos, n_acc
 
 @torch.no_grad()
+def mock_position_sweep(pos, s, L, N, kT, sigma, rng):
+    """Single-site MH with an analytic, x_j-INDEPENDENT torus-Gaussian conditional
+    q(x_j|x_{-j}) = N_torus(pos_{(j+1)%N}, sigma^2). The proposal centre is another particle (so it depends
+    only on x_{-j}, mirroring §3.2's context-independence). The density is IMAGE-SUMMED so it exactly matches
+    the wrapped sampler at the boundary -> validates the MH/sweep arithmetic independent of the learned model."""
+    B = pos.shape[0]; n_acc = 0; norm = 2 * math.pi * sigma ** 2
+    def logq(xj, mu):
+        acc = torch.zeros(B, device=pos.device)
+        for ix in (-1, 0, 1):
+            for iy in (-1, 0, 1):
+                d = xj - mu - torch.tensor([ix * L, iy * L], device=pos.device, dtype=pos.dtype)
+                acc = acc + torch.exp(-(d ** 2).sum(-1) / (2 * sigma ** 2))
+        return (acc / norm).clamp_min(1e-30).log()
+    for j in torch.randperm(N, generator=rng, device=pos.device).tolist():
+        mu = pos[:, (j + 1) % N]                                  # x_{-j}-only proposal centre
+        xj_new = torch.remainder(mu + sigma * torch.randn(B, 2, generator=rng, device=pos.device), L)
+        dE = site_dE(pos, s, j, xj_new, L)
+        logacc = (-dE / kT) + logq(pos[:, j], mu) - logq(xj_new, mu)
+        acc = torch.log(torch.rand(B, generator=rng, device=pos.device)) < logacc
+        pos[:, j] = torch.where(acc[:, None], xj_new, pos[:, j]); n_acc += int(acc.sum())
+    return pos, n_acc
+
+
+@torch.no_grad()
+def swap_sweep(pos, s, L, kT, n_swap, rng):
+    """A<->B position swaps; MH on the two particles' local energy change."""
+    B = pos.shape[0]; n_acc = 0
+    A = (s == 0).nonzero().squeeze(-1); Bi = (s == 1).nonzero().squeeze(-1)
+    if len(A) == 0 or len(Bi) == 0:
+        return pos, 0
+    for _ in range(n_swap):
+        i = int(A[torch.randint(len(A), (1,), generator=rng, device=pos.device)])
+        j = int(Bi[torch.randint(len(Bi), (1,), generator=rng, device=pos.device)])
+        xi, xj = pos[:, i].clone(), pos[:, j].clone()
+        e_old = site_energy(xi, int(s[i]), pos, s, i, L) + site_energy(xj, int(s[j]), pos, s, j, L)
+        posp = pos.clone(); posp[:, i] = xj; posp[:, j] = xi
+        e_new = site_energy(xj, int(s[i]), posp, s, i, L) + site_energy(xi, int(s[j]), posp, s, j, L)
+        acc = torch.log(torch.rand(B, generator=rng, device=pos.device)) < (-(e_new - e_old) / kT)
+        pos[:, i] = torch.where(acc[:, None], xj, xi); pos[:, j] = torch.where(acc[:, None], xi, xj)
+        n_acc += int(acc.sum())
+    return pos, n_acc
+
+
+@torch.no_grad()
 def site_propose(m, ctx_j, origin_j, arc, L):
     """Sample xj' ~ q(.|x_{-j}); return (xj' [B,2], logq' [B]) with logq' the folded density at xj'."""
     la, lb = _bin_probs(m, ctx_j); B = ctx_j.shape[0]

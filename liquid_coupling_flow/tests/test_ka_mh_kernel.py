@@ -124,3 +124,5 @@ def test_context_independent_of_xj():
         ctx2, ori2 = m._local(p2, sp, sc, N=N, L=L)
         assert (ctx2[:, j] - ctx0[:, j]).abs().max() == 0, j
         assert (ori2[:, j] - ori0[:, j]).abs().max() == 0, j
+        other = torch.ones(N, dtype=torch.bool, device=DEV); other[j] = False
+        assert (ctx2[:, other] - ctx0[:, other]).abs().max() > 0, f"vacuous: no other slice changed at j={j}"

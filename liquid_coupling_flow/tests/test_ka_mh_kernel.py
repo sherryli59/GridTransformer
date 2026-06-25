@@ -114,6 +114,24 @@ def test_zero_outside_range():
     assert (K.site_logq(m, ctx[:, j], oj, outside, arc, L) < -60).all()
 
 
+def test_sweeps_relax_energy_from_hot_start():
+    m = _load_model(); N = 100
+    ref = torch.load(f"{ART}/ka_reference_N100.pt", map_location=DEV, weights_only=False)
+    s = ref["s"].to(DEV).long(); L = ref["L"]; sc = m.geo._scaffold(N, DEV); arc = m._arc_scale(N)
+    B = 16; pos = torch.rand(B, N, 2, device=DEV) * L
+    from liquid_coupling_flow.ka_energy import ka_energy
+    U0 = ka_energy(pos, s, L).mean()
+    g = torch.Generator(device=DEV).manual_seed(0)
+    for _ in range(3):
+        pos, nacc = K.learned_position_sweep(m, pos, s, sc, L, N, 0.5, arc, g)
+    assert pos.min() >= 0 and pos.max() < L
+    assert ka_energy(pos, s, L).mean() < U0, "learned sweep did not reduce energy"
+    posu = torch.rand(B, N, 2, device=DEV) * L; U0u = ka_energy(posu, s, L).mean()
+    for _ in range(3):
+        posu, _ = K.uniform_position_sweep(posu, s, L, N, 0.5, 0.12, g)
+    assert ka_energy(posu, s, L).mean() < U0u, "uniform sweep did not reduce energy"
+
+
 def test_context_independent_of_xj():
     m = _load_model(); N = 100; ref = torch.load(f"{ART}/ka_reference_N100.pt", map_location=DEV, weights_only=False)
     s = ref["s"].to(DEV).long(); pos = ref["x"][:4].to(DEV); L = ref["L"]; sc = m.geo._scaffold(N, DEV)

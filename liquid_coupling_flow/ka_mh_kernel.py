@@ -67,6 +67,34 @@ def site_logq(m, ctx_j, origin_j, xj, arc, L):
     return q.clamp_min(1e-30).log()
 
 @torch.no_grad()
+def learned_position_sweep(m, pos, s, sc, L, N, kT, arc, rng):
+    """N random-scan single-site MH attempts; per-move _local recompute (correctness-first, spec §3.4)."""
+    B = pos.shape[0]; sp = s.expand(B, N); n_acc = 0
+    order = torch.randperm(N, generator=rng, device=pos.device)
+    for j in order.tolist():
+        ctx, origin = m._local(pos, sp, sc, N=N, L=L)             # current config
+        ctx_j, origin_j = ctx[:, j], origin[:, j]
+        xj_new, logq_new = site_propose(m, ctx_j, origin_j, arc, L)
+        logq_old = site_logq(m, ctx_j, origin_j, pos[:, j], arc, L)
+        dE = site_dE(pos, s, j, xj_new, L)
+        logacc = (-dE / kT) + logq_old - logq_new
+        acc = torch.log(torch.rand(B, generator=rng, device=pos.device)) < logacc
+        pos[:, j] = torch.where(acc[:, None], xj_new, pos[:, j]); n_acc += int(acc.sum())
+    return pos, n_acc
+
+@torch.no_grad()
+def uniform_position_sweep(pos, s, L, N, kT, step, rng):
+    """Matched baseline: N single-site symmetric Gaussian-displacement attempts."""
+    B = pos.shape[0]; n_acc = 0
+    order = torch.randperm(N, generator=rng, device=pos.device)
+    for j in order.tolist():
+        xj_new = torch.remainder(pos[:, j] + step * torch.randn(B, 2, generator=rng, device=pos.device), L)
+        dE = site_dE(pos, s, j, xj_new, L)
+        acc = torch.log(torch.rand(B, generator=rng, device=pos.device)) < (-dE / kT)
+        pos[:, j] = torch.where(acc[:, None], xj_new, pos[:, j]); n_acc += int(acc.sum())
+    return pos, n_acc
+
+@torch.no_grad()
 def site_propose(m, ctx_j, origin_j, arc, L):
     """Sample xj' ~ q(.|x_{-j}); return (xj' [B,2], logq' [B]) with logq' the folded density at xj'."""
     la, lb = _bin_probs(m, ctx_j); B = ctx_j.shape[0]

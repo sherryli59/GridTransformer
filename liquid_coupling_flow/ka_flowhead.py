@@ -94,6 +94,47 @@ class KAFlowHeadModel(KALocalFrameModel):
         row1 = torch.stack([s,  c], -1)                  # [..., 2]
         return torch.stack([row0, row1], -2)              # [..., 2, 2]
 
+    def _inertial_R_logprob(self, xo, origin, L, N):
+        """Return the [B,N,2,2] inertial rotation stack as computed by log_prob (with valid-mask + j<2
+        identity). Used only by tests — scaffold path is unaffected."""
+        B = xo.shape[0]
+        sc = self.geo._scaffold(N, xo.device)
+        d_ksc = _wrap_pm(xo[:, None, :, :] - sc[None, :, None, :], L)
+        dist2 = (d_ksc ** 2).sum(-1)
+        jj = torch.arange(N, device=xo.device)
+        causal = jj[None, None, :] < jj[None, :, None]
+        idx = dist2.masked_fill(~causal, 1e9).topk(self.knn, dim=2, largest=False).indices
+        nbr_pos = torch.gather(xo[:, None].expand(B, N, N, 2), 2, idx[..., None].expand(-1, -1, -1, 2))
+        nbr_rel = _wrap_pm(nbr_pos - origin[:, :, None, :], L)
+        valid = torch.gather(causal.expand(B, N, N), 2, idx)
+        nbr_rel = nbr_rel * valid[..., None]
+        R = self._inertial_R(nbr_rel)
+        eye = torch.eye(2, device=R.device).expand_as(R)
+        R = torch.where((jj < 2)[None, :, None, None], eye, R)
+        return R
+
+    def _inertial_R_sample_step(self, pos, sc, L, N):
+        """Return the [B,N,2,2] inertial rotation stack as computed step-by-step in sample/_step.
+        Used only by tests — scaffold path is unaffected."""
+        B = pos.shape[0]; device = pos.device
+        R_stack = []
+        eye2 = torch.eye(2, device=device)
+        for j in range(N):
+            if j < 2:
+                R_stack.append(eye2.expand(B, 2, 2))
+            else:
+                k = min(self.knn, j)
+                d_sc = _wrap_pm(pos[:, :j] - sc[j][None, None], L)
+                dist2_j = (d_sc ** 2).sum(-1)
+                w = torch.exp(-dist2_j / (2 * 1.3 ** 2))
+                wsum = w.sum(1, keepdim=True).clamp_min(1e-12)
+                origin_j = torch.remainder(sc[j][None] + (w[..., None] * d_sc).sum(1) / wsum, L)
+                idx_j = dist2_j.topk(k, dim=1, largest=False).indices
+                nbr_pos_j = torch.gather(pos[:, :j], 1, idx_j[..., None].expand(-1, -1, 2))
+                nbr_rel_j = _wrap_pm(nbr_pos_j - origin_j[:, None, :], L)
+                R_stack.append(self._inertial_R(nbr_rel_j))
+        return torch.stack(R_stack, dim=1)  # [B,N,2,2]
+
     def _species_logits(self, h, rem):
         lg = self.head_species(h)
         return lg if rem is None else lg.masked_fill(rem <= 0, float("-inf"))
@@ -122,7 +163,16 @@ class KAFlowHeadModel(KALocalFrameModel):
             idx = dist2.masked_fill(~causal, 1e9).topk(self.knn, dim=2, largest=False).indices  # [B,N,KNN]
             nbr_pos = torch.gather(xo[:, None].expand(B, N, N, 2), 2, idx[..., None].expand(-1, -1, -1, 2))
             nbr_rel_lp = _wrap_pm(nbr_pos - origin[:, :, None, :], L)          # [B,N,KNN,2]
+            # Part 1a: apply valid mask so spurious future-particle slots (filled with 1e9 dist but still
+            # returned by topk) contribute zero to the PCA covariance — matching sample's _step which only
+            # gathers min(knn,j) real causal neighbours and never returns future particles.
+            valid = torch.gather(causal.expand(B, N, N), 2, idx)               # [B,N,KNN] bool
+            nbr_rel_lp = nbr_rel_lp * valid[..., None]                         # zero spurious offsets
             R = self._inertial_R(nbr_rel_lp)                                    # [B,N,2,2]
+            # Part 1b: force R = identity for j<2 to match sample's explicit identity guard (j<2 uses
+            # no neighbours, so _inertial_R returns an arbitrary rotation; sample uses R=I there).
+            eye = torch.eye(2, device=R.device).expand_as(R)
+            R = torch.where((jj < 2)[None, :, None, None], eye, R)
             ab = torch.einsum("bnij,bnj->bni", R, ab)                          # rotate DATA offset into frame
         lp_ab = self.flow.log_prob(context, ab)                          # [B,N] continuous flow log-density
         s_logits = self.head_species(context)

@@ -657,7 +657,8 @@ git commit -m "feat(ka): GapDiff scheduled-sampling objective (own-placement, tw
 # --- append to liquid_coupling_flow/ka_sched.py ---
 
 def train(train_N=100, steps=10000, r=2.0, floor=0.5, sigma_bins=0.0, soft=False, stochastic=False,
-          warm="ka_localframe_N100_20k.pt", device="cuda" if torch.cuda.is_available() else "cpu"):
+          warm="ka_localframe_N100_20k.pt", out="ka_sched_N100.pt",
+          device="cuda" if torch.cuda.is_available() else "cpu"):
     from liquid_coupling_flow.ka_gridformer_train import augment
     from liquid_coupling_flow.ka_exposure_lf import load_compat
     ref = torch.load(os.path.join(ART, f"ka_reference_N{train_N}.pt"), map_location=device, weights_only=False)
@@ -677,8 +678,8 @@ def train(train_N=100, steps=10000, r=2.0, floor=0.5, sigma_bins=0.0, soft=False
         if step % 1000 == 0:
             print(f"  step {step:5d} p_keep {p_keep:.3f} nll/N {loss.item():.3f} {time.time()-t0:.0f}s", flush=True)
     torch.save({"state_dict": m.state_dict(), "rho": 1.2, "n_bins": 192, "knn": KNN,
-                "r": r, "floor": floor, "step": steps}, os.path.join(ART, "ka_sched_N100.pt"))
-    print("saved ka_sched_N100.pt", flush=True)
+                "r": r, "floor": floor, "step": steps}, os.path.join(ART, out))
+    print(f"saved {out}", flush=True)
 
 
 if __name__ == "__main__":
@@ -723,12 +724,9 @@ git commit -m "feat(ka): scheduled-sampling training run + arc-anneal schedule"
 
 Run (substitute `<best_sb>` from Task 3 τ-sweep, e.g. 1.0):
 ```bash
-python -c "from liquid_coupling_flow.ka_sched import train; train(steps=10000, soft=True, stochastic=True, sigma_bins=<best_sb>)"
+python -c "from liquid_coupling_flow.ka_sched import train; train(steps=10000, soft=True, stochastic=True, sigma_bins=<best_sb>, out='ka_combined_N100.pt')"
 ```
-This reuses `log_prob_sched`'s `soft`/`stochastic` passthrough into `pos_species_nll` — the two features compose in one objective. Rename the checkpoint so it is not overwritten:
-```bash
-mv liquid_coupling_flow/artifacts/ka_sched_N100.pt liquid_coupling_flow/artifacts/ka_combined_N100.pt
-```
+This reuses `log_prob_sched`'s `soft`/`stochastic` passthrough into `pos_species_nll` — the two features compose in one objective. The `out=` argument writes a distinct file so Task 5's `+A` checkpoint (`ka_sched_N100.pt`) is preserved for the figure.
 
 - [ ] **Step 2: Write the campaign figure script**
 

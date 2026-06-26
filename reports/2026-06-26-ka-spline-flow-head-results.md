@@ -57,3 +57,36 @@ reconsidered or redirected at the context/representation, not the head.
 `ka_flowhead.py` (head + model + training + convergence gate + inertial toggle), `ka_flowhead_eval.py`
 (g(r) verdict), tests (`test_flowhead*.py`), checkpoint `ka_flowhead_N100_k8_scratch.pt`, figure
 `ka_flowhead_gr_N100.png`.
+
+---
+
+## Feature A (GPS/QueryAR curve conditioning) — increment over B
+
+`KACurveFlowModel` (`ka_curveflow.py`): adds a per-particle, deterministic curve feature (periodic encoding
+of the scaffold position `s_j` + arc-length `(j+0.5)/N`) to the flow's conditioning. Zero-init ⇒ starts == B;
+warm-started from B; 20k steps. **Result: a small but consistent POSITIVE (and the controller's "deterministic
+curve adds nothing" prediction was wrong).**
+
+- **Position log-density:** B 2.704 → **A 2.901** (+0.20 nats/particle; now above categorical 2.783).
+- **Free-run g(r)** (peak / core, data core ~0.02):
+
+  | arm | AA | AB | BB |
+  |---|---|---|---|
+  | data | 3.88 / 0.039 | 7.38 / 0.024 | 2.47 / 0.019 |
+  | categorical | 1.85 / 0.346 | 2.63 / 0.288 | 1.39 / 0.288 |
+  | +B flow | 1.76 / 0.346 | 2.43 / 0.293 | 1.31 / 0.272 |
+  | +A curve | 1.86 / 0.321 | 2.72 / 0.262 | 1.37 / 0.253 |
+
+  Cores drop ~10% across all three pairs, peaks nudge up — consistent direction + corroborating likelihood ⇒
+  real signal.
+
+**Interpretation:** giving the explicit curve coordinate lets the model spend the neighbour context on
+*structure* instead of *position-inference* (the proposed decoupling). So the conditional was partly
+position-inference-limited, which the curve relieves — a genuine, cheap lever. **But the gain is modest**
+(~10% core reduction; AB peak 2.72 vs data 7.38): the dominant wall (broad conditional from missing
+config-specific information / the half-cage) remains. Next lever: the full cage (real added config info,
+g_BB 1.25->2.00 in prior work), optionally combined with curve conditioning.
+
+**Note:** `ka_flowhead_eval.py` hardcodes `KAFlowHeadModel` and cannot load the `curve_proj` checkpoint; the
+Feature-A g(r) above was run with the `KACurveFlowModel` loader directly (eval-script generalization is a
+follow-up nicety, not a result-affecting issue).

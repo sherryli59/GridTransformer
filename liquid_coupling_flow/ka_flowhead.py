@@ -65,11 +65,34 @@ from liquid_coupling_flow.ka_localframe import KALocalFrameModel, _wrap_pm
 class KAFlowHeadModel(KALocalFrameModel):
     """Local-frame AR generator with the categorical (a,b) head replaced by the exact spline flow.
     Species head + frame + KNN context + curve ordering are inherited unchanged; exact likelihood preserved
-    (continuous flow density replaces P(bin)/bin_area; the arc_scale Jacobian is the same `jac` term)."""
+    (continuous flow density replaces P(bin)/bin_area; the arc_scale Jacobian is the same `jac` term).
 
-    def __init__(self, *args, num_bins=8, tail_bound=4.0, **kw):
+    frame_mode="scaffold" (default): behaviour byte-identical to Task 2 (no rotation).
+    frame_mode="inertial": rotate the (a,b) offset into the PCA principal-axis frame of the placed
+    neighbours before scoring/sampling. |det R|=1 => exactness preserved (no Jacobian term)."""
+
+    def __init__(self, *args, num_bins=8, tail_bound=4.0, frame_mode="scaffold", **kw):
         super().__init__(*args, **kw)
         self.flow = SplineFlowHead(self.d_model, num_bins=num_bins, tail_bound=tail_bound)
+        self.frame_mode = frame_mode
+
+    # ------------------------------------------------------------------
+    # Inertial-frame helpers
+    # ------------------------------------------------------------------
+
+    def _inertial_R(self, nbr_rel):
+        """Per-particle 2x2 rotation from the principal axis of placed-neighbour offsets.
+        nbr_rel [..., k, 2].  Returns R [..., 2, 2] with R^T R = I and det R = +1."""
+        x, y = nbr_rel[..., 0], nbr_rel[..., 1]          # [..., k]
+        cxx = (x * x).mean(-1)
+        cyy = (y * y).mean(-1)
+        cxy = (x * y).mean(-1)
+        theta = 0.5 * torch.atan2(2 * cxy, cxx - cyy)   # principal axis angle
+        c, s = torch.cos(theta), torch.sin(theta)
+        # R = [[c, -s], [s, c]]  (rotation by -theta, maps principal axis -> x-axis)
+        row0 = torch.stack([c, -s], -1)                  # [..., 2]
+        row1 = torch.stack([s,  c], -1)                  # [..., 2]
+        return torch.stack([row0, row1], -2)              # [..., 2, 2]
 
     def _species_logits(self, h, rem):
         lg = self.head_species(h)
@@ -89,6 +112,18 @@ class KAFlowHeadModel(KALocalFrameModel):
         sc = self.geo._scaffold(N, x.device)
         context, origin = self._local(xo, so, sc, L, N)
         ab = _wrap_pm(xo - origin, L) / self._arc_scale(N)
+        if self.frame_mode == "inertial":
+            # Recompute the causal-KNN nbr_rel used inside _local (same neighbour set) to build R.
+            # This mirrors the logic in _local: causal mask k<j, topk by dist2 to scaffold, rel to origin.
+            d_ksc = _wrap_pm(xo[:, None, :, :] - sc[None, :, None, :], L)     # [B,N,N,2] pos_k - sc_j
+            dist2 = (d_ksc ** 2).sum(-1)                                        # [B,N,N]
+            jj = torch.arange(N, device=xo.device)
+            causal = jj[None, None, :] < jj[None, :, None]                     # k < j  [1,N,N]
+            idx = dist2.masked_fill(~causal, 1e9).topk(self.knn, dim=2, largest=False).indices  # [B,N,KNN]
+            nbr_pos = torch.gather(xo[:, None].expand(B, N, N, 2), 2, idx[..., None].expand(-1, -1, -1, 2))
+            nbr_rel_lp = _wrap_pm(nbr_pos - origin[:, :, None, :], L)          # [B,N,KNN,2]
+            R = self._inertial_R(nbr_rel_lp)                                    # [B,N,2,2]
+            ab = torch.einsum("bnij,bnj->bni", R, ab)                          # rotate DATA offset into frame
         lp_ab = self.flow.log_prob(context, ab)                          # [B,N] continuous flow log-density
         s_logits = self.head_species(context)
         if self.canonical if canonical is None else canonical:
@@ -110,7 +145,27 @@ class KAFlowHeadModel(KALocalFrameModel):
         for j in range(N):
             h, origin = self._step(pos, sp, sc[j], j, L)
             sj = torch.multinomial(F.softmax(self._species_logits(h, rem), -1), 1).squeeze(-1)
-            ab, _ = self.flow.sample(h)
+            ab_frame, _ = self.flow.sample(h)                            # [B,2] in frame coords
+            if self.frame_mode == "inertial":
+                # Recompute nbr_rel at step j (placed prefix 0..j-1) to build R, matching _step logic.
+                if j < 2:
+                    # No / too few neighbours: R is arbitrary; use identity (theta=0 -> R=I).
+                    ab = ab_frame
+                else:
+                    k = min(self.knn, j)
+                    d_sc = _wrap_pm(pos[:, :j] - sc[j][None, None], L)  # [B,j,2]
+                    dist2_j = (d_sc ** 2).sum(-1)                        # [B,j]
+                    w = torch.exp(-dist2_j / (2 * 1.3 ** 2))
+                    wsum = w.sum(1, keepdim=True).clamp_min(1e-12)
+                    origin_j = torch.remainder(sc[j][None] + (w[..., None] * d_sc).sum(1) / wsum, L)
+                    idx_j = dist2_j.topk(k, dim=1, largest=False).indices  # [B,k]
+                    nbr_pos_j = torch.gather(pos[:, :j], 1, idx_j[..., None].expand(-1, -1, 2))
+                    nbr_rel_j = _wrap_pm(nbr_pos_j - origin_j[:, None, :], L)  # [B,k,2]
+                    R_j = self._inertial_R(nbr_rel_j)                    # [B,2,2]
+                    # Rotate frame coords back to physical: ab = R^T @ ab_frame
+                    ab = torch.einsum("bij,bj->bi", R_j.transpose(-1, -2), ab_frame)
+            else:
+                ab = ab_frame
             if rem is not None:
                 rem[torch.arange(B, device=device), sj] -= 1
             pos[:, j] = torch.remainder(origin + ab * arc, L)

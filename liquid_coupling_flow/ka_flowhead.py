@@ -121,3 +121,83 @@ class KAFlowHeadModel(KALocalFrameModel):
         if return_logq:
             return pos, sp, self.log_prob(pos, sp)                       # exactness trick (matches base model)
         return pos, sp
+
+
+# --- append to liquid_coupling_flow/ka_flowhead.py ---
+import os, time
+ART = os.path.join(os.path.dirname(__file__), "artifacts")
+
+
+def train(steps=20000, train_N=100, num_bins=8, tail_bound=4.0, warm=None, lr=3e-4,
+          out=None, device="cuda" if torch.cuda.is_available() else "cpu"):
+    from liquid_coupling_flow.ka_gridformer_train import augment
+    ref = torch.load(os.path.join(ART, f"ka_reference_N{train_N}.pt"), map_location=device, weights_only=False)
+    data, sp, L = ref["x"].to(device), ref["s"].to(device).long(), ref["L"]; N = data.shape[1]
+    m = KAFlowHeadModel(rho=1.2, n_bins=192, knn=16, num_bins=num_bins, tail_bound=tail_bound).to(device)
+    if warm is not None:
+        from liquid_coupling_flow.ka_exposure_lf import load_compat
+        load_compat(m, torch.load(os.path.join(ART, warm), map_location=device, weights_only=False)["state_dict"])
+    m.train()
+    opt = torch.optim.AdamW(m.parameters(), lr=lr, weight_decay=1e-4); B, t0 = 128, time.time()
+    warmup = 500
+    for step in range(steps):
+        lr_scale = min(1.0, (step + 1) / warmup)
+        for g in opt.param_groups:
+            g["lr"] = lr * lr_scale
+        idx = torch.randint(0, data.shape[0], (B,), device=device)
+        loss = (-m.log_prob(augment(data[idx], L), sp) / N).mean()
+        if not torch.isfinite(loss):
+            raise FloatingPointError(f"NON-FINITE loss at step {step} (convergence-gate violation)")
+        opt.zero_grad(); loss.backward(); torch.nn.utils.clip_grad_norm_(m.parameters(), 5.0); opt.step()
+        if step % 1000 == 0:
+            print(f"  step {step:5d} nll/N {loss.item():.3f} lr {opt.param_groups[0]['lr']:.1e} {time.time()-t0:.0f}s", flush=True)
+    out = out or f"ka_flowhead_N{train_N}_k{num_bins}{'_scratch' if warm is None else ''}.pt"
+    torch.save({"state_dict": m.state_dict(), "rho": 1.2, "n_bins": 192, "knn": 16,
+                "num_bins": num_bins, "tail_bound": tail_bound, "step": steps}, os.path.join(ART, out))
+    print(f"saved {out}", flush=True); return out
+
+
+@torch.no_grad()
+def _categorical_pos_logdensity(train_N, device):
+    """Mean per-particle NORMALIZED position log-density of the categorical baseline: log P(bin) - d*log(bin_w)."""
+    from liquid_coupling_flow.ka_exposure_lf import _load
+    m = _load("ka_localframe_N100_20k.pt", device)
+    ref = torch.load(os.path.join(ART, f"ka_reference_N{train_N}.pt"), map_location=device, weights_only=False)
+    s, L, data = ref["s"].to(device).long(), ref["L"], ref["x"].to(device)[:512]; N = data.shape[1]
+    order = m.geo._curve_order(data, N); xo = torch.gather(data, 1, order[..., None].expand(-1, -1, 2))
+    so = torch.gather(s.expand(data.shape[0], N) if s.dim() == 1 else s[:512], 1, order)
+    context, origin = m._local(xo, so, m.geo._scaffold(N, device), L, N)
+    ab = _wrap_pm(xo - origin, L) / m._arc_scale(N)
+    ba, bb = m._bin(ab[..., 0]), m._bin(ab[..., 1])
+    la = F.log_softmax(m.head_a(context), -1).gather(-1, ba[..., None]).squeeze(-1)
+    lb = F.log_softmax(m.head_b(context + m.bin_a_emb(ba)), -1).gather(-1, bb[..., None]).squeeze(-1)
+    return float(((la + lb) - m.d * math.log(m.bin_w)).mean())
+
+
+def convergence_gate(train_N=100, device="cuda" if torch.cuda.is_available() else "cpu"):
+    """(1) overfit a tiny batch; (2) flow normalized position log-density beats categorical; (3) no NaN."""
+    from liquid_coupling_flow.ka_gridformer_train import augment
+    ref = torch.load(os.path.join(ART, f"ka_reference_N{train_N}.pt"), map_location=device, weights_only=False)
+    data, sp, L = ref["x"].to(device), ref["s"].to(device).long(), ref["L"]; N = data.shape[1]
+    m = KAFlowHeadModel(rho=1.2, n_bins=192, knn=16).to(device); m.train()
+    tiny = data[:8]
+    opt = torch.optim.AdamW(m.parameters(), lr=1e-3); nans = False
+    first = None
+    for step in range(400):
+        loss = (-m.log_prob(tiny, sp) / N).mean()
+        if first is None: first = loss.item()
+        if not torch.isfinite(loss): nans = True; break
+        opt.zero_grad(); loss.backward(); torch.nn.utils.clip_grad_norm_(m.parameters(), 5.0); opt.step()
+    overfit_nll = loss.item()
+    print(f"OVERFIT-TINY: nll/N {first:.3f} -> {overfit_nll:.3f} (should drop substantially)  NaN={nans}", flush=True)
+    cat = _categorical_pos_logdensity(train_N, device)
+    print(f"categorical normalized position log-density (baseline to beat): {cat:.3f}", flush=True)
+    return {"overfit_first": first, "overfit_last": overfit_nll, "nan": nans, "categorical_pos_logdensity": cat}
+
+
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "gate":
+        convergence_gate()
+    else:
+        train(steps=int(sys.argv[1]) if len(sys.argv) > 1 else 20000)

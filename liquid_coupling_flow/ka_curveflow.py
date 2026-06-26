@@ -78,12 +78,13 @@ ART = os.path.join(os.path.dirname(__file__), "artifacts")
 def train(steps=20000, train_N=100, warm="ka_flowhead_N100_k8_scratch.pt", lr=2e-4,
           device="cuda" if torch.cuda.is_available() else "cpu"):
     from liquid_coupling_flow.ka_gridformer_train import augment
-    from liquid_coupling_flow.ka_exposure_lf import load_compat
     ref = torch.load(os.path.join(ART, f"ka_reference_N{train_N}.pt"), map_location=device, weights_only=False)
     data, sp, L = ref["x"].to(device), ref["s"].to(device).long(), ref["L"]; N = data.shape[1]
     ck = torch.load(os.path.join(ART, warm), map_location=device, weights_only=False)
     m = KACurveFlowModel(rho=1.2, n_bins=192, knn=16, num_bins=ck["num_bins"], tail_bound=ck["tail_bound"]).to(device)
-    load_compat(m, ck["state_dict"])                                     # warm-start B (curve_proj stays zero-init)
+    inc = m.load_state_dict(ck["state_dict"], strict=False)              # warm-start B; curve_proj is new (zero-init)
+    bad = [k for k in inc.missing_keys if not k.startswith(("sp_out_emb", "head_sa", "curve_proj"))]
+    assert not bad and not inc.unexpected_keys, (bad, list(inc.unexpected_keys))
     m.train()
     opt = torch.optim.AdamW(m.parameters(), lr=lr, weight_decay=1e-4); B, t0 = 128, time.time(); warmup = 500
     for step in range(steps):

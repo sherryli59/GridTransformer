@@ -81,3 +81,62 @@ class KALocalFrameSoft(KALocalFrameModel):
         context, origin = self._local(xo, so, sc, L, N)
         return pos_species_nll(self, context, origin, xo, so, L, N, sigma_bins=sigma_bins,
                                soft=soft, stochastic=stochastic, canonical=canonical, gen=gen)
+
+
+# --- append to liquid_coupling_flow/ka_softlabel.py ---
+
+def train(cell, sigma_bins, train_N=100, steps=10000, warm="ka_localframe_N100_20k.pt",
+          device="cuda" if torch.cuda.is_available() else "cpu"):
+    """cell in {'neither','soft','stochastic','both'}. Warm-start fine-tune (fair vs baseline)."""
+    from liquid_coupling_flow.ka_gridformer_train import augment
+    from liquid_coupling_flow.ka_exposure_lf import load_compat
+    soft = cell in ("soft", "both"); stochastic = cell in ("stochastic", "both")
+    ref = torch.load(os.path.join(ART, f"ka_reference_N{train_N}.pt"), map_location=device, weights_only=False)
+    data, sp, L = ref["x"].to(device), ref["s"].to(device).long(), ref["L"]; N = data.shape[1]
+    m = KALocalFrameSoft(rho=1.2, n_bins=192, knn=KNN).to(device)
+    ck = torch.load(os.path.join(ART, warm), map_location=device, weights_only=False)
+    load_compat(m, ck["state_dict"]); m.train()                         # warm-start (allowlists optional heads)
+    gen = torch.Generator(device=device).manual_seed(0)
+    print(f"SOFT-LABEL train cell={cell} sigma_bins={sigma_bins} steps={steps} warm={warm}", flush=True)
+    opt = torch.optim.AdamW(m.parameters(), lr=2e-4, weight_decay=1e-4); B, t0 = 128, time.time()
+    for step in range(steps):
+        idx = torch.randint(0, data.shape[0], (B,), device=device)
+        loss = (m.train_loss(augment(data[idx], L), sp, sigma_bins=sigma_bins,
+                             soft=soft, stochastic=stochastic, gen=gen) / N).mean()
+        opt.zero_grad(); loss.backward(); torch.nn.utils.clip_grad_norm_(m.parameters(), 5.0); opt.step()
+        if step % 1000 == 0:
+            print(f"  step {step:5d} nll/N {loss.item():.3f} {time.time()-t0:.0f}s", flush=True)
+    tag = f"ka_softlabel_N{train_N}_{cell}_s{sigma_bins}.pt"
+    torch.save({"state_dict": m.state_dict(), "rho": 1.2, "n_bins": 192, "knn": KNN,
+                "cell": cell, "sigma_bins": sigma_bins, "step": steps}, os.path.join(ART, tag))
+    print(f"saved {tag}", flush=True); return tag
+
+
+def run_ablation(train_N=100, steps=10000, sigma_bins=1.0,
+                 device="cuda" if torch.cuda.is_available() else "cpu"):
+    from liquid_coupling_flow.ka_exposure_lf import tf_fr_by_index, _load, load_compat
+    base = tf_fr_by_index(_load("ka_localframe_N100_20k.pt", device), train_N, device)
+    base_fr, base_peak, base_spur = base["fr"][1:].mean(), base["gbb_fr"][0], base["gbb_fr"][1]
+    print(f"BASELINE: FR clash {base_fr:.3f} g_BB peak {base_peak:.2f} spur {base_spur:.3f} "
+          f"(data peak {base['gbb_data'][0]:.2f})", flush=True)
+    for cell in ("neither", "soft", "stochastic", "both"):
+        sb = 0.0 if cell == "neither" else sigma_bins
+        tag = train(cell, sb, train_N=train_N, steps=steps, device=device)
+        ck = torch.load(os.path.join(ART, tag), map_location=device, weights_only=False)
+        m = KALocalFrameSoft(rho=1.2, n_bins=192, knn=KNN).to(device)
+        load_compat(m, ck["state_dict"]); m.eval()
+        d = tf_fr_by_index(m, train_N, device)
+        flag = "  <-- OVER-SMOOTH (FR clash up)" if d["fr"][1:].mean() > base_fr + 1e-3 else ""
+        print(f"CELL {cell:10s}: FR clash {d['fr'][1:].mean():.3f} (closure {d['fr'][2*train_N//3:].mean():.3f}) "
+              f"g_BB peak {d['gbb_fr'][0]:.2f} spur {d['gbb_fr'][1]:.3f} | gap {d['fr'][1:].mean()-d['tf'][1:].mean():.3f}{flag}",
+              flush=True)
+
+
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "ablation":
+        run_ablation(steps=int(sys.argv[2]) if len(sys.argv) > 2 else 10000,
+                     sigma_bins=float(sys.argv[3]) if len(sys.argv) > 3 else 1.0)
+    else:
+        train(sys.argv[1] if len(sys.argv) > 1 else "both",
+              float(sys.argv[2]) if len(sys.argv) > 2 else 1.0)

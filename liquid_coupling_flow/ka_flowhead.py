@@ -53,3 +53,71 @@ class SplineFlowHead(nn.Module):
         b, ldb = self.spline.forward(zb, self.head_b(torch.cat([h, a], -1)))
         lpb = _base_logp(zb) - ldb
         return torch.cat([a, b], -1), (lpa + lpb).squeeze(-1)
+
+
+# ---------------------------------------------------------------------------
+# KAFlowHeadModel — local-frame AR generator with spline-flow placement head
+# ---------------------------------------------------------------------------
+import torch.nn.functional as F
+from liquid_coupling_flow.ka_localframe import KALocalFrameModel, _wrap_pm
+
+
+class KAFlowHeadModel(KALocalFrameModel):
+    """Local-frame AR generator with the categorical (a,b) head replaced by the exact spline flow.
+    Species head + frame + KNN context + curve ordering are inherited unchanged; exact likelihood preserved
+    (continuous flow density replaces P(bin)/bin_area; the arc_scale Jacobian is the same `jac` term)."""
+
+    def __init__(self, *args, num_bins=8, tail_bound=4.0, **kw):
+        super().__init__(*args, **kw)
+        self.flow = SplineFlowHead(self.d_model, num_bins=num_bins, tail_bound=tail_bound)
+
+    def _species_logits(self, h, rem):
+        lg = self.head_species(h)
+        return lg if rem is None else lg.masked_fill(rem <= 0, float("-inf"))
+
+    def log_prob(self, x, s, canonical=None, preordered=False):
+        B, N = x.shape[0], x.shape[1]
+        s = s.long()
+        s = s.expand(B, N).clone() if s.dim() == 1 else s
+        L = self._Lof(N)
+        if preordered:
+            xo, so = x, s
+        else:
+            order = self.geo._curve_order(x, N)
+            xo = torch.gather(x, 1, order[..., None].expand(-1, -1, 2))
+            so = torch.gather(s, 1, order)
+        sc = self.geo._scaffold(N, x.device)
+        context, origin = self._local(xo, so, sc, L, N)
+        ab = _wrap_pm(xo - origin, L) / self._arc_scale(N)
+        lp_ab = self.flow.log_prob(context, ab)                          # [B,N] continuous flow log-density
+        s_logits = self.head_species(context)
+        if self.canonical if canonical is None else canonical:
+            oh = F.one_hot(so, self.n_species).to(s_logits.dtype)
+            rem = oh.sum(1, keepdim=True) - (oh.cumsum(1) - oh)
+            s_logits = s_logits.masked_fill(rem <= 0, float("-inf"))
+        lp_s = F.log_softmax(s_logits, -1).gather(-1, so[..., None]).squeeze(-1)
+        jac = self.d * N * math.log(self._arc_scale(N))                  # NO bin_w vol term (flow is continuous)
+        return (lp_ab + lp_s).sum(1) - jac
+
+    @torch.no_grad()
+    def sample(self, B, N, n_B=None, device=None, return_logq=False):
+        L = self._Lof(N); sc = self.geo._scaffold(N, device); arc = self._arc_scale(N)
+        pos = torch.zeros(B, N, 2, device=device); sp = torch.zeros(B, N, dtype=torch.long, device=device)
+        rem = None
+        if n_B is not None:
+            rem = torch.zeros(B, self.n_species, device=device)
+            rem[:, 0] = N - n_B; rem[:, 1] = n_B
+        for j in range(N):
+            h, origin = self._step(pos, sp, sc[j], j, L)
+            sj = torch.multinomial(F.softmax(self._species_logits(h, rem), -1), 1).squeeze(-1)
+            ab, _ = self.flow.sample(h)
+            if rem is not None:
+                rem[torch.arange(B, device=device), sj] -= 1
+            pos[:, j] = torch.remainder(origin + ab * arc, L)
+            sp[:, j] = sj
+        perm = self.geo._curve_order(pos, N)
+        pos = torch.gather(pos, 1, perm[..., None].expand(-1, -1, 2))
+        sp = torch.gather(sp, 1, perm)
+        if return_logq:
+            return pos, sp, self.log_prob(pos, sp)                       # exactness trick (matches base model)
+        return pos, sp

@@ -16,7 +16,7 @@ def _tiny(seed=0):
 def test_soft_target_normalized_and_peaks_at_containing_bin():
     m, *_ = _tiny()
     centers = m._bin_center(torch.arange(m.n_bins))
-    tgt = torch.tensor([-1.234, 0.0, 2.0])
+    tgt = torch.tensor([-1.234, 0.127, 1.873])   # interior points (0.0 and 2.0 were exact bin boundaries)
     P = soft_target(centers, tgt, tau=(0.7 * m.bin_w) ** 2)
     assert torch.allclose(P.sum(-1), torch.ones(3), atol=1e-5)          # normalized
     assert torch.equal(P.argmax(-1), m._bin(tgt))                       # argmax == containing bin

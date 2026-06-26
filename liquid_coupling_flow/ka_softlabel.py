@@ -18,11 +18,8 @@ def soft_target(centers, target, tau):
     centers from _bin_center; tau = (sigma_bins*bin_w)^2). This is INTENTIONAL and size-invariant: the head
     bins/learns in the normalized coordinate, so a constant `sigma_bins` smooths consistently across N. The
     PHYSICAL bin width scales as arc_scale=N^(1/6); for the size-transfer follow-on, KEEP sigma_bins in
-    normalized-bin units -- do NOT reinterpret tau as a fixed physical width (that would break size-invariance).
-    TIE-BREAKING: when target falls exactly on a bin boundary, we shift by eps=bw*1e-5 rightward so that
-    argmax matches _bin's floor-division convention (the containing bin is the right one)."""
-    bw = centers[1] - centers[0]
-    d2 = (centers.view(*([1] * target.dim()), -1) - (target.unsqueeze(-1) + bw * 1e-5)) ** 2
+    normalized-bin units -- do NOT reinterpret tau as a fixed physical width (that would break size-invariance)."""
+    d2 = (centers.view(*([1] * target.dim()), -1) - target.unsqueeze(-1)) ** 2
     return F.softmax(-d2 / tau, dim=-1)
 
 

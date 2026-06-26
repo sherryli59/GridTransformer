@@ -30,6 +30,7 @@
 - Produces:
   - `clash_by_index(cand, prefix, L, thr=0.7) -> np.ndarray[N]` — per-index fraction of particle `j` within `thr` of any predecessor `0..j-1` of `prefix`.
   - `tf_fr_by_index(m, N, device, B=512) -> dict` with keys `tf[N], fr[N], gbb_tf=(peak,spur), gbb_fr=(peak,spur), gbb_data=(peak,spur)`.
+  - `load_compat(m, state_dict) -> m` — strict-ish loader (factorized heads required; `sp_out_emb`/`head_sa` allowed missing; any other missing or any unexpected key raises). Reused by Tasks 3 & 5.
   - `main(device)` — loads baseline + noise-null checkpoints, prints early/mid/late clash, saves a figure.
 
 - [ ] **Step 1: Write the failing test**
@@ -122,22 +123,36 @@ def tf_fr_by_index(m, N, device, B=512):
     order = m.geo._curve_order(data, N)
     xo = torch.gather(data, 1, order[..., None].expand(-1, -1, 2))
     so = torch.gather(s.expand(B, N).clone() if s.dim() == 1 else s[:B], 1, order)
-    tf = clash_by_index(_tf_place(m, xo, so, L, N, device), xo, L)                    # TF: vs TRUE prefix
+    tf_pos = _tf_place(m, xo, so, L, N, device)                                      # ONE TF sample, reused
+    tf = clash_by_index(tf_pos, xo, L)                                               # TF: vs TRUE prefix
     xg, sg = m.sample(B, N, n_B=nB, device=device)
     og = m.geo._curve_order(xg, N)
     xgo = torch.gather(xg, 1, og[..., None].expand(-1, -1, 2)); sgo = torch.gather(sg, 1, og)
     fr = clash_by_index(xgo, xgo, L)                                                  # FR: vs OWN prefix
     sd = s.expand(B, N) if s.dim() == 1 else s[:B]
     return {"tf": tf, "fr": fr, "L": L,
-            "gbb_tf": _gbb(_tf_place(m, xo, so, L, N, device), so, L),
+            "gbb_tf": _gbb(tf_pos, so, L),                                            # partial_gr is order-invariant
             "gbb_fr": _gbb(xg, sg, L), "gbb_data": _gbb(data, sd, L)}
+
+
+def load_compat(m, state_dict):
+    """strict-ish load. The factorized heads MUST all be present; only the non-factorized-only heads
+    (sp_out_emb, head_sa) may be absent -- the baseline ckpt ka_localframe_N100_20k.pt predates them
+    (VERIFIED missing: sp_out_emb.weight, head_sa.weight, head_sa.bias). Any OTHER missing key, or any
+    unexpected key (e.g. a future subclass param), is a real mismatch and raises -- this is what guards
+    the silent strict=False garbage-load. (Blanket strict=True is wrong here: it would error on the
+    baseline ckpt's missing optional heads.)"""
+    inc = m.load_state_dict(state_dict, strict=False)
+    bad = [k for k in inc.missing_keys if not k.startswith(("sp_out_emb", "head_sa"))]
+    assert not bad and not inc.unexpected_keys, (bad, list(inc.unexpected_keys))
+    return m
 
 
 def _load(ckpt, device):
     ck = torch.load(os.path.join(ART, ckpt), map_location=device, weights_only=False)
     m = KALocalFrameModel(rho=ck["rho"], n_bins=ck["n_bins"], knn=ck["knn"],
                           head_mode=ck.get("head_mode", "factorized")).to(device)
-    m.load_state_dict(ck["state_dict"], strict=False); m.eval()
+    load_compat(m, ck["state_dict"]); m.eval()
     return m
 
 
@@ -235,6 +250,20 @@ def test_trivial_config_parity_with_base_log_prob():
     assert torch.allclose(loss, -(base + vol + jac), atol=1e-4)
 
 
+def test_soft_loss_converges_to_hard_at_tiny_tau():
+    # VERDICT-CRITICAL: the soft branch is the PRIMARY feature but the soft=False parity test cannot
+    # exercise it. As sigma_bins -> 0, soft_target -> one-hot at the containing bin, so the soft NLL must
+    # converge to the hard one-hot NLL. The species term is identical in both paths, so (soft - hard)
+    # isolates exactly the position-axis soft-vs-hard gap -> a sign error or a tau-units error (bins^2 vs
+    # normalized^2) makes this diverge instead of vanish. Fixed seed -> deterministic (boundary-straddling
+    # targets that would split mass 50/50 are ~0.5% per particle and absent at this seed).
+    m, x, s, N, B = _tiny(1)
+    d = 2; vol = d * N * math.log(m.bin_w); jac = d * N * math.log(m._arc_scale(N))
+    soft = m.train_loss(x, s, sigma_bins=0.02, soft=True, stochastic=False)   # tiny tau -> ~one-hot
+    hard = -(m.log_prob(x, s) + vol + jac)
+    assert (soft.mean() - hard.mean()).abs() < 0.05, (float(soft.mean()), float(hard.mean()))
+
+
 def test_inference_exactness_gate_preserved():
     m, _, _, N, B = _tiny(2)
     pos, sp, logq = m.sample(B, N, n_B=4, device="cpu", return_logq=True)
@@ -254,6 +283,7 @@ def test_soft_loss_is_finite_and_differentiable():
 if __name__ == "__main__":
     test_soft_target_normalized_and_peaks_at_containing_bin()
     test_trivial_config_parity_with_base_log_prob()
+    test_soft_loss_converges_to_hard_at_tiny_tau()
     test_inference_exactness_gate_preserved()
     test_soft_loss_is_finite_and_differentiable()
     print("SOFTLABEL TESTS PASSED")
@@ -282,15 +312,28 @@ ART = os.path.join(os.path.dirname(__file__), "artifacts")
 
 
 def soft_target(centers, target, tau):
-    """centers [n_bins], target [...] -> normalized soft categorical [..., n_bins]."""
+    """centers [n_bins], target [...] -> normalized soft categorical [..., n_bins].
+    UNITS: `centers`, `target`, and `tau` are all in NORMALIZED (a,b) units (ab = wrap(xo-origin)/arc_scale;
+    centers from _bin_center; tau = (sigma_bins*bin_w)^2). This is INTENTIONAL and size-invariant: the head
+    bins/learns in the normalized coordinate, so a constant `sigma_bins` smooths consistently across N. The
+    PHYSICAL bin width scales as arc_scale=N^(1/6); for the size-transfer follow-on, KEEP sigma_bins in
+    normalized-bin units -- do NOT reinterpret tau as a fixed physical width (that would break size-invariance)."""
     d2 = (centers.view(*([1] * target.dim()), -1) - target.unsqueeze(-1)) ** 2
     return F.softmax(-d2 / tau, dim=-1)
 
 
 def _axis_loss(logp, centers, target, tau, soft, stochastic, gen):
     """logp [B,N,n_bins] log-softmax head; returns (axis_nll[B,N], assigned_bin[B,N]).
-    `assigned` is the bin used to condition the b-head (sampled if stochastic, else the containing bin).
-    The loss is soft cross-entropy if `soft`, else hard CE at `assigned`."""
+    The two flags act on DIFFERENT objects (NOT a clean 2x2) -- `soft` softens the supervised TARGET,
+    `stochastic` samples the bin that (a) conditions the b-head and (b) supervises the loss when NOT soft:
+        (soft, stochastic) | supervises the loss        | conditions head_b (via `assigned`)
+        (F, F)  neither     | hard CE at containing bin   | containing bin            (== base one-hot)
+        (T, F)  soft        | soft CE over full P         | containing bin
+        (F, T)  stochastic  | hard CE at SAMPLED bin      | sampled bin               (RQ stochastic code)
+        (T, T)  both        | soft CE over full P         | sampled bin               (RQ: soft label + stoch code)
+    In `both` the sampled bin is the propagated code (conditions head_b) while the soft P supervises -- the
+    sampled bin does NOT supervise. This is faithful to RQ; the ablation report must describe the factors
+    by what they control, not as a symmetric 2x2."""
     bw = centers[1] - centers[0]                                   # == m.bin_w
     P = soft_target(centers, target, tau) if (soft or stochastic) else None
     if stochastic:
@@ -344,7 +387,7 @@ Note on `_axis_loss`: the containing-bin recomputation uses the uniform bin grid
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `python -m pytest liquid_coupling_flow/tests/test_softlabel.py -q`
-Expected: PASS (4 passed). If `test_trivial_config_parity` fails, the containing-bin recomputation in `_axis_loss` disagrees with `m._bin`; fix `lo`/`bw` to match `_bin` = `((v+arc_range)/bin_w).long().clamp(...)`.
+Expected: PASS (5 passed). If `test_trivial_config_parity` fails, the containing-bin recomputation in `_axis_loss` disagrees with `m._bin`; fix `lo`/`bw` to match `_bin` = `((v+arc_range)/bin_w).long().clamp(...)`. If `test_soft_loss_converges_to_hard_at_tiny_tau` fails, the soft branch has a sign or τ-units error (it diverges instead of vanishing) — fix before any training run, since the entire ablation/τ-sweep/verdict rides on it.
 
 - [ ] **Step 5: Commit**
 
@@ -373,12 +416,13 @@ def train(cell, sigma_bins, train_N=100, steps=10000, warm="ka_localframe_N100_2
           device="cuda" if torch.cuda.is_available() else "cpu"):
     """cell in {'neither','soft','stochastic','both'}. Warm-start fine-tune (fair vs baseline)."""
     from liquid_coupling_flow.ka_gridformer_train import augment
+    from liquid_coupling_flow.ka_exposure_lf import load_compat
     soft = cell in ("soft", "both"); stochastic = cell in ("stochastic", "both")
     ref = torch.load(os.path.join(ART, f"ka_reference_N{train_N}.pt"), map_location=device, weights_only=False)
     data, sp, L = ref["x"].to(device), ref["s"].to(device).long(), ref["L"]; N = data.shape[1]
     m = KALocalFrameSoft(rho=1.2, n_bins=192, knn=KNN).to(device)
     ck = torch.load(os.path.join(ART, warm), map_location=device, weights_only=False)
-    m.load_state_dict(ck["state_dict"], strict=False); m.train()
+    load_compat(m, ck["state_dict"]); m.train()                         # warm-start (allowlists optional heads)
     gen = torch.Generator(device=device).manual_seed(0)
     print(f"SOFT-LABEL train cell={cell} sigma_bins={sigma_bins} steps={steps} warm={warm}", flush=True)
     opt = torch.optim.AdamW(m.parameters(), lr=2e-4, weight_decay=1e-4); B, t0 = 128, time.time()
@@ -397,7 +441,7 @@ def train(cell, sigma_bins, train_N=100, steps=10000, warm="ka_localframe_N100_2
 
 def run_ablation(train_N=100, steps=10000, sigma_bins=1.0,
                  device="cuda" if torch.cuda.is_available() else "cpu"):
-    from liquid_coupling_flow.ka_exposure_lf import tf_fr_by_index, _load
+    from liquid_coupling_flow.ka_exposure_lf import tf_fr_by_index, _load, load_compat
     base = tf_fr_by_index(_load("ka_localframe_N100_20k.pt", device), train_N, device)
     base_fr, base_peak, base_spur = base["fr"][1:].mean(), base["gbb_fr"][0], base["gbb_fr"][1]
     print(f"BASELINE: FR clash {base_fr:.3f} g_BB peak {base_peak:.2f} spur {base_spur:.3f} "
@@ -407,7 +451,7 @@ def run_ablation(train_N=100, steps=10000, sigma_bins=1.0,
         tag = train(cell, sb, train_N=train_N, steps=steps, device=device)
         ck = torch.load(os.path.join(ART, tag), map_location=device, weights_only=False)
         m = KALocalFrameSoft(rho=1.2, n_bins=192, knn=KNN).to(device)
-        m.load_state_dict(ck["state_dict"]); m.eval()
+        load_compat(m, ck["state_dict"]); m.eval()
         d = tf_fr_by_index(m, train_N, device)
         flag = "  <-- OVER-SMOOTH (FR clash up)" if d["fr"][1:].mean() > base_fr + 1e-3 else ""
         print(f"CELL {cell:10s}: FR clash {d['fr'][1:].mean():.3f} (closure {d['fr'][2*train_N//3:].mean():.3f}) "
@@ -501,20 +545,29 @@ def test_inference_exactness_gate_preserved():
     assert torch.allclose(logq, m.log_prob(pos, sp), atol=1e-4)
 
 
-def test_self_prefix_is_detached():
+def test_grad_flows_through_pass2_not_pass1():
+    # Bug-4 guard: "not xmix.requires_grad" alone is vacuous (true by @torch.no_grad() regardless of
+    # .detach()). Assert the real contract: (a) xmix is detached leaf data (no grad_fn), and (b) gradients
+    # still reach the heads through PASS 2 even when fully self-conditioned (p_keep=0.0 => prefix is all x_hat).
     m, x, s, N, B = _tiny(3)
     s2 = s.expand(B, N).clone() if s.dim() == 1 else s
     order = m.geo._curve_order(x, N)
     xo = torch.gather(x, 1, order[..., None].expand(-1, -1, 2)); so = torch.gather(s2, 1, order)
-    xmix = m._self_prefix(xo, so, m.geo._scaffold(N, x.device), m._Lof(N), N, p_keep=0.0)
-    assert not xmix.requires_grad
+    xmix = m._self_prefix(xo, so, m.geo._scaffold(N, x.device), m._Lof(N), N, p_keep=0.0,
+                          gen=torch.Generator().manual_seed(5))
+    assert xmix.grad_fn is None and not xmix.requires_grad           # pass-1 output is detached data
+    m.zero_grad()
+    loss = (-m.log_prob_sched(x, s, p_keep=0.0, gen=torch.Generator().manual_seed(5))).mean()
+    loss.backward()
+    assert m.head_a.weight.grad is not None and torch.isfinite(m.head_a.weight.grad).all()
+    assert m.head_a.weight.grad.abs().sum() > 0                      # grad genuinely flows via pass 2
 
 
 if __name__ == "__main__":
     test_arc_pT_schedule()
     test_p_keep_one_parity_with_base_log_prob()
     test_inference_exactness_gate_preserved()
-    test_self_prefix_is_detached()
+    test_grad_flows_through_pass2_not_pass1()
     print("SCHED TESTS PASSED")
 ```
 
@@ -547,16 +600,18 @@ def arc_pT(progress, r=2.0, floor=0.5):
 
 class KALocalFrameSched(KALocalFrameModel):
     @torch.no_grad()
-    def _self_prefix(self, xo, so, sc, L, N, p_keep):
-        """Pass 1: place every j from the TRUE prefix; per-particle Bernoulli(1-p_keep) mix -> detached xmix."""
-        B = xo.shape[0]; arc = self._arc_scale(N)
+    def _self_prefix(self, xo, so, sc, L, N, p_keep, gen=None):
+        """Pass 1: place every j from the TRUE prefix; per-particle Bernoulli(1-p_keep) mix -> detached xmix.
+        `gen` seeds ALL pass-1 randomness (placement multinomials + jitter + keep mask) so the self-
+        conditioning is reproducible run-to-run; without it the trainers' seed gives false determinism."""
+        B = xo.shape[0]; arc = self._arc_scale(N); dev = xo.device
         context, origin = self._local(xo, so, sc, L, N)
-        ba = torch.multinomial(F.softmax(self.head_a(context).reshape(-1, self.n_bins), -1), 1).reshape(B, N)
-        bb = torch.multinomial(F.softmax(self.head_b(context + self.bin_a_emb(ba)).reshape(-1, self.n_bins), -1), 1).reshape(B, N)
-        a = self._bin_center(ba) + (torch.rand(B, N, device=xo.device) - 0.5) * self.bin_w
-        bc = self._bin_center(bb) + (torch.rand(B, N, device=xo.device) - 0.5) * self.bin_w
+        ba = torch.multinomial(F.softmax(self.head_a(context).reshape(-1, self.n_bins), -1), 1, generator=gen).reshape(B, N)
+        bb = torch.multinomial(F.softmax(self.head_b(context + self.bin_a_emb(ba)).reshape(-1, self.n_bins), -1), 1, generator=gen).reshape(B, N)
+        a = self._bin_center(ba) + (torch.rand(B, N, device=dev, generator=gen) - 0.5) * self.bin_w
+        bc = self._bin_center(bb) + (torch.rand(B, N, device=dev, generator=gen) - 0.5) * self.bin_w
         x_hat = torch.remainder(origin + torch.stack([a, bc], -1) * arc, L)
-        keep = torch.rand(B, N, device=xo.device) < p_keep                  # True -> keep TRUE position
+        keep = torch.rand(B, N, device=dev, generator=gen) < p_keep         # True -> keep TRUE position
         return torch.where(keep[..., None], xo, x_hat).detach()
 
     def log_prob_sched(self, x, s, p_keep, *, sigma_bins=0.0, soft=False, stochastic=False,
@@ -566,7 +621,7 @@ class KALocalFrameSched(KALocalFrameModel):
         L = self._Lof(N); sc = self.geo._scaffold(N, x.device)
         order = self.geo._curve_order(x, N)
         xo = torch.gather(x, 1, order[..., None].expand(-1, -1, 2)); so = torch.gather(s, 1, order)
-        xmix = self._self_prefix(xo, so, sc, L, N, p_keep)                  # detached drifted prefix
+        xmix = self._self_prefix(xo, so, sc, L, N, p_keep, gen=gen)         # detached drifted prefix
         context, origin = self._local(xmix, so, sc, L, N)                  # grad path (pass 2)
         nll = pos_species_nll(self, context, origin, xo, so, L, N, sigma_bins=sigma_bins,
                               soft=soft, stochastic=stochastic, canonical=canonical, gen=gen)
@@ -604,11 +659,12 @@ git commit -m "feat(ka): GapDiff scheduled-sampling objective (own-placement, tw
 def train(train_N=100, steps=10000, r=2.0, floor=0.5, sigma_bins=0.0, soft=False, stochastic=False,
           warm="ka_localframe_N100_20k.pt", device="cuda" if torch.cuda.is_available() else "cpu"):
     from liquid_coupling_flow.ka_gridformer_train import augment
+    from liquid_coupling_flow.ka_exposure_lf import load_compat
     ref = torch.load(os.path.join(ART, f"ka_reference_N{train_N}.pt"), map_location=device, weights_only=False)
     data, sp, L = ref["x"].to(device), ref["s"].to(device).long(), ref["L"]; N = data.shape[1]
     m = KALocalFrameSched(rho=1.2, n_bins=192, knn=KNN).to(device)
     ck = torch.load(os.path.join(ART, warm), map_location=device, weights_only=False)
-    m.load_state_dict(ck["state_dict"], strict=False); m.train()
+    load_compat(m, ck["state_dict"]); m.train()                         # warm-start (allowlists optional heads)
     gen = torch.Generator(device=device).manual_seed(0)
     print(f"SCHEDULED-SAMPLING train steps={steps} r={r} floor={floor} soft={soft} stoch={stochastic} warm={warm}", flush=True)
     opt = torch.optim.AdamW(m.parameters(), lr=2e-4, weight_decay=1e-4); B, t0 = 128, time.time()
@@ -753,6 +809,17 @@ git commit -m "feat(ka): combined arm + campaign figure + exposure-bias results 
 
 **Placeholder scan:** `<best>`, `<best_sb>`, `<best_soft_ckpt_name>` are run-time values substituted from the Task-3 ablation winner — each has an explicit source and example value, not an unfilled blank. No "TBD"/"add error handling"/"similar to Task N". ✓
 
-**Type consistency:** `pos_species_nll` signature is identical where consumed (Task 2 `train_loss`, Task 4 `log_prob_sched`). `tf_fr_by_index` returns the same dict keys used in Tasks 1/3/5/6. `arc_pT(progress, r, floor)` consistent. `_load` reused from Task 1. Checkpoint dict keys (`state_dict, rho, n_bins, knn`) match the base loader. ✓
+**Type consistency:** `pos_species_nll` signature is identical where consumed (Task 2 `train_loss`, Task 4 `log_prob_sched`). `tf_fr_by_index` returns the same dict keys used in Tasks 1/3/5/6. `arc_pT(progress, r, floor)` consistent. `_load`/`load_compat` reused from Task 1 in Tasks 3 & 5. `_self_prefix(..., gen=None)` and `log_prob_sched(..., gen=...)` thread the same generator. Checkpoint dict keys (`state_dict, rho, n_bins, knn`) match the base loader. ✓
 
 **Note for the implementer (containing-bin convention):** the base `_bin(v) = ((v+arc_range)/bin_w).long().clamp(0, n_bins-1)`. In `_axis_loss`, `lo = centers[0] - bw/2` must equal `-arc_range` and `bw = bin_w`; if `test_trivial_config_parity` (Task 2) fails by a one-bin offset, reconcile `_axis_loss`'s containing-bin formula with `_bin` exactly before proceeding.
+
+## Review-driven hardening (applied 2026-06-25)
+
+Seven changes from a correctness review of the first draft; all verified against the actual model API:
+1. **(verdict-critical)** Added `test_soft_loss_converges_to_hard_at_tiny_tau` (Task 2) — the soft branch is the primary feature but no prior test exercised it; a sign/τ-units error would surface as a clean-looking null. Species terms cancel in `(soft − hard)`, isolating the position-axis gap.
+2. **`_axis_loss` cell-semantics table** (Task 2) — the 4 cells are NOT a clean 2×2: `soft` softens the target, `stochastic` samples the bin that conditions `head_b` (and supervises only when not soft). Documented so the ablation is read correctly.
+3. **τ-units comment** (Task 2 `soft_target`) — `sigma_bins` is normalized-bin units, INTENTIONALLY size-invariant; flagged NOT to reinterpret as fixed physical width in the size-transfer follow-on.
+4. **Replaced vacuous detach test** with `test_grad_flows_through_pass2_not_pass1` (Task 4) — `@torch.no_grad()` made the old `not requires_grad` assertion pass regardless of correctness; the new test asserts no `grad_fn` AND that grad reaches `head_a` via pass 2 at `p_keep=0.0`.
+5. **Threaded `gen` through `_self_prefix`** (Task 4) — pass-1 sampling used the default RNG, so the trainers' seed gave false determinism; now all pass-1 randomness is seedable.
+6. **`tf_fr_by_index` computes `_tf_place` once** (Task 1) — TF clash and TF g_BB now come from the same sample; `partial_gr` is order-invariant so reusing placed positions with curve-ordered species is correct.
+7. **`load_compat` instead of blanket `strict=`** (Tasks 1/3/5) — VERIFIED the baseline ckpt `ka_localframe_N100_20k.pt` is missing `sp_out_emb.weight, head_sa.weight, head_sa.bias` (so `strict=True` would error); the helper requires the factorized heads, allowlists those three, and raises on any other missing/unexpected key — catching the silent garbage-load `strict=False` would hide.

@@ -296,8 +296,9 @@ def benchmark(N=100, kT=0.5, B=64, n_sweeps=600, record_every=25, device=None):
             sg = sweeps_to_reference(tj["sweeps"], tj["gbb_peak"], band_g, 4)
             reach = max(su, sg) if (su is not None and sg is not None) else None
             traj[(seedname, kind)] = (tj, reach)
-            print(f"[{seedname}/{kind}] reach U&gBB -> {reach}  (U {tj['U'][0]:+.2f}->{tj['U'][-1]:+.2f}, "
-                  f"gBB {tj['gbb_peak'][0]:.2f}->{tj['gbb_peak'][-1]:.2f}, {time.time()-t0:.0f}s)", flush=True)
+            print(f"[{seedname}/{kind}] reach(U&gBB)={reach}  U-reach={su} gBB-reach={sg}  "
+                  f"(U {tj['U'][0]:+.2f}->{tj['U'][-1]:+.2f}, gBB {tj['gbb_peak'][0]:.2f}->{tj['gbb_peak'][-1]:.2f}, "
+                  f"acc~{sum(tj['accept'])/max(len(tj['accept']),1):.2f}, {time.time()-t0:.0f}s)", flush=True)
     for seedname in seeds:
         ru = traj[(seedname, "uniform")][1]; rl = traj[(seedname, "learned")][1]
         print(f"SWEEPS-SAVED [{seedname}]: uniform {ru} - learned {rl} = "

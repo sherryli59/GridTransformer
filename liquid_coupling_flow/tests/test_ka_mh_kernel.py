@@ -181,6 +181,21 @@ def test_context_independent_of_xj():
         assert (ctx2[:, other] - ctx0[:, other]).abs().max() > 0, f"vacuous: no other slice changed at j={j}"
 
 
+def test_uniform_step_tuned_to_half_acceptance():
+    m = _load_model(); ref = torch.load(f"{ART}/ka_reference_N100.pt", map_location=DEV, weights_only=False)
+    s = ref["s"].to(DEV).long(); L = ref["L"]; N = ref["x"].shape[1]
+    step = K.tune_uniform_step(s, L, N, kT=0.5, target=0.5, B=16)
+    # verify the returned step actually yields ~50% on equilibrated configs
+    g = torch.Generator(device=DEV).manual_seed(0); pos = ref["x"][:16].to(DEV).clone()
+    _, na = K.uniform_position_sweep(pos, s, L, N, 0.5, step, g)
+    assert 0.35 <= na / (N * 16) <= 0.65, (step, na / (N * 16))
+
+def test_sweeps_to_reference_stopping_rule():
+    sweeps = list(range(0, 300, 25)); band = (-3.24 - 0.05, -3.24 + 0.05)
+    u = [-2.0, -2.5, -2.9, -3.1, -3.20, -3.23, -3.24, -3.25, -3.24, -3.23, -3.24, -3.24]  # enters band at idx4, stays
+    hit = K.sweeps_to_reference(sweeps, u, band, k_blocks=4)
+    assert hit == 100, hit   # sustained in-band run (idx4..7) begins at sweep 100
+
 def test_stationarity_no_sustained_drift_from_reference():
     import numpy as np
     m = _load_model(); ref = torch.load(f"{ART}/ka_reference_N100.pt", map_location=DEV, weights_only=False)

@@ -198,6 +198,37 @@ def _overlap(pos, L, thr=0.7):
     return float((r.min(2).values.reshape(-1) < thr).float().mean())
 
 
+def __art__():
+    import os
+    return os.path.join(os.path.dirname(__file__), "artifacts")
+
+
+@torch.no_grad()
+def tune_uniform_step(s, L, N, kT, target=0.5, B=16, iters=18):
+    """Bisection on Gaussian step size to hit ~target single-site acceptance on equilibrated configs."""
+    dev = s.device; ref_step_lo, ref_step_hi = 0.01, 1.0
+    ref = torch.load(f"{__art__()}/ka_reference_N100.pt", map_location=dev, weights_only=False)
+    base = ref["x"][:B].to(dev)
+    for _ in range(iters):
+        step = 0.5 * (ref_step_lo + ref_step_hi); g = torch.Generator(device=dev).manual_seed(0)
+        pos = base.clone(); _, na = uniform_position_sweep(pos, s, L, N, kT, step, g)
+        frac = na / (N * B)
+        if frac > target:
+            ref_step_lo = step
+        else:
+            ref_step_hi = step
+    return 0.5 * (ref_step_lo + ref_step_hi)
+
+
+def sweeps_to_reference(sweeps, vals, band, k_blocks=4):
+    """Sweep at which the first run of >= k_blocks consecutive in-band records BEGINS. None if never."""
+    lo, hi = band; n = len(vals)
+    for start in range(n - k_blocks + 1):
+        if all(lo <= vals[start + k] <= hi for k in range(k_blocks)):
+            return sweeps[start]
+    return None
+
+
 @torch.no_grad()
 def run_chain(m, pos, s, sc, L, N, kT, n_sweeps, record_every, n_swap, kind, step, arc, rng):
     """Run a chain of MH sweeps, recording observables every record_every sweeps.
@@ -223,3 +254,67 @@ def run_chain(m, pos, s, sc, L, N, kT, n_sweeps, record_every, n_swap, kind, ste
         pos, _ = swap_sweep(pos, s, L, kT, n_swap, rng)
     out["x_final"] = pos
     return out
+
+
+def _load_model_for_bench(dev, N):
+    from liquid_coupling_flow.ka_noncausal import NonCausalLF
+    ck = torch.load(f"{__art__()}/ka_noncausal_N{N}.pt", map_location=dev, weights_only=False)
+    m = NonCausalLF(rho=1.2, n_bins=192, knn=ck["knn"], canonical=False).to(dev).eval(); m.load_state_dict(ck["state_dict"]); return m
+
+
+def _ar_seed(dev, N, nB, B):
+    from liquid_coupling_flow.ka_localframe import KALocalFrameModel
+    ck = torch.load(f"{__art__()}/ka_localframe_N100_20k.pt", map_location=dev, weights_only=False)
+    mab = KALocalFrameModel(rho=ck["rho"], n_bins=ck["n_bins"], knn=ck["knn"]).to(dev).eval()
+    mab.load_state_dict(ck["state_dict"], strict=False)
+    return mab.sample(B, N, n_B=nB, device=dev)[0]
+
+
+@torch.no_grad()
+def benchmark(N=100, kT=0.5, B=64, n_sweeps=600, record_every=25, device=None):
+    import os, time, matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt, numpy as np
+    dev = device or ("cuda" if torch.cuda.is_available() else "cpu")
+    m = _load_model_for_bench(dev, N)
+    pf = preflight(m, f"{__art__()}/ka_reference_N{N}.pt", kT, B=32, n_warm=40)
+    print("PRE-FLIGHT:", pf, flush=True)
+    assert pf["geom_ok"] and pf["out_of_range_frac"] == 0.0 and pf["accept_frac"] >= 0.05, "pre-flight gate failed"
+    ref = torch.load(f"{__art__()}/ka_reference_N{N}.pt", map_location=dev, weights_only=False)
+    s = ref["s"].to(dev).long(); L = ref["L"]; data = ref["x"].to(dev); sc = m.geo._scaffold(N, dev); arc = m._arc_scale(N)
+    # reference band (±2σ) for U and g_BB peak from independent reference draws
+    U_ref = (ka_energy(data[:512], s, L) / N); u_lo, u_hi = float(U_ref.mean() - 2 * U_ref.std()), float(U_ref.mean() + 2 * U_ref.std())
+    gpk = _gbb(data[:512], s, L)[0]; band_g = (gpk - 0.3, gpk + 0.3)
+    step = tune_uniform_step(s, L, N, kT); print(f"tuned uniform step={step:.3f}", flush=True)
+    n_swap = N // 8
+    seeds = {"uniform": torch.rand(B, N, 2, device=dev) * L,
+             "AR": _ar_seed(dev, N, int((s == 1).sum()), B)}
+    traj = {}
+    for seedname, x0 in seeds.items():
+        for kind, stp in (("uniform", step), ("learned", 0.0)):
+            g = torch.Generator(device=dev).manual_seed(0); t0 = time.time()
+            tj = run_chain(m, x0.clone(), s, sc, L, N, kT, n_sweeps, record_every, n_swap, kind, stp, arc, g)
+            su = sweeps_to_reference(tj["sweeps"], tj["U"], (u_lo, u_hi), 4)
+            sg = sweeps_to_reference(tj["sweeps"], tj["gbb_peak"], band_g, 4)
+            reach = max(su, sg) if (su is not None and sg is not None) else None
+            traj[(seedname, kind)] = (tj, reach)
+            print(f"[{seedname}/{kind}] reach U&gBB -> {reach}  (U {tj['U'][0]:+.2f}->{tj['U'][-1]:+.2f}, "
+                  f"gBB {tj['gbb_peak'][0]:.2f}->{tj['gbb_peak'][-1]:.2f}, {time.time()-t0:.0f}s)", flush=True)
+    for seedname in seeds:
+        ru = traj[(seedname, "uniform")][1]; rl = traj[(seedname, "learned")][1]
+        print(f"SWEEPS-SAVED [{seedname}]: uniform {ru} - learned {rl} = "
+              f"{None if (ru is None or rl is None) else ru - rl}", flush=True)
+    fig, ax = plt.subplots(1, 2, figsize=(12, 4.6))
+    for (seedname, kind), (tj, _) in traj.items():
+        c = {"uniform": "C0", "learned": "C2"}[kind]; ls = {"uniform": "-", "AR": "--"}[seedname]
+        ax[0].plot(tj["sweeps"], tj["U"], c, ls=ls, label=f"{seedname}/{kind}")
+        ax[1].plot(tj["sweeps"], tj["gbb_peak"], c, ls=ls, label=f"{seedname}/{kind}")
+    ax[0].axhspan(u_lo, u_hi, color="grey", alpha=0.2); ax[0].set_ylabel("<U>/N"); ax[0].set_xlabel("sweeps")
+    ax[1].axhspan(*band_g, color="grey", alpha=0.2); ax[1].set_ylabel("g_BB peak"); ax[1].set_xlabel("sweeps"); ax[1].legend(fontsize=8)
+    fig.suptitle(f"Learned single-site MH vs matched uniform (N={N}, T={kT}): sweeps to PT reference")
+    out = f"{__art__()}/ka_mh_kernel_benchmark_N{N}.png"; fig.tight_layout(); fig.savefig(out, dpi=120)
+    print("saved", out, flush=True)
+
+
+if __name__ == "__main__":
+    import sys
+    benchmark(n_sweeps=int(sys.argv[1]) if len(sys.argv) > 1 else 600,
+              B=int(sys.argv[2]) if len(sys.argv) > 2 else 64)

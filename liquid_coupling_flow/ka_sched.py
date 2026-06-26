@@ -45,3 +45,34 @@ class KALocalFrameSched(KALocalFrameModel):
         nll = pos_species_nll(self, context, origin, xo, so, L, N, sigma_bins=sigma_bins,
                               soft=soft, stochastic=stochastic, canonical=canonical, gen=gen)
         return -nll                                                        # log_prob (variable part)
+
+
+def train(train_N=100, steps=10000, r=2.0, floor=0.5, sigma_bins=0.0, soft=False, stochastic=False,
+          warm="ka_localframe_N100_20k.pt", out="ka_sched_N100.pt",
+          device="cuda" if torch.cuda.is_available() else "cpu"):
+    from liquid_coupling_flow.ka_gridformer_train import augment
+    from liquid_coupling_flow.ka_exposure_lf import load_compat
+    ref = torch.load(os.path.join(ART, f"ka_reference_N{train_N}.pt"), map_location=device, weights_only=False)
+    data, sp, L = ref["x"].to(device), ref["s"].to(device).long(), ref["L"]; N = data.shape[1]
+    m = KALocalFrameSched(rho=1.2, n_bins=192, knn=KNN).to(device)
+    ck = torch.load(os.path.join(ART, warm), map_location=device, weights_only=False)
+    load_compat(m, ck["state_dict"]); m.train()                         # warm-start (allowlists optional heads)
+    gen = torch.Generator(device=device).manual_seed(0)
+    print(f"SCHEDULED-SAMPLING train steps={steps} r={r} floor={floor} soft={soft} stoch={stochastic} warm={warm}", flush=True)
+    opt = torch.optim.AdamW(m.parameters(), lr=2e-4, weight_decay=1e-4); B, t0 = 128, time.time()
+    for step in range(steps):
+        p_keep = arc_pT(step / max(1, steps - 1), r=r, floor=floor)
+        idx = torch.randint(0, data.shape[0], (B,), device=device)
+        loss = (-m.log_prob_sched(augment(data[idx], L), sp, p_keep, sigma_bins=sigma_bins,
+                                  soft=soft, stochastic=stochastic, gen=gen) / N).mean()
+        opt.zero_grad(); loss.backward(); torch.nn.utils.clip_grad_norm_(m.parameters(), 5.0); opt.step()
+        if step % 1000 == 0:
+            print(f"  step {step:5d} p_keep {p_keep:.3f} nll/N {loss.item():.3f} {time.time()-t0:.0f}s", flush=True)
+    torch.save({"state_dict": m.state_dict(), "rho": 1.2, "n_bins": 192, "knn": KNN,
+                "r": r, "floor": floor, "step": steps}, os.path.join(ART, out))
+    print(f"saved {out}", flush=True)
+
+
+if __name__ == "__main__":
+    import sys
+    train(steps=int(sys.argv[1]) if len(sys.argv) > 1 else 10000)

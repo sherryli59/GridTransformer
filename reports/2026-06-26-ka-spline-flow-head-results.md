@@ -1,0 +1,59 @@
+# Exact spline-flow placement head (Phase 1 / Feature B) — results
+
+**Date:** 2026-06-26  **Verdict: NEGATIVE** (the head is not the bottleneck).
+
+## What was built (all reviewed, all correct)
+`KAFlowHeadModel` (`liquid_coupling_flow/ka_flowhead.py`): the binned `(a,b)` categorical placement head of
+`KALocalFrameModel` replaced by an exact autoregressive RQS spline-flow head (Gaussian base, identity-init,
+AR `a`→`b|a`), with an InertialAR local-inertial-frame toggle. Exact likelihood preserved (round-trip + the
+model exactness gate pass). A Critical inertial-frame R-consistency bug (log_prob vs sample) was caught in
+review and fixed with a genuine fail-before/pass-after regression test.
+
+## Convergence (gate a): PASS
+Overfit-tiny nll/N 4.79 → −1.23 (no NaN); full 20k training stable, no NaN, final nll/N −0.49.
+
+## Likelihood (gate b): FAIL
+Apples-to-apples **normalized position log-density** (per particle, in the (a,b) coordinate, before the
+shared `arc_scale` Jacobian):
+- **flow: 2.704**  vs  **categorical baseline: 2.783** → flow is marginally WORSE, essentially equal.
+
+*Correction on the record:* the full-training `nll/N −0.49` is NOT comparable to the categorical's
+"`nll/N ~4.7`" quoted earlier — the latter (from the soft-label ablation log) omitted the `jac` term the
+flow's loss includes. The only valid comparison is the normalized position log-density above; it shows no
+improvement.
+
+## Structure (the verdict metric): NO CHANGE
+Free-run and teacher-forced partial g(r), peak height / core fill, vs data (`ka_flowhead_gr_N100.png`):
+
+| pair | data peak | cat-TF | flow-TF | cat-FR | flow-FR | data core | flow-TF core | flow-FR core |
+|---|---|---|---|---|---|---|---|---|
+| AA | 3.83 | ~1.9 | 1.82 | 1.85 | 1.75 | 0.023 | 0.345 | 0.319 |
+| AB | 7.28 | ~3.2 | 3.14 | 2.61 | 2.44 | 0.024 | 0.496 | 0.318 |
+| BB | 2.34 | ~1.5 | 1.48 | 1.37 | 1.29 | 0.019 | 0.260 | 0.263 |
+
+The flow's g(r) — TF and FR — is identical to the categorical's. Contact peaks still undershoot ~2× and the
+excluded-volume core is still filled (~0.3–0.5 vs data ~0.02).
+
+## Interpretation
+Two very different head classes (8-bin exact flow vs 192-bin categorical) converge to the **same** position
+log-density AND the **same** g(r). The head's expressiveness is therefore **not** the bottleneck. The
+conditional `p(offset | soft-centroid context)` is **intrinsically broad**: the soft-centroid origin + KNN
+context does not determine the placement sharply, so no output head can sharpen it. The wall is in the
+**context/representation the conditional sees** (the soft-centroid washing out precise neighbour geometry;
+the half-cage), consistent with [[full-cage-lever-needs-energy]] and [[gbb-persistently-wrong]].
+
+**Hypothesis B (a sharper exact head closes the g(r) wall) is falsified.** Feature A (curve conditioning,
+Phase 2) was premised on freeing capacity for a sharper head — that premise is undercut; A should be
+reconsidered or redirected at the context/representation, not the head.
+
+## Caveats (bug-hypothesis kept open)
+- `num_bins=8` (the implementer flagged it as conservative). The g(r) being *identical* across an 8-bin flow
+  and a 192-bin categorical is strong evidence bin count is irrelevant, but a `num_bins=32` retrain would
+  make the negative airtight.
+- The result is in-dist N=100, scaffold frame. The inertial-frame variant's *quality* (vs scaffold) was not
+  evaluated (only its exactness was fixed).
+
+## Deliverables
+`ka_flowhead.py` (head + model + training + convergence gate + inertial toggle), `ka_flowhead_eval.py`
+(g(r) verdict), tests (`test_flowhead*.py`), checkpoint `ka_flowhead_N100_k8_scratch.pt`, figure
+`ka_flowhead_gr_N100.png`.

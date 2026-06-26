@@ -94,8 +94,9 @@ def train(cell, sigma_bins, train_N=100, steps=10000, warm="ka_localframe_N100_2
     ref = torch.load(os.path.join(ART, f"ka_reference_N{train_N}.pt"), map_location=device, weights_only=False)
     data, sp, L = ref["x"].to(device), ref["s"].to(device).long(), ref["L"]; N = data.shape[1]
     m = KALocalFrameSoft(rho=1.2, n_bins=192, knn=KNN).to(device)
-    ck = torch.load(os.path.join(ART, warm), map_location=device, weights_only=False)
-    load_compat(m, ck["state_dict"]); m.train()                         # warm-start (allowlists optional heads)
+    if warm is not None:                                                 # warm-start fine-tune (allowlists optional heads)
+        load_compat(m, torch.load(os.path.join(ART, warm), map_location=device, weights_only=False)["state_dict"])
+    m.train()                                                            # warm=None -> random init (from-scratch)
     gen = torch.Generator(device=device).manual_seed(0)
     print(f"SOFT-LABEL train cell={cell} sigma_bins={sigma_bins} steps={steps} warm={warm}", flush=True)
     opt = torch.optim.AdamW(m.parameters(), lr=2e-4, weight_decay=1e-4); B, t0 = 128, time.time()
@@ -106,9 +107,9 @@ def train(cell, sigma_bins, train_N=100, steps=10000, warm="ka_localframe_N100_2
         opt.zero_grad(); loss.backward(); torch.nn.utils.clip_grad_norm_(m.parameters(), 5.0); opt.step()
         if step % 1000 == 0:
             print(f"  step {step:5d} nll/N {loss.item():.3f} {time.time()-t0:.0f}s", flush=True)
-    tag = f"ka_softlabel_N{train_N}_{cell}_s{sigma_bins}.pt"
+    tag = f"ka_softlabel_N{train_N}_{cell}_s{sigma_bins}{'_scratch' if warm is None else ''}.pt"
     torch.save({"state_dict": m.state_dict(), "rho": 1.2, "n_bins": 192, "knn": KNN,
-                "cell": cell, "sigma_bins": sigma_bins, "step": steps}, os.path.join(ART, tag))
+                "cell": cell, "sigma_bins": sigma_bins, "step": steps, "from_scratch": warm is None}, os.path.join(ART, tag))
     print(f"saved {tag}", flush=True); return tag
 
 

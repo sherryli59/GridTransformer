@@ -68,3 +68,59 @@ class KACurveFlowModel(KAFlowHeadModel):
         if return_logq:
             return pos, sp, self.log_prob(pos, sp)
         return pos, sp
+
+
+# --- training runner (Task 2) ---
+import os, time
+ART = os.path.join(os.path.dirname(__file__), "artifacts")
+
+
+def train(steps=20000, train_N=100, warm="ka_flowhead_N100_k8_scratch.pt", lr=2e-4,
+          device="cuda" if torch.cuda.is_available() else "cpu"):
+    from liquid_coupling_flow.ka_gridformer_train import augment
+    from liquid_coupling_flow.ka_exposure_lf import load_compat
+    ref = torch.load(os.path.join(ART, f"ka_reference_N{train_N}.pt"), map_location=device, weights_only=False)
+    data, sp, L = ref["x"].to(device), ref["s"].to(device).long(), ref["L"]; N = data.shape[1]
+    ck = torch.load(os.path.join(ART, warm), map_location=device, weights_only=False)
+    m = KACurveFlowModel(rho=1.2, n_bins=192, knn=16, num_bins=ck["num_bins"], tail_bound=ck["tail_bound"]).to(device)
+    load_compat(m, ck["state_dict"])                                     # warm-start B (curve_proj stays zero-init)
+    m.train()
+    opt = torch.optim.AdamW(m.parameters(), lr=lr, weight_decay=1e-4); B, t0 = 128, time.time(); warmup = 500
+    for step in range(steps):
+        for g in opt.param_groups:
+            g["lr"] = lr * min(1.0, (step + 1) / warmup)
+        idx = torch.randint(0, data.shape[0], (B,), device=device)
+        loss = (-m.log_prob(augment(data[idx], L), sp) / N).mean()
+        if not torch.isfinite(loss):
+            raise FloatingPointError(f"NON-FINITE loss at step {step}")
+        opt.zero_grad(); loss.backward(); torch.nn.utils.clip_grad_norm_(m.parameters(), 5.0); opt.step()
+        if step % 1000 == 0:
+            print(f"  step {step:5d} nll/N {loss.item():.3f} {time.time()-t0:.0f}s", flush=True)
+    torch.save({"state_dict": m.state_dict(), "rho": 1.2, "n_bins": 192, "knn": 16,
+                "num_bins": ck["num_bins"], "tail_bound": ck["tail_bound"], "step": steps},
+               os.path.join(ART, "ka_curveflow_N100.pt"))
+    print("saved ka_curveflow_N100.pt", flush=True)
+
+
+@torch.no_grad()
+def measure(train_N=100, device="cuda" if torch.cuda.is_available() else "cpu"):
+    from liquid_coupling_flow.ka_flowhead import _categorical_pos_logdensity
+    ck = torch.load(os.path.join(ART, "ka_curveflow_N100.pt"), map_location=device, weights_only=False)
+    m = KACurveFlowModel(rho=1.2, n_bins=192, knn=16, num_bins=ck["num_bins"], tail_bound=ck["tail_bound"]).to(device)
+    m.load_state_dict(ck["state_dict"]); m.eval()
+    ref = torch.load(os.path.join(ART, f"ka_reference_N{train_N}.pt"), map_location=device, weights_only=False)
+    s, L, data = ref["s"].to(device).long(), ref["L"], ref["x"].to(device)[:128]; N = data.shape[1]
+    o = m.geo._curve_order(data, N); xo = torch.gather(data, 1, o[..., None].expand(-1, -1, 2))
+    so = torch.gather(s.expand(data.shape[0], N) if s.dim() == 1 else s[:128], 1, o)
+    ctx, org = m._local(xo, so, m.geo._scaffold(N, device), L, N); ctx = ctx + m._curve_feat(N, device)[None]
+    ab = _wrap_pm(xo - org, L) / m._arc_scale(N)
+    print(f"Feature A flow pos log-density {float(m.flow.log_prob(ctx, ab).mean()):.3f}  "
+          f"(B-alone 2.704, categorical {_categorical_pos_logdensity(train_N, device):.3f})", flush=True)
+
+
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "measure":
+        measure()
+    else:
+        train(steps=int(sys.argv[1]) if len(sys.argv) > 1 else 20000)

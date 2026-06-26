@@ -207,14 +207,23 @@ def test_log_prob_finite_and_differentiable():
 
 
 def test_no_vol_term_uses_flow_density():
-    # The flow log_prob must NOT include a bin_w volume term (that was categorical-only). Sanity: changing
-    # n_bins (a categorical-only knob) leaves the flow log_prob unchanged for the same weights/inputs.
-    torch.manual_seed(2)
-    m1 = KAFlowHeadModel(rho=1.2, n_bins=192, knn=8); m1.eval()
-    m2 = KAFlowHeadModel(rho=1.2, n_bins=64, knn=8); m2.eval()
-    m2.load_state_dict(m1.state_dict(), strict=False)
-    x = torch.rand(3, 12, 2) * m1._Lof(12); s = (torch.rand(3, 12) < 0.35).long()
-    assert torch.allclose(m1.log_prob(x, s), m2.log_prob(x, s), atol=1e-4)
+    # The flow log_prob must equal (flow_pos_logdensity + species_logp).sum - arc_scale_jac, with NO bin_w
+    # volume term (that was categorical-only). Recompute the expected value from the flow directly.
+    import math
+    import torch.nn.functional as F
+    from liquid_coupling_flow.ka_localframe import _wrap_pm
+    m = _tiny(2); N, B = 12, 3
+    x = torch.rand(B, N, 2) * m._Lof(N); s = (torch.rand(B, N) < 0.35).long()
+    order = m.geo._curve_order(x, N)
+    xo = torch.gather(x, 1, order[..., None].expand(-1, -1, 2)); so = torch.gather(s, 1, order)
+    ctx, origin = m._local(xo, so, m.geo._scaffold(N, x.device), m._Lof(N), N)
+    ab = _wrap_pm(xo - origin, m._Lof(N)) / m._arc_scale(N)
+    lp_ab = m.flow.log_prob(ctx, ab)
+    sl = m.head_species(ctx)
+    oh = F.one_hot(so, m.n_species).float(); rem = oh.sum(1, keepdim=True) - (oh.cumsum(1) - oh)
+    lp_s = F.log_softmax(sl.masked_fill(rem <= 0, float("-inf")), -1).gather(-1, so[..., None]).squeeze(-1)
+    expected = (lp_ab + lp_s).sum(1) - m.d * N * math.log(m._arc_scale(N))   # NO bin_w vol term
+    assert torch.allclose(m.log_prob(x, s), expected, atol=1e-4)
 
 
 if __name__ == "__main__":

@@ -8,7 +8,7 @@ from liquid_coupling_flow.ka_localframe import _wrap_pm
 from liquid_coupling_flow.ipl44.ipl_energy import load_ipl_reference, ipl_box
 
 
-def make_ipl_model(num_bins=8, tail_bound=5.0, knn=16, arc_range=4.0, device="cpu"):
+def make_ipl_model(num_bins=8, tail_bound=4.0, knn=16, arc_range=3.0, device="cpu"):
     # rho=0.5 -> the geo builds L=sqrt(N/rho); arc_range/tail_bound re-checked by support_coverage
     m = KACurveFlowModel(rho=0.5, n_bins=192, knn=knn, arc_range=arc_range,
                          num_bins=num_bins, tail_bound=tail_bound).to(device)

@@ -18,7 +18,7 @@ def make_ipl_model(num_bins=8, tail_bound=2.75, knn=16, arc_range=2.75, device="
     return m
 
 
-import os, time, math
+import os, time
 ART = os.path.join(os.path.dirname(__file__), "data")
 
 
@@ -27,8 +27,7 @@ def train_ipl(steps=40000, num_bins=8, tail_bound=2.75, arc_range=2.75, knn=16, 
     from liquid_coupling_flow.ka_gridformer_train import augment
     N, L = ipl_box()
     data, sp = load_ipl_reference(device)                                # [M,44,2],[M,44]
-    nB = int((sp[0] == 1).sum())                                         # 22
-    s_vec = sp[0]                                                        # shared composition vector (50:50)
+    nB = int((sp[0] == 1).sum())                                         # 22 (50:50 composition)
     m = make_ipl_model(num_bins=num_bins, tail_bound=tail_bound, arc_range=arc_range, knn=knn, device=device)
     m.train()
     opt = torch.optim.AdamW(m.parameters(), lr=lr, weight_decay=1e-4); B, t0 = 128, time.time(); warmup = 500

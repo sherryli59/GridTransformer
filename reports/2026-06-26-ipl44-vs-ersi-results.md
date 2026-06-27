@@ -56,6 +56,10 @@ model. (See memory note `ipl44-unwrapped-data-bug`.)
 | Reference ⟨U⟩ (target) | 14.66 | — | — | — |
 | Parameters | 5.54M | 22k–580k | — | — |
 
+(U and c_V are **total** energies/capacities for the 44-particle system, not per-particle; no cross-paper
+U/c_V comparison is drawn — the eRSI U/c_V cells are "—" — and the filled comparisons, discard and ESS, are
+dimensionless.)
+
 - **Discard 0.987** — between eFM (0.84) and RSI (1.0); i.e. our AR transformer is **as bad as the paper's
   non-eRSI baselines** on the IS-free measure. **0.0%** of 16 384 generated configs fall inside the reference
   energy band (min generated U = 22.4 > reference max U = 16.6).

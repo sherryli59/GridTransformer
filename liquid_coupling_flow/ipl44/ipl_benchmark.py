@@ -22,13 +22,20 @@ def _gen(n, device):
 
 
 @torch.no_grad()
+def _energy_chunked(x, s, chunk=4096):
+    """ipl_energy over large arrays in chunks (the SoftSphere pairwise tensors are O(B*N^2);
+    evaluating all 200k configs at once OOMs on smaller GPUs)."""
+    return torch.cat([ipl_energy(x[i:i + chunk], s[i:i + chunk]) for i in range(0, x.shape[0], chunk)])
+
+
+@torch.no_grad()
 def benchmark(n_samples=200000, device="cuda" if torch.cuda.is_available() else "cpu"):
     N, L = ipl_box(); beta = BETA_IPL
     ref_pos, ref_sp = load_ipl_reference(device)
     assert ref_pos.shape[0] >= 8192, ref_pos.shape
-    U_ref = ipl_energy(ref_pos, ref_sp); U_ref_max = float(U_ref.max())
+    U_ref = _energy_chunked(ref_pos, ref_sp); U_ref_max = float(U_ref.max())
     x, s, logq, ck = _gen(n_samples, device)
-    U = ipl_energy(x, s)
+    U = _energy_chunked(x, s)
     # (1) discard fraction: energy > 2x reference max
     discard = float((U > 2 * U_ref_max).float().mean())
     # self-normalized IS weights

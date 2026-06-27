@@ -3,7 +3,7 @@
 reweighted U / c_V / g(r). Self-normalized IS weight w = -beta*U - logq (full joint logq). Honest framing:
 report raw AND reweighted; discard fraction + ESS R-bar are the headline IS-free / IS-cost numbers."""
 from __future__ import annotations
-import os, math, torch, numpy as np, matplotlib; matplotlib.use("Agg")
+import os, torch, numpy as np, matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from liquid_coupling_flow.ipl44.ipl_model import make_ipl_model, ART
 from liquid_coupling_flow.ipl44.ipl_energy import ipl_box, load_ipl_reference, ipl_energy, ipl_gr, BETA_IPL
@@ -25,6 +25,7 @@ def _gen(n, device):
 def benchmark(n_samples=200000, device="cuda" if torch.cuda.is_available() else "cpu"):
     N, L = ipl_box(); beta = BETA_IPL
     ref_pos, ref_sp = load_ipl_reference(device)
+    assert ref_pos.shape[0] >= 8192, ref_pos.shape
     U_ref = ipl_energy(ref_pos, ref_sp); U_ref_max = float(U_ref.max())
     x, s, logq, ck = _gen(n_samples, device)
     U = ipl_energy(x, s)
@@ -40,12 +41,13 @@ def benchmark(n_samples=200000, device="cuda" if torch.cuda.is_available() else 
     # (3) reweighted observables
     w_all = torch.softmax(log_w, 0)
     U_raw, U_rw = float(U.mean()), float((w_all * U).sum())
-    cV_raw = float(beta ** 2 * U.var())
+    cV_raw = float(beta ** 2 * U.var(unbiased=False))
     cV_rw = float(beta ** 2 * ((w_all * U * U).sum() - (w_all * U).sum() ** 2))
     U_ref_mean = float(U_ref.mean())
     # g(r): target / raw / (reweighted via resampling by w)
     res = torch.multinomial(w_all, min(8192, n_samples), replacement=True)
-    gr_t = ipl_gr(ref_pos[:8192], ref_sp[:8192], L); gr_raw = ipl_gr(x[:8192], s[:8192], L); gr_rw = ipl_gr(x[res], s[res], L)
+    raw_idx = torch.randperm(x.shape[0], device=x.device)[:8192]
+    gr_t = ipl_gr(ref_pos[:8192], ref_sp[:8192], L); gr_raw = ipl_gr(x[raw_idx], s[raw_idx], L); gr_rw = ipl_gr(x[res], s[res], L)
     out = {"discard_frac": discard, "ess_R": list(zip(Rs.tolist(), ess)), "U_ref": U_ref_mean,
            "U_raw": U_raw, "U_rw": U_rw, "cV_raw": cV_raw, "cV_rw": cV_rw,
            "n_params": ck["n_params"], "epochs": ck["epochs"]}

@@ -8,8 +8,11 @@ from liquid_coupling_flow.ka_localframe import _wrap_pm
 from liquid_coupling_flow.ipl44.ipl_energy import load_ipl_reference, ipl_box
 
 
-def make_ipl_model(num_bins=8, tail_bound=4.0, knn=16, arc_range=3.0, device="cpu"):
-    # rho=0.5 -> the geo builds L=sqrt(N/rho); arc_range/tail_bound re-checked by support_coverage
+def make_ipl_model(num_bins=8, tail_bound=2.75, knn=16, arc_range=2.75, device="cpu"):
+    # rho=0.5 -> the geo builds L=sqrt(N/rho); arc_range/tail_bound re-checked by support_coverage.
+    # Bounds re-tuned to the TRUE wrapped-data offset support (std 0.66, max 2.49): tail_bound 4.0 was
+    # tuned on UNWRAPPED data (mis-registered std 1.42, same max ~2.5 so the max-based gate missed it),
+    # spreading the 8-knot spline ~1.5x too wide. 2.75 hugs the support -> finer placement resolution.
     m = KACurveFlowModel(rho=0.5, n_bins=192, knn=knn, arc_range=arc_range,
                          num_bins=num_bins, tail_bound=tail_bound).to(device)
     return m
@@ -19,7 +22,7 @@ import os, time, math
 ART = os.path.join(os.path.dirname(__file__), "data")
 
 
-def train_ipl(steps=40000, num_bins=8, tail_bound=4.0, arc_range=3.0, knn=16, lr=3e-4,
+def train_ipl(steps=40000, num_bins=8, tail_bound=2.75, arc_range=2.75, knn=16, lr=3e-4,
               out="ipl44_curveflow.pt", device="cuda" if torch.cuda.is_available() else "cpu"):
     from liquid_coupling_flow.ka_gridformer_train import augment
     N, L = ipl_box()

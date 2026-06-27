@@ -66,6 +66,12 @@ def ipl_gr(positions, species, L=None, bins=100):
 
 
 def load_ipl_reference(device="cpu"):
+    """Released Grenioux IPL configs. CRITICAL: the Zenodo data stores UNWRAPPED MD coordinates
+    (particles drift across periodic images; raw range ~[-29, 35] for L=9.38, ~50% of coords
+    outside [0,L)). The energy is wrap-invariant (min-image gram_torus), so this is harmless for
+    U/g(r) — but the AR model's curve-order/scaffold pipeline assumes positions in [0,L) and
+    silently mis-registers unwrapped coords. We wrap into [0,L) here so every consumer (support
+    coverage, training, benchmark) sees the same in-box frame the model is defined on."""
     pos = torch.load(os.path.join(_HERE, "data", "ipl44_T0.1_positions.pt"), weights_only=False).to(device).float()
     sp = torch.load(os.path.join(_HERE, "data", "ipl44_T0.1_species.pt"), weights_only=False).to(device).long()
-    return pos, sp
+    return torch.remainder(pos, L_IPL), sp

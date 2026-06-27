@@ -15,6 +15,43 @@ def make_ipl_model(num_bins=8, tail_bound=4.0, knn=16, arc_range=3.0, device="cp
     return m
 
 
+import os, time, math
+ART = os.path.join(os.path.dirname(__file__), "data")
+
+
+def train_ipl(steps=40000, num_bins=8, tail_bound=4.0, arc_range=3.0, knn=16, lr=3e-4,
+              out="ipl44_curveflow.pt", device="cuda" if torch.cuda.is_available() else "cpu"):
+    from liquid_coupling_flow.ka_gridformer_train import augment
+    N, L = ipl_box()
+    data, sp = load_ipl_reference(device)                                # [M,44,2],[M,44]
+    nB = int((sp[0] == 1).sum())                                         # 22
+    s_vec = sp[0]                                                        # shared composition vector (50:50)
+    m = make_ipl_model(num_bins=num_bins, tail_bound=tail_bound, arc_range=arc_range, knn=knn, device=device)
+    m.train()
+    opt = torch.optim.AdamW(m.parameters(), lr=lr, weight_decay=1e-4); B, t0 = 128, time.time(); warmup = 500
+    for step in range(steps):
+        for g in opt.param_groups:
+            g["lr"] = lr * min(1.0, (step + 1) / warmup)
+        idx = torch.randint(0, data.shape[0], (B,), device=device)
+        loss = (-m.log_prob(augment(data[idx], L), sp[idx]) / N).mean()
+        if not torch.isfinite(loss):
+            raise FloatingPointError(f"NON-FINITE loss at step {step}")
+        opt.zero_grad(); loss.backward(); torch.nn.utils.clip_grad_norm_(m.parameters(), 5.0); opt.step()
+        if step % 1000 == 0:
+            print(f"  step {step:5d} nll/N {loss.item():.3f} {time.time()-t0:.0f}s", flush=True)
+    epochs = steps * B / data.shape[0]; n_params = sum(p.numel() for p in m.parameters())
+    torch.save({"state_dict": m.state_dict(), "num_bins": num_bins, "tail_bound": tail_bound,
+                "arc_range": arc_range, "knn": knn, "n_B": nB, "steps": steps, "epochs": epochs,
+                "n_params": n_params}, os.path.join(ART, out))
+    print(f"saved {out}  (epochs={epochs:.0f}, params={n_params/1e3:.0f}k vs eRSI 22k/580k)", flush=True)
+    return out
+
+
+if __name__ == "__main__":
+    import sys
+    train_ipl(steps=int(sys.argv[1]) if len(sys.argv) > 1 else 40000)
+
+
 @torch.no_grad()
 def support_coverage(model, B=2048, device="cpu"):
     """Fraction of equilibrium (a,b) offsets that fall outside arc_range (the bin grid) and outside the flow

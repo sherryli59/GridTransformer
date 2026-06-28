@@ -69,23 +69,31 @@ dimensionless.)
   negative than the spec's hopeful framing ("IS may rescue reweighted observables at higher cost"): here the
   q/p overlap is so poor that IS provides essentially zero effective samples.
 
-## 4. Mechanism — the failure is localized, not gross (the honest nuance)
+## 4. Mechanism — a smeared, core-overlapping g(r)
 
-The generator is **not** producing structurally-random configs. The **g(r) for r>0.4 tracks the target
-closely** (first-shell peak ≈3 at r≈1, second feature at r≈2.3; the generator slightly under-fills the first
-shell). The failure is a small fraction of **rare-but-fatal near-contacts** per config (nearest-neighbour
-distance median 0.586 vs target 1.10) that, under r⁻¹²×β=10, dominate the energy (βU ~10⁴–10¹⁶). A few
-overlaps per otherwise-reasonable config are enough to discard it.
+**(Correction:** an earlier draft claimed "g(r) for r>0.4 matches the target" — that was an artifact of a
+**broken g(r) function**, see §5 caveat 3. The corrected g(r), computed from scalar minimum-image pair
+distances, shows the generator does **not** reproduce the target structure.)
 
-This is the **causal-AR half-cage limitation**, sharply evidenced here: the model's *density* is excellent
-(logq(data)/N −0.10) — it knows what good configs look like — but its *autoregressive sampling* must place
-each particle without seeing its future neighbours, so the conditional is necessarily **broad**, and that
-breadth includes the near-contact placements the stiff cold potential cannot tolerate. The
+Reading the corrected g(r) (figure, left panel):
+- **Excluded volume is violated.** The target has g(r)=0 for r<1.0 (no pairs closer than σ); the generator
+  puts **spurious weight in the core** (integrated g(r<0.9) mass ≈ **1.77** vs target **0.00**) — these are
+  the overlaps (nearest-neighbour distance median **0.586** vs target **1.10**).
+- **The shells are under-developed.** First peak **1.87 @ r≈1.43** vs target **2.47 @ r≈1.43**; the first
+  minimum is too shallow (≈0.68 vs 0.40) and the higher shells are washed out. Peak *positions* are right,
+  but the structure is **smeared**.
+
+The core overlaps are the fatal contacts: under r⁻¹²×β=10 even a handful per config drive βU to ~10⁴–10¹⁶,
+so 98.7% are discarded. This is the **causal-AR half-cage / core-fill limitation**: the model's *density* is
+well-calibrated (logq(data)/N −0.10 — it scores real configs higher than its own samples), but its
+*autoregressive sampling* must place each particle without seeing its future neighbours, so the conditional is
+necessarily **broad** — and a broad conditional both smears the shells and fills the excluded-volume core. The
 re-tuned spline did not help — a sharper *marginal* concentrates mass at the centroid mode without enforcing
-the *joint* exclusion. (Consistent with this codebase's prior KA findings: `gap-is-residual-not-rollout-drift`,
-`full-cage-lever-needs-energy` — the lever is a full-cage/energy corrector, not the conditional or the head.)
-The identified data bug is fixed; this residual failure matches the independently-documented AR limit and the
-paper's own RSI/eFM baselines.
+the *joint* exclusion. (Consistent with this codebase's prior KA findings — the core-fill / smeared-g_BB
+defect in `gbb-persistently-wrong`, `gap-is-residual-not-drift`, `full-cage-lever-needs-energy`: the lever is a
+full-cage/energy corrector, not a sharper head or representation.) The identified bugs (data wrapping, g(r)
+function) are fixed; this residual failure matches the independently-documented AR limit and the paper's own
+RSI/eFM baselines.
 
 ## 5. Verdict and caveats
 
@@ -102,18 +110,24 @@ which is **out of scope** here (spec §8) and the natural follow-on.
    and ≈250× its smallest (22k)**. The comparison tests IS efficiency, not capacity; but a loss this complete
    at 10× the parameters states plainly that the gap is structural, not a capacity deficit.
 2. The reweighted ⟨U⟩/c_V are **degenerate** (ESS≈1) and must not be read as observable estimates.
-3. The reused g(r) function includes self-pairs / lacks ideal-gas shell normalization → a small-r spike
-   (g≈54 at r→0); identical for all curves (fair), clipped to r>0.4 in the figure.
-4. The identified data bug is fixed and the density is now well-calibrated; the residual generation failure is
-   evidenced as the AR half-cage limit, but per standing practice the possibility of further issues is left
-   open rather than declared absent.
+3. **Their `radial_distribution_function` is wrong for dim>1** and we do **not** use it: for 2D it feeds
+   `gram_torus`'s output — which is the pairwise **difference vectors** `xᵢ−xⱼ` (shape [B, pairs, **2**]) — straight
+   into `torch.histogram`, histogramming vector *components* instead of scalar distances. That produces an
+   unphysical g(r→0)≈54 even on equilibrium data with minimum pair distance ~1.0. `ipl_gr` now computes the
+   standard g(r) (scalar minimum-image distances, 2D annulus normalization; regression-tested in
+   `test_ipl_energy.py::test_gr_physical_on_reference`). The **energy** reuse — the path the discard/ESS numbers
+   actually depend on — is their code, unmodified, and is correct.
+4. The identified bugs (data wrapping; g(r) function) are fixed and the density is now well-calibrated; the
+   residual generation failure is evidenced as the AR half-cage / core-fill limit, but per standing practice
+   the possibility of further issues is left open rather than declared absent.
 
 ## 6. Artifacts
 
 - Corrected checkpoint: `liquid_coupling_flow/ipl44/data/ipl44_curveflow.pt` (gitignored; tail_bound 2.75,
   arc_range 2.75, knn 16, n_B 22, 1000 epochs, 5.54M params).
 - Benchmark figure (committed code output): `data/ipl44_benchmark.png`; **clean report figure**
-  (zoomed g(r), log10(βU) energy, ESS-vs-R): `data/ipl44_benchmark_clean.png`.
+  (corrected g(r) target vs raw, log10(βU) energy, ESS-vs-R): `data/ipl44_benchmark_clean.png`. A standalone
+  corrected g(r) is at `data/ipl44_gr_correct.png`.
 - Code: `ipl44/ipl_energy.py` (energy/g(r)/data adapters), `ipl44/ipl_model.py` (model + trainer +
   support-coverage gate), `ipl44/ipl_benchmark.py` (discard/ESS/reweighted + figure). Diagnostics in the
   session scratchpad (`ipl_diag*.py`, `ipl_fig_clean.py`).

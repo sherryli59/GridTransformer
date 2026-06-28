@@ -52,17 +52,32 @@ def ipl_energy(positions, species):
     return ss.U(species.long().to(dev), positions.to(dev))
 
 
-def ipl_gr(positions, species, L=None, bins=100):
-    """Their radial distribution function. Returns (r_centers, g) where each has shape (bins,).
-    radial_distribution_function returns gr of shape (num_bins, 2): gr[:,0]=r, gr[:,1]=g(r).
+def ipl_gr(positions, species, L=None, bins=120):
+    """Total (species-agnostic) radial distribution function g(r). Returns (r_centers, g), shapes (bins,).
 
-    NOTE: `species` is accepted for API stability but is currently unused — g(r) returned here
-    is the total (species-agnostic) radial distribution over all particle pairs.  Species-resolved
-    g_AA / g_AB / g_BB is a separate later concern.
-    """
-    from learndiffeq.particles.callbacks.utils import radial_distribution_function
-    gr = radial_distribution_function(positions, L or L_IPL, num_bins=bins)
-    return gr[:, 0], gr[:, 1]
+    NOTE: we do NOT reuse their `radial_distribution_function` here — for dim>1 it histograms the
+    `gram_torus` DIFFERENCE VECTORS (shape [B, pairs, dim]) component-wise, not the scalar pair
+    distances, which produces an unphysical g(r->0) spike (g~54 at r->0 even on equilibrium data whose
+    minimum pair distance is ~1.0). We compute the standard g(r): scalar minimum-image distances over
+    i<j pairs, histogrammed on [0, L/2], normalized by the ideal-gas shell count
+    B*(N-1)/2 * rho * shell_area so g(r)->1 at large r. (Energy reuse is unaffected — that path is
+    correct and is what the discard/ESS numbers depend on.) `species` is accepted for API stability but
+    unused (total g(r); species-resolved g_AA/g_AB/g_BB is a separate concern)."""
+    L = float(L or L_IPL)
+    B, N, dim = positions.shape
+    iu, ju = torch.triu_indices(N, N, offset=1, device=positions.device)
+    edges = torch.linspace(0.0, L / 2, bins + 1, device=positions.device)
+    H = torch.zeros(bins, device=positions.device)
+    for i in range(0, B, 2048):                                  # chunk: pairwise tensor is O(chunk*N^2)
+        p = positions[i:i + 2048]
+        d = p[:, iu, :] - p[:, ju, :]
+        d = d - L * torch.round(d / L)                           # minimum image
+        dist = (d * d).sum(-1).clamp_min(1e-12).sqrt()
+        H += torch.histc(dist, bins=bins, min=0.0, max=L / 2)
+    shell = math.pi * (edges[1:] ** 2 - edges[:-1] ** 2)         # 2D annulus area per bin
+    rho = N / L ** dim
+    ideal = B * (N - 1) / 2 * rho * shell                        # ideal-gas i<j pair count per shell
+    return 0.5 * (edges[:-1] + edges[1:]), H / ideal
 
 
 def load_ipl_reference(device="cpu"):

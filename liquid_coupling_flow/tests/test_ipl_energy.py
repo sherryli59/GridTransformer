@@ -1,5 +1,5 @@
 import math, torch, pytest
-from liquid_coupling_flow.ipl44.ipl_energy import ipl_box, ipl_energy, load_ipl_reference
+from liquid_coupling_flow.ipl44.ipl_energy import ipl_box, ipl_energy, ipl_gr, load_ipl_reference
 
 
 def test_box_matches_density():
@@ -15,6 +15,21 @@ def test_energy_finite_and_equilibrium_on_reference():
     # equilibrium configs have a tight energy band (low relative spread)
     assert float(U.std() / U.mean().abs()) < 0.2, float(U.std()/U.mean().abs())
     print("reference mean U =", float(U.mean()), " std =", float(U.std()))
+
+
+def test_gr_physical_on_reference():
+    """g(r) must be a real radial distribution: ~0 inside the excluded volume (the data's min pair
+    distance is ~1.0) and ->1 at large r. Guards against histogramming difference-vector components
+    (their RDF bug), which produces an unphysical g(r->0) spike."""
+    pos, sp = load_ipl_reference()
+    N, L = ipl_box()
+    r, g = ipl_gr(pos[:2048], sp[:2048], L, bins=120)
+    assert r.shape == g.shape == (120,)
+    core = g[r < 0.8]                                      # excluded volume: no pairs this close
+    assert float(core.max()) < 0.1, f"unphysical g(r) inside core: max {float(core.max())}"
+    assert float(g.max()) > 1.5, f"missing first-shell peak: max g {float(g.max())}"
+    tail = g[r > L / 2 - 1.0]                              # g(r) -> 1 at large r
+    assert abs(float(tail.mean()) - 1.0) < 0.3, float(tail.mean())
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="no CUDA")

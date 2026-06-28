@@ -68,9 +68,11 @@ def benchmark(n_samples=200000, device="cuda" if torch.cuda.is_available() else 
         axi.plot(np.asarray(r), np.asarray(g), c, lw=lw, label=lab)
     _plot_gr(ax[0], gr_t, "target", "k", 2.4); _plot_gr(ax[0], gr_raw, "ours raw", "C0", 1.4); _plot_gr(ax[0], gr_rw, "ours reweighted", "C3", 1.6)
     ax[0].set_title("g(r)"); ax[0].set_xlabel("r"); ax[0].legend(fontsize=8)
-    # log10(beta*U): raw generated energies span to ~1e36, useless on a linear axis
-    lbt = np.log10(np.clip((beta * U_ref).cpu().numpy(), 1, None))
-    lbg = np.log10(np.clip((beta * U).cpu().numpy(), 1, None))
+    # log10(beta*U): raw generated energies span to ~1e36 (and occasionally inf from exact overlaps),
+    # useless on a linear axis; drop non-finite before the histogram
+    bt = (beta * U_ref).cpu().numpy(); bg = (beta * U).cpu().numpy()
+    lbt = np.log10(np.clip(bt[np.isfinite(bt)], 1, None))
+    lbg = np.log10(np.clip(bg[np.isfinite(bg)], 1, None))
     ax[1].hist(lbt, 60, density=True, alpha=0.55, color="k", label="target")
     ax[1].hist(lbg, 60, density=True, alpha=0.55, color="C3", label="ours")
     ax[1].axvline(np.log10(2 * beta * U_ref_max), color="b", ls="--", lw=1, label="discard thr")

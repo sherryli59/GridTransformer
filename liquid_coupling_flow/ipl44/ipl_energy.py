@@ -77,7 +77,7 @@ def ipl_gr(positions, species, L=None, bins=120):
     shell = math.pi * (edges[1:] ** 2 - edges[:-1] ** 2)         # 2D annulus area per bin
     rho = N / L ** dim
     ideal = B * (N - 1) / 2 * rho * shell                        # ideal-gas i<j pair count per shell
-    return 0.5 * (edges[:-1] + edges[1:]), H / ideal
+    return (0.5 * (edges[:-1] + edges[1:])).cpu(), (H / ideal).cpu()   # CPU for plotting/numpy consumers
 
 
 def load_ipl_reference(device="cpu"):

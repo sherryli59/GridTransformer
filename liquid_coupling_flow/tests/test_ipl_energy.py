@@ -1,5 +1,6 @@
 import math, torch, pytest
-from liquid_coupling_flow.ipl44.ipl_energy import ipl_box, ipl_energy, ipl_gr, load_ipl_reference
+from liquid_coupling_flow.ipl44.ipl_energy import (
+    ipl_box, ipl_energy, ipl_gr, ipl_gr_partials, load_ipl_reference)
 
 
 def test_box_matches_density():
@@ -30,6 +31,20 @@ def test_gr_physical_on_reference():
     assert float(g.max()) > 1.5, f"missing first-shell peak: max g {float(g.max())}"
     tail = g[r > L / 2 - 1.0]                              # g(r) -> 1 at large r
     assert abs(float(tail.mean()) - 1.0) < 0.3, float(tail.mean())
+
+
+def test_gr_partials_species_excluded_volume():
+    """Each partial must have its OWN species excluded-volume onset (sigma_AA=1.0, sigma_AB=1.2,
+    sigma_BB=1.4): g_xx(r) ~ 0 below sigma_xx - 0.2, with a real first peak. This is the structure the
+    total g(r) blends away for a binary mixture."""
+    pos, sp = load_ipl_reference()
+    N, L = ipl_box()
+    r, gAA, gAB, gBB = ipl_gr_partials(pos[:2048], sp[:2048], L, bins=120)
+    for g, sig in [(gAA, 1.0), (gAB, 1.2), (gBB, 1.4)]:
+        assert float(g[r < sig - 0.2].max()) < 0.1, f"core leak at sigma={sig}: {float(g[r < sig - 0.2].max())}"
+        assert float(g.max()) > 2.0, f"missing peak at sigma={sig}: max g {float(g.max())}"
+    # peaks ordered by sigma: AA peak position < AB < BB
+    assert r[gAA.argmax()] < r[gAB.argmax()] < r[gBB.argmax()], "partial peaks not ordered by sigma"
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="no CUDA")

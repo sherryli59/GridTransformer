@@ -62,7 +62,7 @@ def ipl_gr(positions, species, L=None, bins=120):
     i<j pairs, histogrammed on [0, L/2], normalized by the ideal-gas shell count
     B*(N-1)/2 * rho * shell_area so g(r)->1 at large r. (Energy reuse is unaffected — that path is
     correct and is what the discard/ESS numbers depend on.) `species` is accepted for API stability but
-    unused (total g(r); species-resolved g_AA/g_AB/g_BB is a separate concern)."""
+    unused here (total g(r)); for the binary mixture prefer the species-resolved `ipl_gr_partials`."""
     L = float(L or L_IPL)
     B, N, dim = positions.shape
     iu, ju = torch.triu_indices(N, N, offset=1, device=positions.device)
@@ -78,6 +78,41 @@ def ipl_gr(positions, species, L=None, bins=120):
     rho = N / L ** dim
     ideal = B * (N - 1) / 2 * rho * shell                        # ideal-gas i<j pair count per shell
     return (0.5 * (edges[:-1] + edges[1:])).cpu(), (H / ideal).cpu()   # CPU for plotting/numpy consumers
+
+
+def ipl_gr_partials(positions, species, L=None, bins=120):
+    """Species-resolved partial RDFs g_AA, g_AB, g_BB for the binary mixture (species 0=A, 1=B).
+    Returns (r_centers, g_AA, g_AB, g_BB), each shape (bins,), all CPU.
+
+    For a binary mixture the TOTAL g(r) blends three different excluded-volume onsets
+    (sigma_AA=1.0, sigma_AB=1.2, sigma_BB=1.4) into one smeared curve, hiding which species structure
+    a generator breaks. Each partial is normalized to ->1 at large r by its own ideal-gas pair count:
+    like pairs (AA, BB) use B*N_a*(N_a-1)/2 * rho * shell; cross pairs (AB) use B*N_a*N_b * rho * shell."""
+    L = float(L or L_IPL)
+    B, N, dim = positions.shape
+    iu, ju = torch.triu_indices(N, N, offset=1, device=positions.device)
+    edges = torch.linspace(0.0, L / 2, bins + 1, device=positions.device)
+    HAA = torch.zeros(bins, device=positions.device)
+    HAB = torch.zeros(bins, device=positions.device)
+    HBB = torch.zeros(bins, device=positions.device)
+    for i in range(0, B, 2048):
+        p = positions[i:i + 2048]; sq = species[i:i + 2048]
+        d = p[:, iu, :] - p[:, ju, :]
+        d = d - L * torch.round(d / L)
+        dist = (d * d).sum(-1).clamp_min(1e-12).sqrt()           # [b, pairs]
+        si, sj = sq[:, iu], sq[:, ju]
+        aa = (si == 0) & (sj == 0); bb = (si == 1) & (sj == 1); ab = ~aa & ~bb
+        HAA += torch.histc(dist[aa], bins=bins, min=0.0, max=L / 2)
+        HBB += torch.histc(dist[bb], bins=bins, min=0.0, max=L / 2)
+        HAB += torch.histc(dist[ab], bins=bins, min=0.0, max=L / 2)
+    shell = math.pi * (edges[1:] ** 2 - edges[:-1] ** 2)
+    irho = 1.0 / L ** dim                                        # = rho / N
+    NA = int((species[0] == 0).sum()); NB = int((species[0] == 1).sum())
+    gAA = HAA / (B * NA * (NA - 1) / 2 * shell * irho)
+    gBB = HBB / (B * NB * (NB - 1) / 2 * shell * irho)
+    gAB = HAB / (B * NA * NB * shell * irho)
+    rc = 0.5 * (edges[:-1] + edges[1:])
+    return rc.cpu(), gAA.cpu(), gAB.cpu(), gBB.cpu()
 
 
 def load_ipl_reference(device="cpu"):

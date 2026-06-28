@@ -6,7 +6,8 @@ from __future__ import annotations
 import os, torch, numpy as np, matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from liquid_coupling_flow.ipl44.ipl_model import make_ipl_model, ART
-from liquid_coupling_flow.ipl44.ipl_energy import ipl_box, load_ipl_reference, ipl_energy, ipl_gr, BETA_IPL
+from liquid_coupling_flow.ipl44.ipl_energy import (
+    ipl_box, load_ipl_reference, ipl_energy, ipl_gr, ipl_gr_partials, BETA_IPL)
 
 
 @torch.no_grad()
@@ -81,6 +82,23 @@ def benchmark(n_samples=200000, device="cuda" if torch.cuda.is_available() else 
     ax[2].set_title("ESS vs R"); ax[2].set_xlabel("R (samples)"); ax[2].set_ylabel("ESS"); ax[2].legend(fontsize=8)
     fig.suptitle(f"AR +A curve-flow vs eRSI, N=44 IPL T=0.1 (discard {discard:.2f}, {ck['n_params']/1e3:.0f}k params)", fontsize=13)
     fig.tight_layout(); p = os.path.join(ART, "ipl44_benchmark.png"); fig.savefig(p, dpi=120); print("saved", p, flush=True)
+    plt.close(fig)
+
+    # species-resolved partials (the structural observable for a binary mixture; total g(r) blends them)
+    ns = min(16384, n_samples)
+    rt, tAA, tAB, tBB = ipl_gr_partials(ref_pos[:ns], ref_sp[:ns], L)
+    _, gAA, gAB, gBB = ipl_gr_partials(x[:ns], s[:ns], L)
+    figs, axs = plt.subplots(1, 3, figsize=(18, 5))
+    for axi, nm, t, g, sig in [(axs[0], "AA", tAA, gAA, 1.0), (axs[1], "AB", tAB, gAB, 1.2),
+                               (axs[2], "BB", tBB, gBB, 1.4)]:
+        axi.plot(rt, t, "k", lw=2.2, label="target"); axi.plot(rt, g, "C3", lw=1.6, label="ours raw")
+        axi.axhline(1, color="gray", ls=":", lw=1); axi.axvline(sig, color="gray", ls=":", lw=1)
+        axi.set_title(f"g_{nm}(r)  (sigma_{nm}={sig})"); axi.set_xlabel("r"); axi.set_xlim(0, L / 2); axi.legend(fontsize=9)
+    axs[0].set_ylabel("g(r)")
+    figs.suptitle("Species-resolved g(r): AR generator vs target (N=44 IPL) — BB excluded volume filled worst", fontsize=13)
+    figs.tight_layout(); ps = os.path.join(ART, "ipl44_gr_species.png"); figs.savefig(ps, dpi=120)
+    print("saved", ps, flush=True); plt.close(figs)
+    out["gr_BB_peak"] = (float(tBB.max()), float(gBB.max()))               # target vs gen BB first-peak height
     return out
 
 

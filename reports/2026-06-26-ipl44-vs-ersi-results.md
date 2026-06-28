@@ -75,13 +75,29 @@ dimensionless.)
 **broken g(r) function**, see §5 caveat 3. The corrected g(r), computed from scalar minimum-image pair
 distances, shows the generator does **not** reproduce the target structure.)
 
-Reading the corrected g(r) (figure, left panel):
+Reading the corrected total g(r) (`ipl44_benchmark_clean.png`, left panel):
 - **Excluded volume is violated.** The target has g(r)=0 for r<1.0 (no pairs closer than σ); the generator
   puts **spurious weight in the core** (integrated g(r<0.9) mass ≈ **1.77** vs target **0.00**) — these are
   the overlaps (nearest-neighbour distance median **0.586** vs target **1.10**).
 - **The shells are under-developed.** First peak **1.87 @ r≈1.43** vs target **2.47 @ r≈1.43**; the first
   minimum is too shallow (≈0.68 vs 0.40) and the higher shells are washed out. Peak *positions* are right,
   but the structure is **smeared**.
+
+**Species-resolved partials are the right observable (`ipl44_gr_species.png`) — the total g(r) blends three
+different excluded-volume onsets (σ_AA=1.0, σ_AB=1.2, σ_BB=1.4) and hides the real structure.** The partials
+expose both how sharp the target is and that the failure **scales with excluded-volume size**:
+
+| partial | σ | target peak | gen peak | target core mass | **gen core mass** |
+|---|---|---|---|---|---|
+| g_AA | 1.0 | 4.25 @ 1.19 | 2.23 @ 1.27 | 0.00 | 1.82 |
+| g_AB | 1.2 | 4.08 @ 1.43 | 2.04 @ 1.47 | 0.00 | 2.28 |
+| g_BB | 1.4 | 4.28 @ 1.62 | 2.24 @ 1.58 | 0.00 | **2.90** |
+
+The target partials each peak at **~4.2** (the total's 2.47 is the smeared blend); the generator under-develops
+**every** partial by ~2× and fills **every** excluded-volume core, **monotonically worse as σ grows**
+(AA 1.82 → AB 2.28 → **BB 2.90**). **g_BB — the larger, more-caged B species — is the worst**, the same
+`gbb-persistently-wrong` signature seen in the KA work: the bigger the hole the causal AR generator must keep
+open, the more its broad conditional fills it.
 
 The core overlaps are the fatal contacts: under r⁻¹²×β=10 even a handful per config drive βU to ~10⁴–10¹⁶,
 so 98.7% are discarded. This is the **causal-AR half-cage / core-fill limitation**: the model's *density* is
@@ -125,9 +141,10 @@ which is **out of scope** here (spec §8) and the natural follow-on.
 
 - Corrected checkpoint: `liquid_coupling_flow/ipl44/data/ipl44_curveflow.pt` (gitignored; tail_bound 2.75,
   arc_range 2.75, knn 16, n_B 22, 1000 epochs, 5.54M params).
-- Benchmark figure (committed code output): `data/ipl44_benchmark.png`; **clean report figure**
-  (corrected g(r) target vs raw, log10(βU) energy, ESS-vs-R): `data/ipl44_benchmark_clean.png`. A standalone
-  corrected g(r) is at `data/ipl44_gr_correct.png`.
+- Benchmark figures (committed code output): `data/ipl44_benchmark.png` (total g(r) / log-βU energy /
+  ESS-vs-R) and **`data/ipl44_gr_species.png`** (species-resolved g_AA/g_AB/g_BB — the structural observable
+  for the binary mixture). **Clean report figure**: `data/ipl44_benchmark_clean.png`. Standalone corrected
+  total g(r): `data/ipl44_gr_correct.png`.
 - Code: `ipl44/ipl_energy.py` (energy/g(r)/data adapters), `ipl44/ipl_model.py` (model + trainer +
   support-coverage gate), `ipl44/ipl_benchmark.py` (discard/ESS/reweighted + figure). Diagnostics in the
   session scratchpad (`ipl_diag*.py`, `ipl_fig_clean.py`).

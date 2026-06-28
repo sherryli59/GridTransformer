@@ -9,19 +9,37 @@
 
 ## 1. What was tested
 
-Head-to-head on the paper's **N=44 IPL** system, *same energy + observables in/out, only the generator
-differs*: our **autoregressive +A curve-flow transformer** (`KACurveFlowModel`, exact likelihood) vs the
-paper's published **eRSI**. The fairness lever is that the energy (`SoftSphere.U`), the radial distribution,
-and the equilibrium data are **theirs, reused unmodified** (vendored read-only in `ipl44/learndiffeq/`); we
-only swap the generator. The contribution under test is **importance-sampling efficiency**: how much IS does
-the AR generator need (discard fraction, ESS), and do the reweighted observables match.
+On the paper's **N=44 IPL** system: our **autoregressive +A curve-flow transformer** (`KACurveFlowModel`,
+exact likelihood) measured against the paper's **published eRSI numbers**. We reuse their energy
+(`SoftSphere.U`) and equilibrium data unmodified (vendored read-only in `ipl44/learndiffeq/`). The contribution
+under test is **importance-sampling efficiency**: how much IS does the AR generator need (discard fraction,
+ESS), and do the reweighted observables match.
+
+> **Reproduction scope (read this before reading "vs eRSI").** We did **NOT run or reproduce eRSI.** There is
+> no released eRSI checkpoint; the eRSI/eFM/RSI numbers are taken from the paper. Concretely:
+> - **ESS — like-for-like.** Their `particles/callbacks/ess.py` computes `ess = 1/Σ softmax(−βU−logq)²`,
+>   **identical** to our benchmark (verified line-by-line, same energy). So our ESS≈1 sits on the same scale
+>   as their published ESS — only their *generator* was not re-run.
+> - **Discard fraction — our operationalization, not theirs.** Their released code contains **no** discard
+>   definition; "energy > 2×U_ref,max" is ours. The 0.987-vs-0.03 gap is far too large to plausibly flip, but
+>   the precise number is not strictly comparable to their paper's.
+> - **Budget not matched to theirs either.** Their IPL-44 run (README) is **1250 epochs at batch 256** with an
+>   equivariant EGNN; ours is 1000 epochs at batch 128 with a 5.54M-param transformer. Not an
+>   optimizer-step-matched comparison.
+> - **eRSI is reproducible** via `experiments/training_rfm.py` (`--training_algo rfm --velocity_type
+>   particles_equivariant`) — a separate multi-hour training we have not run. A true head-to-head would run
+>   their model through this same pipeline.
+>
+> **What does not depend on any of this:** our generator's failure is *absolute* — ESS = **1 / 200 000**, and
+> **0%** of generated configs fall in the reference energy band. eRSI only supplies the contrast.
 
 **System (matched exactly):** 2D, N=44, 50:50 binary (22/22), inverse-power-law r⁻¹² (BHHP soft-sphere,
 purely repulsive), σ=[[1.0,1.2],[1.2,1.4]], ε=1, cutoff 2.5σ shifted to 0; **ρ=0.5 → L=√88≈9.38**, **T=0.1
 (β=10)**. Energy-match gate: reference ⟨U⟩=14.71 (std 0.64), finite, tight — passed.
 
-**Matched budget:** 1000 epochs (= 78 125 steps at B=128 over the M=10⁴ released configs), matching eRSI's
-1000 epochs. **Parameter count: 5.54M** — see the capacity caveat in §5.
+**Our training budget:** 1000 epochs (= 78 125 steps at B=128 over the M=10⁴ released configs). **Parameter
+count: 5.54M.** (eRSI's IPL-44 run was 1250 epochs at B=256 with an equivariant EGNN — *not* step-matched to
+ours; see the reproduction-scope note above and the capacity caveat in §5.)
 
 ## 2. ⚠️ A data bug was found and fixed first (do not skip)
 

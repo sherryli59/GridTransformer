@@ -19,33 +19,50 @@ def cluster_slots(seed, sc, k, L):
     return torch.cat([seed_t, idx[idx != seed]])[:k]                 # ensure seed first, exactly k
 
 
-def cluster_frame(pos, cluster_idx, sc, L, cutoff=2.4):
-    """Equivariant frame from x_R ONLY (never x_C). origin = centroid (min-image) of NON-cluster particles
-    within `cutoff` of the cluster scaffold centroid; R[2,2] (rows = frame axes) = principal axis of those
-    neighbours' relative positions, with an x_R-only SKEWNESS sign rule (the first moment is 0 after centring,
-    so orient by the third moment along the axis -> nonzero generically, rotation-invariant -> equivariant).
-    Frame->lab is rigid (rotation+translation) -> Jacobian 1, IFF this is x_C-independent (test enforces it)."""
-    dev = pos.device; N = pos.shape[0]
-    mask = torch.ones(N, dtype=torch.bool, device=dev); mask[cluster_idx] = False    # x_R = non-cluster
-    sc_c = sc[cluster_idx].to(pos.dtype).mean(0)                                      # cluster scaffold centroid (FIXED)
-    dR = _wrap_pm(pos[mask] - sc_c[None], L); near = (dR ** 2).sum(-1) <= cutoff ** 2
-    rel = dR[near]                                                                    # x_R neighbours rel to sc_c
-    if rel.shape[0] < 2:                                                              # degenerate -> axis-aligned frame
-        return torch.remainder(sc_c, L), torch.eye(2, device=dev, dtype=pos.dtype)
-    origin = torch.remainder(sc_c + rel.mean(0), L)
-    c = rel - rel.mean(0); cov = (c.T @ c) / c.shape[0]                               # 2x2 inertia of x_R neighbours
-    _, evecs = torch.linalg.eigh(cov); axis = evecs[:, -1]                            # larger-eigenvalue eigenvector
-    proj = c @ axis
-    if (proj ** 3).sum() < 0: axis = -axis                                            # x_R-only skewness sign rule
-    perp = torch.stack([-axis[1], axis[0]]); R = torch.stack([axis, perp], 0)         # rows = frame axes
+def frame_ctx_slots(cluster_idx, sc, L, n_ctx=16):
+    """The fixed x_R context-slot set defining the frame: the n_ctx nearest scaffold slots to the cluster
+    scaffold centroid, EXCLUDING the cluster slots. A function of (cluster_idx, sc) ONLY -> config-independent
+    -> guarantees x_C-independence of the frame, and is shared across a batch of chains."""
+    sc_c = sc[cluster_idx].to(sc.dtype).mean(0)
+    dsc = (_wrap_pm(sc - sc_c[None], L) ** 2).sum(-1)
+    dsc = dsc.clone(); dsc[cluster_idx] = float("inf")                                # exclude cluster slots
+    return dsc.topk(n_ctx, largest=False).indices                                    # [n_ctx] fixed x_R slots
+
+
+def frame_from_positions(ctx_pos, sc_c, L):
+    """Equivariant frame from the context neighbours' positions ONLY. ctx_pos [...,M,2] (leading batch dims
+    allowed), sc_c [2] the (fixed) cluster scaffold centroid. origin = sc_c + min-image neighbour mean;
+    R [...,2,2] (rows = frame axes) = principal axis of the neighbours' relative positions with an x_R-only
+    SKEWNESS sign rule (first moment is 0 after centring; orient by the third moment -> rotation-invariant).
+    Frame->lab is rigid -> Jacobian 1, IFF ctx_pos is x_R-only (frame_ctx_slots guarantees it)."""
+    rel = _wrap_pm(ctx_pos - sc_c, L)                                                 # [...,M,2] rel to sc_c
+    mu = rel.mean(-2)                                                                 # [...,2]
+    origin = torch.remainder(sc_c + mu, L)
+    c = rel - mu[..., None, :]                                                        # [...,M,2] centred
+    cov = (c.transpose(-1, -2) @ c) / c.shape[-2]                                     # [...,2,2]
+    _, evecs = torch.linalg.eigh(cov)                                                 # ascending evals
+    axis = evecs[..., :, -1]                                                          # [...,2] principal axis
+    proj = (c * axis[..., None, :]).sum(-1)                                           # [...,M]
+    sign = torch.where((proj ** 3).sum(-1, keepdim=True) < 0, -1.0, 1.0)             # x_R-only skewness sign
+    axis = axis * sign
+    perp = torch.stack([-axis[..., 1], axis[..., 0]], -1)                             # [...,2]
+    R = torch.stack([axis, perp], -2)                                                 # [...,2,2] rows = axes
     return origin, R
 
 
+def cluster_frame(pos, cluster_idx, sc, L, n_ctx=16):
+    """Convenience: frame from `pos` (shape [N,2] or [B,N,2]) using the fixed scaffold context slots.
+    Returns (origin, R) with leading batch dims matching `pos` (origin [...,2], R [...,2,2])."""
+    slots = frame_ctx_slots(cluster_idx, sc, L, n_ctx)
+    sc_c = sc[cluster_idx].to(pos.dtype).mean(0)
+    return frame_from_positions(pos[..., slots, :], sc_c, L)
+
+
 def to_frame(x, origin, R, L):
-    """Lab -> frame: min-image relative to origin, then rotate into the frame. Rigid."""
-    return _wrap_pm(x - origin[None], L) @ R.T
+    """Lab -> frame: min-image relative to origin, then rotate into the frame. Rigid. x [...,k,2]."""
+    return torch.einsum("...kj,...ij->...ki", _wrap_pm(x - origin[..., None, :], L), R)
 
 
 def from_frame(u, origin, R, L):
-    """Frame -> lab (inverse of to_frame), wrapped to the torus."""
-    return torch.remainder(u @ R + origin[None], L)
+    """Frame -> lab (inverse of to_frame), wrapped to the torus. u [...,k,2]."""
+    return torch.remainder(torch.einsum("...ki,...ij->...kj", u, R) + origin[..., None, :], L)

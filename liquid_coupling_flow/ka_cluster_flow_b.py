@@ -19,16 +19,12 @@ def sample_base(q_scaf, sigma_b, gen=None):                  # [B,k,2]
 
 
 @torch.no_grad()
-def compute_sigma_b(data, s, geo, sc, L, k, n_ctx=16):
-    """Isotropic std of the min-imaged in-frame displacement (true cluster pos - scaffold anchor) over the
-    reference + a stride of seeds. This is the FIXED base width."""
+def compute_sigma_b(data, s, geo, sc, L, k):
+    """Isotropic std of each cluster particle's min-imaged LAB displacement from its own scaffold slot. This is
+    the FIXED base width (rotation-invariant, so no frame needed). Expected ~0.747 on ka_reference_N100."""
     from liquid_coupling_flow.ka_gridformer import _wrap_pm
     N = data.shape[1]; pos0, _ = slot_order(data, s, geo, N); disp = []
     for seed in range(0, N, 3):
         cl = KC.cluster_slots(seed, sc, k, L)
-        slots = KC.frame_ctx_slots(cl, sc, L, n_ctx); sc_c = KC.cluster_scaffold_center(cl, sc, L).to(pos0.dtype)
-        o, R = KC.frame_from_positions(pos0[:, slots, :], sc_c, L)
-        u_true = KC.to_frame(pos0[:, cl], o, R, L)
-        q_scaf = KC.to_frame(sc[cl].to(pos0.dtype)[None].expand(pos0.shape[0], -1, -1), o, R, L)
-        disp.append(_wrap_pm(u_true - q_scaf, L).reshape(-1, 2))
+        disp.append(_wrap_pm(pos0[:, cl] - sc[cl][None], L).reshape(-1, 2))
     return float(torch.cat(disp, 0).std().item())

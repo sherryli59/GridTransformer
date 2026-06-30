@@ -126,8 +126,8 @@ def slot_order(pos, s, geo, N):
     return pos_ord, s_ord
 
 
-def train(steps=15000, k=7, n_bins=24, box=3.0, n_ctx=16, lr=3e-4, train_N=100,
-          device="cuda" if torch.cuda.is_available() else "cpu"):
+def train(steps=15000, k=7, n_bins=24, box=3.0, n_ctx=16, d_model=128, n_head=4, n_layer=3, lr=3e-4,
+          train_N=100, device="cuda" if torch.cuda.is_available() else "cpu"):
     """Conditional MLE: maximize log q(true cluster | true surroundings) over random slot-clusters on the
     reference. A random seed slot per step (shared across the B configs); covers all clusters over training."""
     import time
@@ -135,12 +135,15 @@ def train(steps=15000, k=7, n_bins=24, box=3.0, n_ctx=16, lr=3e-4, train_N=100,
     ref = torch.load(os.path.join(ART, f"ka_reference_N{train_N}.pt"), map_location=device, weights_only=False)
     data, s = ref["x"].to(device), ref["s"].to(device).long(); N = data.shape[1]
     sc, L, geo = _scaffold(N, device)
-    P = ClusterProposal(rho=1.2, n_bins=n_bins, box=box, n_ctx=n_ctx).to(device).train()
+    P = ClusterProposal(rho=1.2, n_bins=n_bins, box=box, n_ctx=n_ctx, d_model=d_model, n_head=n_head,
+                        n_layer=n_layer).to(device).train()
+    arch = {"n_bins": n_bins, "box": box, "n_ctx": n_ctx, "d_model": d_model, "n_head": n_head, "n_layer": n_layer}
     opt = torch.optim.AdamW(P.parameters(), lr=lr, weight_decay=1e-4); B, t0 = 128, time.time()
     warm = 400
     sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda st: min((st + 1) / warm,
         0.5 + 0.5 * math.cos(math.pi * max(0, st - warm) / max(1, steps - warm))))
-    print(f"CLUSTER GENERATOR train @N={train_N}, {steps} steps, k={k}, n_bins={n_bins}, box={box}", flush=True)
+    nparam = sum(p.numel() for p in P.parameters())
+    print(f"CLUSTER GENERATOR train @N={train_N}, {steps} steps, k={k}, {arch}, params {nparam/1e6:.2f}M", flush=True)
     for step in range(steps):
         idx = torch.randint(0, data.shape[0], (B,), device=device)
         pos, s_ord = slot_order(augment(data[idx], L), s, geo, N)                    # curve-order -> slot order
@@ -151,11 +154,20 @@ def train(steps=15000, k=7, n_bins=24, box=3.0, n_ctx=16, lr=3e-4, train_N=100,
         if step % 1000 == 0:
             print(f"  step {step:5d} -logq/k {loss.item():.3f} lr {sched.get_last_lr()[0]:.1e} {time.time()-t0:.0f}s", flush=True)
         if (step + 1) % max(1, steps // 3) == 0:
-            torch.save({"state_dict": P.state_dict(), "k": k, "n_bins": n_bins, "box": box, "n_ctx": n_ctx,
-                        "step": step + 1}, os.path.join(ART, f"ka_cluster_flow_N{train_N}.pt"))
-    torch.save({"state_dict": P.state_dict(), "k": k, "n_bins": n_bins, "box": box, "n_ctx": n_ctx, "step": steps},
+            torch.save({"state_dict": P.state_dict(), "k": k, "step": step + 1, **arch},
+                       os.path.join(ART, f"ka_cluster_flow_N{train_N}.pt"))
+    torch.save({"state_dict": P.state_dict(), "k": k, "step": steps, **arch},
                os.path.join(ART, f"ka_cluster_flow_N{train_N}.pt"))
     print(f"saved ka_cluster_flow_N{train_N}.pt", flush=True)
+
+
+def _load(ck, device):
+    """Rebuild a ClusterProposal from a checkpoint dict (back-compatible: pre-sharpening ckpts lack the width
+    keys -> fall back to the original 128/4/3)."""
+    P = ClusterProposal(rho=1.2, n_bins=ck["n_bins"], box=ck["box"], n_ctx=ck["n_ctx"],
+                        d_model=ck.get("d_model", 128), n_head=ck.get("n_head", 4),
+                        n_layer=ck.get("n_layer", 3)).to(device).eval()
+    P.load_state_dict(ck["state_dict"]); return P
 
 
 @torch.no_grad()
@@ -176,8 +188,7 @@ def gr_gate(train_N=100, k=7, device="cuda" if torch.cuda.is_available() else "c
     s = ref["s"].to(device).long(); N = ref["x"].shape[1]
     sc, L, geo = _scaffold(N, device)
     ck = torch.load(os.path.join(ART, f"ka_cluster_flow_N{train_N}.pt"), map_location=device, weights_only=False)
-    P = ClusterProposal(rho=1.2, n_bins=ck["n_bins"], box=ck["box"], n_ctx=ck["n_ctx"]).to(device).eval()
-    P.load_state_dict(ck["state_dict"])
+    P = _load(ck, device)
     pos0, sso = slot_order(ref["x"][:B].to(device), s, geo, N)                       # slot-ordered reference
     g = torch.Generator(device=device).manual_seed(0)
     # (3.3a) one-step true-cage: resample each particle as a seed given the TRUE config
@@ -204,10 +215,73 @@ def gr_gate(train_N=100, k=7, device="cuda" if torch.cuda.is_available() else "c
     print("saved", out, flush=True)
 
 
+@torch.no_grad()
+def diag(train_N=100, k=7, device="cuda" if torch.cuda.is_available() else "cpu", B=128):
+    """The FAITHFUL, co-placement-free gate check (decisive): resample ONE cluster given the TRUE surroundings
+    (rest pinned) -> the resampled cluster's clashes vs the true cluster's; plus the seed's placement spread /
+    distance-to-true / P(true bin). If clashes ~ true and spread << nn-dist -> the conditional sharpened. Saves
+    a 2-panel figure (g_BB self-consistent + clean min-r histogram)."""
+    import numpy as np, matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
+    from liquid_coupling_flow.ka_observables import partial_gr
+    ref = torch.load(os.path.join(ART, f"ka_reference_N{train_N}.pt"), map_location=device, weights_only=False)
+    s = ref["s"].to(device).long(); N = ref["x"].shape[1]
+    sc, L, geo = _scaffold(N, device)
+    ck = torch.load(os.path.join(ART, f"ka_cluster_flow_N{train_N}.pt"), map_location=device, weights_only=False)
+    P = _load(ck, device); pos0, sso = slot_order(ref["x"][:B].to(device), s, geo, N)
+    arch = {kk: ck.get(kk) for kk in ("n_bins", "box", "n_ctx", "d_model", "n_head", "n_layer", "step")}
+    print(f"DIAG ckpt {arch} bin_w {2*ck['box']/ck['n_bins']:.3f}", flush=True)
+
+    def cluster_minr(pos, cl):
+        d = pos[:, cl][:, :, None, :] - pos[:, None, :, :]; d = d - L * torch.round(d / L); r = (d ** 2).sum(-1).sqrt()
+        r[:, :, cl] = r[:, :, cl] + torch.eye(k, device=device)[None] * 1e3
+        return r.min(-1).values.reshape(-1)
+
+    rt, rn = [], []
+    for seed in range(0, N, 7):                                                       # single-cluster, no co-placement
+        cl = KC.cluster_slots(seed, sc, k, L); xC, _ = P.sample(pos0, sso, cl, sc, L)
+        new = pos0.clone(); new[:, cl] = xC
+        rt.append(cluster_minr(pos0, cl).cpu()); rn.append(cluster_minr(new, cl).cpu())
+    rt = torch.cat(rt).numpy(); rn = torch.cat(rn).numpy()
+    # seed-only placement (i=0, best context, no exposure bias)
+    for seed in (5, 20):
+        cl = KC.cluster_slots(seed, sc, k, L); o, R, ctx_tok, q_scaf = P._ctx_tokens(pos0, sso, cl, sc, L)
+        ctx = P._step_ctx(q_scaf[:, 0], 0, ctx_tok, None); la = F.log_softmax(P.head_a(ctx), -1)
+        u_true = KC.to_frame(pos0[:, cl], o, R, L)[:, 0]; ptrue = la.exp().gather(1, P._bin(u_true[:, 0]).clamp(0)[:, None]).squeeze(1)
+        su = torch.stack([KC.to_frame(P.sample(pos0, sso, cl, sc, L)[0], o, R, L)[:, 0] for _ in range(5)], 0)
+        print(f"  seed {seed}: P(true bin_a) {ptrue.mean():.3f} (unif {1/ck['n_bins']:.3f})  spread {su.std(0).norm(-1).mean():.2f}"
+              f"  |mean-true| {(su.mean(0)-u_true).norm(-1).mean():.2f} (nn~0.9)", flush=True)
+    # 3.3b self-consistent g_BB
+    cur = pos0.clone(); g = torch.Generator(device=device).manual_seed(0)
+    for _ in range(3):
+        for seed in torch.randperm(N, generator=g, device=device).tolist():
+            cl = KC.cluster_slots(seed, sc, k, L); cur[:, cl] = P.sample(cur, sso, cl, sc, L)[0]
+    rcd, gcd = partial_gr(pos0, sso, L, 4.0, 60, (1, 1)); rci, gci = partial_gr(cur, sso, L, 4.0, 60, (1, 1))
+    print(f"  CLEAN single-cluster: TRUE clash<0.7 {(rt<0.7).mean()*100:.1f}% (mean {rt.mean():.2f}) | "
+          f"RESAMPLED clash<0.7 {(rn<0.7).mean()*100:.1f}% (mean {rn.mean():.2f})", flush=True)
+    print(f"  g_BB peak: data {np.asarray(gcd).max():.2f}  generated(3.3b) {np.asarray(gci).max():.2f}", flush=True)
+    fig, (a1, a2) = plt.subplots(1, 2, figsize=(11, 4.3))
+    a1.plot(np.asarray(rcd), np.asarray(gcd), lw=2.5, label="data")
+    a1.plot(np.asarray(rci), np.asarray(gci), lw=1.8, label="generated (3.3b self-consistent)")
+    a1.axhline(1.4, color="grey", ls=":", lw=1); a1.set_xlabel("r"); a1.set_ylabel("g_BB(r)"); a1.legend()
+    a1.set_title("Structure: generated g_BB vs data")
+    a2.hist(rt, bins=40, range=(0, 1.6), density=True, alpha=0.6, label=f"TRUE ({(rt<0.7).mean()*100:.0f}% <0.7)")
+    a2.hist(rn, bins=40, range=(0, 1.6), density=True, alpha=0.6, label=f"resampled ({(rn<0.7).mean()*100:.0f}% <0.7)")
+    a2.axvline(0.7, color="k", ls=":", lw=1); a2.axvline(0.88, color="grey", ls="--", lw=1, label="sigma_BB=0.88")
+    a2.set_xlabel("min neighbour distance"); a2.set_ylabel("density"); a2.legend(fontsize=8)
+    a2.set_title("Clean overlap (single-cluster, no co-placement)")
+    out = os.path.join(ART, f"ka_cluster_gr_gate_N{train_N}.png"); fig.tight_layout(); fig.savefig(out, dpi=120)
+    print("saved", out, flush=True)
+
+
 if __name__ == "__main__":
     import sys
-    if len(sys.argv) > 1 and sys.argv[1] == "gate":
+    mode = sys.argv[1] if len(sys.argv) > 1 else ""
+    if mode == "gate":
         gr_gate()
+    elif mode == "diag":
+        diag()
+    elif mode == "sharp":                                                             # finer bins + bigger ctx/model + longer
+        train(steps=40000, k=7, n_bins=64, box=3.0, n_ctx=32, d_model=192, n_head=6, n_layer=4)
     else:
         train(steps=int(sys.argv[1]) if len(sys.argv) > 1 else 15000,
               k=int(sys.argv[2]) if len(sys.argv) > 2 else 7)

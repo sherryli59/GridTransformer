@@ -204,7 +204,7 @@ def load_flow(ck, device):
 
 
 def train(steps=20000, k=7, train_N=100, num_bins=8, n_cycles=4, n_ctx=32, box=4.0, tail_bound=4.0,
-          d_model=192, n_head=6, n_layer=4, lr=3e-4, save=True,
+          d_model=192, n_head=6, n_layer=4, lr=3e-4, save=True, batch=128, ckpt_every=2000,
           device="cuda" if torch.cuda.is_available() else "cpu"):
     import time
     from liquid_coupling_flow.ka_gridformer_train import augment
@@ -215,13 +215,19 @@ def train(steps=20000, k=7, train_N=100, num_bins=8, n_cycles=4, n_ctx=32, box=4
     arch = dict(num_bins=num_bins, n_cycles=n_cycles, n_ctx=n_ctx, box=box, tail_bound=tail_bound,
                 d_model=d_model, n_head=n_head, n_layer=n_layer)
     P = ClusterFlow(sigma_b=sigma_b, **arch).to(device).train()
-    opt = torch.optim.AdamW(P.parameters(), lr=lr, weight_decay=1e-4); Bsz = 128
+    opt = torch.optim.AdamW(P.parameters(), lr=lr, weight_decay=1e-4); Bsz = batch
     warm = 400
     sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda st: min((st + 1) / warm,
         0.5 + 0.5 * math.cos(math.pi * max(0, st - warm) / max(1, steps - warm))))
-    print(f"CLUSTERFLOW train N={train_N} steps={steps} k={k} sigma_b={sigma_b:.3f} {arch} "
+    print(f"CLUSTERFLOW train N={train_N} steps={steps} k={k} batch={Bsz} sigma_b={sigma_b:.3f} {arch} "
           f"params {sum(p.numel() for p in P.parameters())/1e6:.2f}M", flush=True)
+    ckpt_path = os.path.join(ART, f"ka_cluster_flow_b_N{train_N}.pt")
     loss_first = None; t0 = time.time()
+
+    def _save(st):
+        torch.save({"state_dict": P.state_dict(), "k": k, "sigma_b": sigma_b, "step": st,
+                    "loss_first": loss_first, "loss_last": loss.item(), **arch}, ckpt_path)
+
     for step in range(steps):
         idx = torch.randint(0, data.shape[0], (Bsz,), device=device)
         pos, s_ord = slot_order(augment(data[idx], L), s, geo, N)
@@ -231,10 +237,12 @@ def train(steps=20000, k=7, train_N=100, num_bins=8, n_cycles=4, n_ctx=32, box=4
         if loss_first is None: loss_first = loss.item()
         if step % 1000 == 0:
             print(f"  step {step:5d} -logq/k {loss.item():.3f} {time.time()-t0:.0f}s", flush=True)
+        if save and (step + 1) % ckpt_every == 0:                                    # frequent ckpt: survive teardown
+            _save(step + 1); print(f"  [ckpt @ {step+1}]", flush=True)
     ck = {"state_dict": P.state_dict(), "k": k, "sigma_b": sigma_b, "step": steps,
           "loss_first": loss_first, "loss_last": loss.item(), **arch}
     if save:
-        torch.save(ck, os.path.join(ART, f"ka_cluster_flow_b_N{train_N}.pt"))
+        torch.save(ck, ckpt_path)
         print(f"saved ka_cluster_flow_b_N{train_N}.pt", flush=True)
     return ck
 
@@ -257,4 +265,5 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "gate":
         gate()
     else:
-        train(steps=int(sys.argv[1]) if len(sys.argv) > 1 else 20000)
+        train(steps=int(sys.argv[1]) if len(sys.argv) > 1 else 20000,
+              batch=int(sys.argv[2]) if len(sys.argv) > 2 else 128)

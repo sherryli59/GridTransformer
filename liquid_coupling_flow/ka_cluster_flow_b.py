@@ -82,28 +82,18 @@ class ClusterConditioner(nn.Module):
         loc_all = torch.cat([u_f[:, :, loc], u_ctx_f[:, :, loc]], 1)             # [B,M]
         d = (loc_all[:, :, None] - loc_all[:, None, :]).abs()                     # [B,M,M]
         s_all = torch.cat([sp_cl, sp_ctx], 1)                                     # [B,M]
-        # Disable TF32 so the attention/matmul results are reproducible across forward and inverse
-        # passes (TF32 introduces ~1e-3 non-determinism that accumulates over n_cycles*4 blocks).
-        old_mm = torch.backends.cuda.matmul.allow_tf32
-        old_nn = torch.backends.cudnn.allow_tf32
-        torch.backends.cuda.matmul.allow_tf32 = False
-        torch.backends.cudnn.allow_tf32 = False
-        try:
-            # token features for cluster then x_R
-            feat_cl = self._featpos(u_m); feat_ctx = self._featpos(u_ctx_f)
-            tok_cl = self.enc(feat_cl) + self.sp_emb(sp_cl)
-            tok_ctx = self.enc(feat_ctx) + self.sp_emb(sp_ctx) + self.role_emb.weight[0]
-            role_cl = torch.where(amask_cl, 2, 1)                                 # [k]
-            tok_cl = tok_cl + self.role_emb(role_cl)[None]
-            tok = torch.cat([tok_cl, tok_ctx], 1) + self.block_emb.weight[b]     # [B,M,d], M=k+nctx
-            bias = self.edge_bias(d, s_all)
-            h = tok
-            for layer in self.layers:
-                h = layer(h, bias)
-            return self.heads[b](h[:, :k][:, amask_cl]).to(dtype)                # [B,Na,P] in target dtype
-        finally:
-            torch.backends.cuda.matmul.allow_tf32 = old_mm
-            torch.backends.cudnn.allow_tf32 = old_nn
+        # token features for cluster then x_R
+        feat_cl = self._featpos(u_m); feat_ctx = self._featpos(u_ctx_f)
+        tok_cl = self.enc(feat_cl) + self.sp_emb(sp_cl)
+        tok_ctx = self.enc(feat_ctx) + self.sp_emb(sp_ctx) + self.role_emb.weight[0]
+        role_cl = torch.where(amask_cl, 2, 1)                                     # [k]
+        tok_cl = tok_cl + self.role_emb(role_cl)[None]
+        tok = torch.cat([tok_cl, tok_ctx], 1) + self.block_emb.weight[b]         # [B,M,d], M=k+nctx
+        bias = self.edge_bias(d, s_all)
+        h = tok
+        for layer in self.layers:
+            h = layer(h, bias)
+        return self.heads[b](h[:, :k][:, amask_cl]).to(dtype)                    # [B,Na,P] in target dtype
 
 
 from liquid_coupling_flow.transforms_spline import RQSplineElementwise
@@ -142,8 +132,14 @@ class ClusterFlow(nn.Module):
 
     def _z_to_u(self, z, u_ctx, sp_cl, sp_ctx, tail_bound):
         """Base z [B,k,2] -> cluster in-frame u, accumulating forward log-det (sum over active coords/blocks)."""
-        u = z.clone(); ld = torch.zeros(u.shape[0], device=u.device)
+        u = z.clone(); ld = u.new_zeros(u.shape[0])
         old_tb = self.spline.tail_bound; self.spline.tail_bound = tail_bound
+        # Disable TF32 once per pass (not per block) so params are reproducible across forward/inverse.
+        # TF32 introduces ~1e-3 non-determinism that accumulates over n_cycles*4 blocks.
+        old_mm = torch.backends.cuda.matmul.allow_tf32
+        old_nn = torch.backends.cudnn.allow_tf32
+        torch.backends.cuda.matmul.allow_tf32 = False
+        torch.backends.cudnn.allow_tf32 = False
         try:
             for b in range(len(self.cond.meta)):
                 par, c = self.cond.meta[b]; am = self._amask(u.shape[1], par, u.device)
@@ -152,15 +148,24 @@ class ClusterFlow(nn.Module):
                 u = u.clone(); u[:, am, c] = y; ld = ld + d.sum(-1)
         finally:
             self.spline.tail_bound = old_tb
+            torch.backends.cuda.matmul.allow_tf32 = old_mm
+            torch.backends.cudnn.allow_tf32 = old_nn
         return u, ld
 
     def _x_to_z(self, pos, s, cluster_idx, xC_query, sc, L):
-        """Cluster lab xC_query -> base z (flow inverse), accumulating inverse log-det. Returns (z, sum_logdet)."""
-        origin, R, u_ctx, sp_ctx, _ = self._frame_ctx(pos, s, cluster_idx, sc, L)
+        """Cluster lab xC_query -> base z (flow inverse), accumulating inverse log-det.
+        Returns (z, sum_logdet, q_scaf) so callers avoid recomputing the frame context."""
+        origin, R, u_ctx, sp_ctx, q_scaf = self._frame_ctx(pos, s, cluster_idx, sc, L)
         sp_cl = s[:, cluster_idx]
-        u = KC.to_frame(xC_query, origin, R, L); ld = torch.zeros(u.shape[0], device=u.device)
+        u = KC.to_frame(xC_query, origin, R, L); ld = u.new_zeros(u.shape[0])
         tail_bound = self._safe_tail_bound(L)
         old_tb = self.spline.tail_bound; self.spline.tail_bound = tail_bound
+        # Disable TF32 once per pass (not per block) so params are reproducible across forward/inverse.
+        # TF32 introduces ~1e-3 non-determinism that accumulates over n_cycles*4 blocks.
+        old_mm = torch.backends.cuda.matmul.allow_tf32
+        old_nn = torch.backends.cudnn.allow_tf32
+        torch.backends.cuda.matmul.allow_tf32 = False
+        torch.backends.cudnn.allow_tf32 = False
         try:
             for b in reversed(range(len(self.cond.meta))):
                 par, c = self.cond.meta[b]; am = self._amask(u.shape[1], par, u.device)
@@ -169,7 +174,9 @@ class ClusterFlow(nn.Module):
                 u = u.clone(); u[:, am, c] = z; ld = ld + d.sum(-1)
         finally:
             self.spline.tail_bound = old_tb
-        return u, ld
+            torch.backends.cuda.matmul.allow_tf32 = old_mm
+            torch.backends.cudnn.allow_tf32 = old_nn
+        return u, ld, q_scaf
 
     @torch.no_grad()
     def sample(self, pos, s, cluster_idx, sc, L):
@@ -183,6 +190,5 @@ class ClusterFlow(nn.Module):
         return xC_lab, logq
 
     def log_q(self, pos, s, cluster_idx, xC_query, sc, L):
-        _, _, _, _, q_scaf = self._frame_ctx(pos, s, cluster_idx, sc, L)
-        z, ld = self._x_to_z(pos, s, cluster_idx, xC_query, sc, L)
+        z, ld, q_scaf = self._x_to_z(pos, s, cluster_idx, xC_query, sc, L)
         return anchor_base_logp(z, q_scaf, self.sigma_b) + ld

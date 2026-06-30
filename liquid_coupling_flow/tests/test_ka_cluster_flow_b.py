@@ -69,3 +69,12 @@ def test_frame_independent_of_xC_bit_exact():
     p2 = pos[0].clone(); p2[cl] = torch.remainder(p2[cl] + torch.tensor([1.7, -1.1], device=DEV), L)
     o1, R1 = KC.cluster_frame(p2, cl, sc, L)
     assert (o1 - o0).abs().max().item() == 0.0 and (R1 - R0).abs().max().item() == 0.0
+
+def test_log_q_grad_flows():
+    sc, L, pos, s, cl = _setup(Bsz=1)
+    flow = B.ClusterFlow(sigma_b=0.747).to(DEV).eval()
+    xC, _ = flow.sample(pos, s, cl, sc, L)
+    xC_q = xC.detach().requires_grad_(True)
+    logq = flow.log_q(pos, s, cl, xC_q, sc, L)
+    logq.mean().backward()
+    assert xC_q.grad is not None and xC_q.grad.abs().max() > 0

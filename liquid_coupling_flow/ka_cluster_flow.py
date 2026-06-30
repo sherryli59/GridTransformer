@@ -248,8 +248,8 @@ def diag(train_N=100, k=7, device="cuda" if torch.cuda.is_available() else "cpu"
         ctx = P._step_ctx(q_scaf[:, 0], 0, ctx_tok, None); la = F.log_softmax(P.head_a(ctx), -1)
         u_true = KC.to_frame(pos0[:, cl], o, R, L)[:, 0]; ptrue = la.exp().gather(1, P._bin(u_true[:, 0]).clamp(0)[:, None]).squeeze(1)
         su = torch.stack([KC.to_frame(P.sample(pos0, sso, cl, sc, L)[0], o, R, L)[:, 0] for _ in range(5)], 0)
-        print(f"  seed {seed}: P(true bin_a) {ptrue.mean():.3f} (unif {1/ck['n_bins']:.3f})  spread {su.std(0).norm(-1).mean():.2f}"
-              f"  |mean-true| {(su.mean(0)-u_true).norm(-1).mean():.2f} (nn~0.9)", flush=True)
+        print(f"  seed {seed}: P(true bin_a) {ptrue.mean():.3f} (unif {1/ck['n_bins']:.3f})  spread {su.std(0).norm(dim=-1).mean():.2f}"
+              f"  |mean-true| {(su.mean(0)-u_true).norm(dim=-1).mean():.2f} (nn~0.9)", flush=True)
     # 3.3b self-consistent g_BB
     cur = pos0.clone(); g = torch.Generator(device=device).manual_seed(0)
     for _ in range(3):

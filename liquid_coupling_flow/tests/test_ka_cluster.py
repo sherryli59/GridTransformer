@@ -49,12 +49,13 @@ def test_frame_roundtrip_rigid():
 def test_cluster_roundtrip_sampler_equals_evaluator():
     """PRIMARY density guard: the density the sampler realizes equals log_q at the sampled point (untrained
     weights are fine — this checks sample/score consistency, not quality)."""
-    from liquid_coupling_flow.ka_cluster_flow import ClusterProposal
+    from liquid_coupling_flow.ka_cluster_flow import ClusterProposal, slot_order
     m = _model(); N = 100; sc = m.geo._scaffold(N, DEV); L = m.geo._Lof(N)
     ref = torch.load(f"{ART}/ka_reference_N100.pt", map_location=DEV, weights_only=False)
-    pos = ref["x"][0:4].to(DEV); s = ref["s"].to(DEV).long(); cl = C.cluster_slots(5, sc, 7, L)  # B=4 chains
+    pos, s_ord = slot_order(ref["x"][0:4].to(DEV), ref["s"].to(DEV).long(), m.geo, N)  # B=4 chains, slot-ordered
+    cl = C.cluster_slots(5, sc, 7, L)
     P = ClusterProposal().to(DEV).eval()
-    xC_new, logq = P.sample(pos, s, cl, sc, L)
-    logq_eval = P.log_q(pos, s, cl, xC_new, sc, L)
+    xC_new, logq = P.sample(pos, s_ord, cl, sc, L)
+    logq_eval = P.log_q(pos, s_ord, cl, xC_new, sc, L)
     assert xC_new.shape == (4, 7, 2)
     assert torch.allclose(logq, logq_eval, atol=1e-4), (logq - logq_eval).abs().max()

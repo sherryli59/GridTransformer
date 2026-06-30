@@ -158,7 +158,56 @@ def train(steps=15000, k=7, n_bins=24, box=3.0, n_ctx=16, lr=3e-4, train_N=100,
     print(f"saved ka_cluster_flow_N{train_N}.pt", flush=True)
 
 
+@torch.no_grad()
+def _gbb(pos, s, L):
+    from liquid_coupling_flow.ka_observables import partial_gr
+    import numpy as np
+    rc, g = partial_gr(pos, s, L, min(L / 2, 4.0), 60, (1, 1)); rc = np.asarray(rc); g = np.asarray(g)
+    return float(g.max()), float(g[rc < 0.88].mean()), rc, g
+
+
+@torch.no_grad()
+def gr_gate(train_N=100, k=7, device="cuda" if torch.cuda.is_available() else "cpu", B=256, K=3):
+    """The g(r) GATE. (3.3a) resample EACH particle as a cluster-seed given its TRUE surroundings -> one-step
+    true-cage g(r). (3.3b) iteratively resample ALL clusters K sweeps (surroundings self-generated, no energy)
+    -> does g_BB collapse? GO iff (3.3a) g_BB peak >> the ~1.4 half-cage floor AND (3.3b) doesn't collapse."""
+    import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
+    ref = torch.load(os.path.join(ART, f"ka_reference_N{train_N}.pt"), map_location=device, weights_only=False)
+    s = ref["s"].to(device).long(); N = ref["x"].shape[1]
+    sc, L, geo = _scaffold(N, device)
+    ck = torch.load(os.path.join(ART, f"ka_cluster_flow_N{train_N}.pt"), map_location=device, weights_only=False)
+    P = ClusterProposal(rho=1.2, n_bins=ck["n_bins"], box=ck["box"], n_ctx=ck["n_ctx"]).to(device).eval()
+    P.load_state_dict(ck["state_dict"])
+    pos0, sso = slot_order(ref["x"][:B].to(device), s, geo, N)                       # slot-ordered reference
+    g = torch.Generator(device=device).manual_seed(0)
+    # (3.3a) one-step true-cage: resample each particle as a seed given the TRUE config
+    newa = pos0.clone()
+    for seed in range(N):
+        cl = KC.cluster_slots(seed, sc, k, L); xC, _ = P.sample(pos0, sso, cl, sc, L)
+        newa[:, seed] = xC[:, 0]                                                     # seed's new pos (cluster_idx[0])
+    # (3.3b) iterative self-conditioned (no energy)
+    cur = pos0.clone()
+    for sweep in range(K):
+        for seed in torch.randperm(N, generator=g, device=device).tolist():
+            cl = KC.cluster_slots(seed, sc, k, L); xC, _ = P.sample(cur, sso, cl, sc, L)
+            cur[:, cl] = xC
+    rows = {"data": _gbb(pos0, sso, L), "3.3a true-cage": _gbb(newa, sso, L), f"3.3b iter x{K}": _gbb(cur, sso, L)}
+    print("\n=== g(r) GATE: g_BB peak / spurious(<0.88) (half-cage floor ~1.4; data ~2.4) ===")
+    for nm, (pk, sp, _, _) in rows.items():
+        print(f"  {nm:16s} peak {pk:.2f}  spurious {sp:.3f}", flush=True)
+    fig, ax = plt.subplots(figsize=(6, 4.5))
+    for nm, (_, _, rc, gg) in rows.items():
+        ax.plot(rc, gg, lw=2.5 if nm == "data" else 1.8, label=nm)
+    ax.axvline(0.88, color="grey", ls=":", lw=1); ax.set_xlabel("r"); ax.set_ylabel("g_BB(r)"); ax.legend()
+    ax.set_title("Cluster generator g(r) gate (g_BB is the discriminator)")
+    out = os.path.join(ART, f"ka_cluster_gr_gate_N{train_N}.png"); fig.tight_layout(); fig.savefig(out, dpi=120)
+    print("saved", out, flush=True)
+
+
 if __name__ == "__main__":
     import sys
-    train(steps=int(sys.argv[1]) if len(sys.argv) > 1 else 15000,
-          k=int(sys.argv[2]) if len(sys.argv) > 2 else 7)
+    if len(sys.argv) > 1 and sys.argv[1] == "gate":
+        gr_gate()
+    else:
+        train(steps=int(sys.argv[1]) if len(sys.argv) > 1 else 15000,
+              k=int(sys.argv[2]) if len(sys.argv) > 2 else 7)

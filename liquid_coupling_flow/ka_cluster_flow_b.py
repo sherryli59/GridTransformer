@@ -192,3 +192,48 @@ class ClusterFlow(nn.Module):
     def log_q(self, pos, s, cluster_idx, xC_query, sc, L):
         z, ld, q_scaf = self._x_to_z(pos, s, cluster_idx, xC_query, sc, L)
         return anchor_base_logp(z, q_scaf, self.sigma_b) + ld
+
+
+_ARCH_KEYS = ("num_bins", "n_cycles", "n_ctx", "box", "tail_bound", "d_model", "n_head", "n_layer")
+
+
+def load_flow(ck, device):
+    arch = {kk: ck[kk] for kk in _ARCH_KEYS if kk in ck}
+    P = ClusterFlow(sigma_b=ck["sigma_b"], **arch).to(device).eval()
+    P.load_state_dict(ck["state_dict"]); return P
+
+
+def train(steps=20000, k=7, train_N=100, num_bins=8, n_cycles=4, n_ctx=32, box=4.0, tail_bound=4.0,
+          d_model=192, n_head=6, n_layer=4, lr=3e-4, save=True,
+          device="cuda" if torch.cuda.is_available() else "cpu"):
+    import time
+    from liquid_coupling_flow.ka_gridformer_train import augment
+    ref = torch.load(os.path.join(ART, f"ka_reference_N{train_N}.pt"), map_location=device, weights_only=False)
+    data, s = ref["x"].to(device), ref["s"].to(device).long(); N = data.shape[1]
+    sc, L, geo = _scaffold(N, device)
+    sigma_b = compute_sigma_b(data, s, geo, sc, L, k)
+    arch = dict(num_bins=num_bins, n_cycles=n_cycles, n_ctx=n_ctx, box=box, tail_bound=tail_bound,
+                d_model=d_model, n_head=n_head, n_layer=n_layer)
+    P = ClusterFlow(sigma_b=sigma_b, **arch).to(device).train()
+    opt = torch.optim.AdamW(P.parameters(), lr=lr, weight_decay=1e-4); Bsz = 128
+    warm = 400
+    sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda st: min((st + 1) / warm,
+        0.5 + 0.5 * math.cos(math.pi * max(0, st - warm) / max(1, steps - warm))))
+    print(f"CLUSTERFLOW train N={train_N} steps={steps} k={k} sigma_b={sigma_b:.3f} {arch} "
+          f"params {sum(p.numel() for p in P.parameters())/1e6:.2f}M", flush=True)
+    loss_first = None; t0 = time.time()
+    for step in range(steps):
+        idx = torch.randint(0, data.shape[0], (Bsz,), device=device)
+        pos, s_ord = slot_order(augment(data[idx], L), s, geo, N)
+        seed = int(torch.randint(0, N, (1,)).item()); cl = KC.cluster_slots(seed, sc, k, L)
+        loss = -(P.log_q(pos, s_ord, cl, pos[:, cl], sc, L) / k).mean()
+        opt.zero_grad(); loss.backward(); torch.nn.utils.clip_grad_norm_(P.parameters(), 5.0); opt.step(); sched.step()
+        if loss_first is None: loss_first = loss.item()
+        if step % 1000 == 0:
+            print(f"  step {step:5d} -logq/k {loss.item():.3f} {time.time()-t0:.0f}s", flush=True)
+    ck = {"state_dict": P.state_dict(), "k": k, "sigma_b": sigma_b, "step": steps,
+          "loss_first": loss_first, "loss_last": loss.item(), **arch}
+    if save:
+        torch.save(ck, os.path.join(ART, f"ka_cluster_flow_b_N{train_N}.pt"))
+        print(f"saved ka_cluster_flow_b_N{train_N}.pt", flush=True)
+    return ck

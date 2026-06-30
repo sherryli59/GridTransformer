@@ -78,3 +78,12 @@ def test_log_q_grad_flows():
     logq = flow.log_q(pos, s, cl, xC_q, sc, L)
     logq.mean().backward()
     assert xC_q.grad is not None and xC_q.grad.abs().max() > 0
+
+def test_train_smoke_and_load():
+    ck = B.train(steps=80, train_N=100, save=False)              # returns the checkpoint dict, no disk write
+    assert ck["sigma_b"] == __import__("pytest").approx(0.747, abs=0.05)
+    flow = B.load_flow(ck, DEV)
+    sc, L, pos, s, cl = _setup()
+    xC, logq = flow.sample(pos, s, cl, sc, L)
+    assert torch.isfinite(logq).all() and xC.shape == (4, 7, 2)
+    assert ck["loss_last"] < ck["loss_first"]                    # learned something in 80 steps

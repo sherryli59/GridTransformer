@@ -237,3 +237,24 @@ def train(steps=20000, k=7, train_N=100, num_bins=8, n_cycles=4, n_ctx=32, box=4
         torch.save(ck, os.path.join(ART, f"ka_cluster_flow_b_N{train_N}.pt"))
         print(f"saved ka_cluster_flow_b_N{train_N}.pt", flush=True)
     return ck
+
+
+@torch.no_grad()
+def gate(train_N=100, k=7, device="cuda" if torch.cuda.is_available() else "cpu", Bsz=128):
+    from liquid_coupling_flow.ka_cluster_flow import gate_measure
+    ref = torch.load(os.path.join(ART, f"ka_reference_N{train_N}.pt"), map_location=device, weights_only=False)
+    s = ref["s"].to(device).long(); N = ref["x"].shape[1]; sc, L, geo = _scaffold(N, device)
+    ck = torch.load(os.path.join(ART, f"ka_cluster_flow_b_N{train_N}.pt"), map_location=device, weights_only=False)
+    P = load_flow(ck, device)
+    pos0, sso = slot_order(ref["x"][:Bsz].to(device), s, geo, N)
+    out = os.path.join(ART, f"ka_cluster_flow_b_gate_N{train_N}.png")
+    res = gate_measure(P, pos0, sso, sc, L, N, k, out_png=out)
+    print("GATE(flow):", res, flush=True); print("saved", out, flush=True)
+
+
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "gate":
+        gate()
+    else:
+        train(steps=int(sys.argv[1]) if len(sys.argv) > 1 else 20000)

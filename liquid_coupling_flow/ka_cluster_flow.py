@@ -216,20 +216,13 @@ def gr_gate(train_N=100, k=7, device="cuda" if torch.cuda.is_available() else "c
 
 
 @torch.no_grad()
-def diag(train_N=100, k=7, device="cuda" if torch.cuda.is_available() else "cpu", B=128):
-    """The FAITHFUL, co-placement-free gate check (decisive): resample ONE cluster given the TRUE surroundings
-    (rest pinned) -> the resampled cluster's clashes vs the true cluster's; plus the seed's placement spread /
-    distance-to-true / P(true bin). If clashes ~ true and spread << nn-dist -> the conditional sharpened. Saves
-    a 2-panel figure (g_BB self-consistent + clean min-r histogram)."""
+def gate_measure(P, pos0, sso, sc, L, N, k, out_png):
+    """Reusable gate measurement: single-cluster clash, seed spread / P(true bin), 3.3b self-consistent g_BB,
+    and a 2-panel figure. P must expose .sample(pos, s, cl, sc, L) -> (xC [B,k,2], logq [B]).
+    Returns dict with clash%, g_BB peak, seed spread for the GO/NO-GO decision."""
     import numpy as np, matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
     from liquid_coupling_flow.ka_observables import partial_gr
-    ref = torch.load(os.path.join(ART, f"ka_reference_N{train_N}.pt"), map_location=device, weights_only=False)
-    s = ref["s"].to(device).long(); N = ref["x"].shape[1]
-    sc, L, geo = _scaffold(N, device)
-    ck = torch.load(os.path.join(ART, f"ka_cluster_flow_N{train_N}.pt"), map_location=device, weights_only=False)
-    P = _load(ck, device); pos0, sso = slot_order(ref["x"][:B].to(device), s, geo, N)
-    arch = {kk: ck.get(kk) for kk in ("n_bins", "box", "n_ctx", "d_model", "n_head", "n_layer", "step")}
-    print(f"DIAG ckpt {arch} bin_w {2*ck['box']/ck['n_bins']:.3f}", flush=True)
+    device = pos0.device
 
     def cluster_minr(pos, cl):
         d = pos[:, cl][:, :, None, :] - pos[:, None, :, :]; d = d - L * torch.round(d / L); r = (d ** 2).sum(-1).sqrt()
@@ -242,35 +235,64 @@ def diag(train_N=100, k=7, device="cuda" if torch.cuda.is_available() else "cpu"
         new = pos0.clone(); new[:, cl] = xC
         rt.append(cluster_minr(pos0, cl).cpu()); rn.append(cluster_minr(new, cl).cpu())
     rt = torch.cat(rt).numpy(); rn = torch.cat(rn).numpy()
-    # seed-only placement (i=0, best context, no exposure bias)
-    for seed in (5, 20):
-        cl = KC.cluster_slots(seed, sc, k, L); o, R, ctx_tok, q_scaf = P._ctx_tokens(pos0, sso, cl, sc, L)
-        ctx = P._step_ctx(q_scaf[:, 0], 0, ctx_tok, None); la = F.log_softmax(P.head_a(ctx), -1)
-        u_true = KC.to_frame(pos0[:, cl], o, R, L)[:, 0]; ptrue = la.exp().gather(1, P._bin(u_true[:, 0]).clamp(0)[:, None]).squeeze(1)
-        su = torch.stack([KC.to_frame(P.sample(pos0, sso, cl, sc, L)[0], o, R, L)[:, 0] for _ in range(5)], 0)
-        print(f"  seed {seed}: P(true bin_a) {ptrue.mean():.3f} (unif {1/ck['n_bins']:.3f})  spread {su.std(0).norm(dim=-1).mean():.2f}"
-              f"  |mean-true| {(su.mean(0)-u_true).norm(dim=-1).mean():.2f} (nn~0.9)", flush=True)
+    # seed-only placement spread (proposal-A specific; skipped for ClusterFlow which has no _ctx_tokens)
+    seed_spread = float("nan")
+    if hasattr(P, "_ctx_tokens") and hasattr(P, "head_a") and hasattr(P, "_bin"):
+        spreads = []
+        for seed in (5, 20):
+            cl = KC.cluster_slots(seed, sc, k, L); o, R, ctx_tok, q_scaf = P._ctx_tokens(pos0, sso, cl, sc, L)
+            ctx = P._step_ctx(q_scaf[:, 0], 0, ctx_tok, None); la = F.log_softmax(P.head_a(ctx), -1)
+            u_true = KC.to_frame(pos0[:, cl], o, R, L)[:, 0]
+            ptrue = la.exp().gather(1, P._bin(u_true[:, 0]).clamp(0)[:, None]).squeeze(1)
+            su = torch.stack([KC.to_frame(P.sample(pos0, sso, cl, sc, L)[0], o, R, L)[:, 0] for _ in range(5)], 0)
+            sp = float(su.std(0).norm(dim=-1).mean())
+            n_bins = P.n_bins
+            print(f"  seed {seed}: P(true bin_a) {ptrue.mean():.3f} (unif {1/n_bins:.3f})  spread {sp:.2f}"
+                  f"  |mean-true| {(su.mean(0)-u_true).norm(dim=-1).mean():.2f} (nn~0.9)", flush=True)
+            spreads.append(sp)
+        seed_spread = float(sum(spreads) / len(spreads))
     # 3.3b self-consistent g_BB
     cur = pos0.clone(); g = torch.Generator(device=device).manual_seed(0)
     for _ in range(3):
         for seed in torch.randperm(N, generator=g, device=device).tolist():
             cl = KC.cluster_slots(seed, sc, k, L); cur[:, cl] = P.sample(cur, sso, cl, sc, L)[0]
     rcd, gcd = partial_gr(pos0, sso, L, 4.0, 60, (1, 1)); rci, gci = partial_gr(cur, sso, L, 4.0, 60, (1, 1))
+    clash_pct = float((rn < 0.7).mean() * 100)
+    gbb_peak = float(np.asarray(gci).max())
     print(f"  CLEAN single-cluster: TRUE clash<0.7 {(rt<0.7).mean()*100:.1f}% (mean {rt.mean():.2f}) | "
-          f"RESAMPLED clash<0.7 {(rn<0.7).mean()*100:.1f}% (mean {rn.mean():.2f})", flush=True)
-    print(f"  g_BB peak: data {np.asarray(gcd).max():.2f}  generated(3.3b) {np.asarray(gci).max():.2f}", flush=True)
+          f"RESAMPLED clash<0.7 {clash_pct:.1f}% (mean {rn.mean():.2f})", flush=True)
+    print(f"  g_BB peak: data {np.asarray(gcd).max():.2f}  generated(3.3b) {gbb_peak:.2f}", flush=True)
     fig, (a1, a2) = plt.subplots(1, 2, figsize=(11, 4.3))
     a1.plot(np.asarray(rcd), np.asarray(gcd), lw=2.5, label="data")
     a1.plot(np.asarray(rci), np.asarray(gci), lw=1.8, label="generated (3.3b self-consistent)")
     a1.axhline(1.4, color="grey", ls=":", lw=1); a1.set_xlabel("r"); a1.set_ylabel("g_BB(r)"); a1.legend()
     a1.set_title("Structure: generated g_BB vs data")
     a2.hist(rt, bins=40, range=(0, 1.6), density=True, alpha=0.6, label=f"TRUE ({(rt<0.7).mean()*100:.0f}% <0.7)")
-    a2.hist(rn, bins=40, range=(0, 1.6), density=True, alpha=0.6, label=f"resampled ({(rn<0.7).mean()*100:.0f}% <0.7)")
+    a2.hist(rn, bins=40, range=(0, 1.6), density=True, alpha=0.6, label=f"resampled ({clash_pct:.0f}% <0.7)")
     a2.axvline(0.7, color="k", ls=":", lw=1); a2.axvline(0.88, color="grey", ls="--", lw=1, label="sigma_BB=0.88")
     a2.set_xlabel("min neighbour distance"); a2.set_ylabel("density"); a2.legend(fontsize=8)
     a2.set_title("Clean overlap (single-cluster, no co-placement)")
-    out = os.path.join(ART, f"ka_cluster_gr_gate_N{train_N}.png"); fig.tight_layout(); fig.savefig(out, dpi=120)
+    fig.tight_layout(); fig.savefig(out_png, dpi=120)
+    return {"clash_pct": clash_pct, "gbb_peak": gbb_peak, "seed_spread": seed_spread}
+
+
+@torch.no_grad()
+def diag(train_N=100, k=7, device="cuda" if torch.cuda.is_available() else "cpu", B=128):
+    """The FAITHFUL, co-placement-free gate check (decisive): resample ONE cluster given the TRUE surroundings
+    (rest pinned) -> the resampled cluster's clashes vs the true cluster's; plus the seed's placement spread /
+    distance-to-true / P(true bin). If clashes ~ true and spread << nn-dist -> the conditional sharpened. Saves
+    a 2-panel figure (g_BB self-consistent + clean min-r histogram)."""
+    ref = torch.load(os.path.join(ART, f"ka_reference_N{train_N}.pt"), map_location=device, weights_only=False)
+    s = ref["s"].to(device).long(); N = ref["x"].shape[1]
+    sc, L, geo = _scaffold(N, device)
+    ck = torch.load(os.path.join(ART, f"ka_cluster_flow_N{train_N}.pt"), map_location=device, weights_only=False)
+    P = _load(ck, device); pos0, sso = slot_order(ref["x"][:B].to(device), s, geo, N)
+    arch = {kk: ck.get(kk) for kk in ("n_bins", "box", "n_ctx", "d_model", "n_head", "n_layer", "step")}
+    print(f"DIAG ckpt {arch} bin_w {2*ck['box']/ck['n_bins']:.3f}", flush=True)
+    out = os.path.join(ART, f"ka_cluster_gr_gate_N{train_N}.png")
+    res = gate_measure(P, pos0, sso, sc, L, N, k, out_png=out)
     print("saved", out, flush=True)
+    return res
 
 
 if __name__ == "__main__":

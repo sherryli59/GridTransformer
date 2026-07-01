@@ -117,6 +117,23 @@ class EGNNClusterFlow(nn.Module):
         logq = base_logp(z, c, self.sigma_b, L) - logdet  # d log p = -div dt over the forward pass
         return cl, logq
 
+    @torch.no_grad()
+    def sample_fast(self, pos, s, cluster_idx, sc, L):
+        """Velocity-only sampling (NO divergence/logdet) -> just positions. For the g(r) gate (structural
+        clash/g_BB), which never uses logq -> ~10x faster than sample() (skips the per-stage autograd divergence)."""
+        cloud, sp, c = build_cloud(pos, s, cluster_idx, sc, L, self.n_cage)
+        cl = sample_base(c, self.k, self.sigma_b); cage = cloud[:, self.k:]; dt = 1.0 / self.n_steps
+        def vo(x, t):
+            return self.ce.egnn.forward(_t(t, x.device, x), torch.cat([x, cage], 1), sp)[:, :self.k]
+        for i in range(self.n_steps):
+            t = i * dt
+            v1 = vo(cl, t)
+            v2 = vo(torch.remainder(cl + 0.5 * dt * v1, L), t + 0.5 * dt)
+            v3 = vo(torch.remainder(cl + 0.5 * dt * v2, L), t + 0.5 * dt)
+            v4 = vo(torch.remainder(cl + dt * v3, L), t + dt)
+            cl = torch.remainder(cl + (dt / 6.0) * (v1 + 2 * v2 + 2 * v3 + v4), L)
+        return cl
+
     @torch.no_grad()                                      # log_q is a value (gate/MH/IS); training uses flow matching
     def log_q(self, pos, s, cluster_idx, xC_query, sc, L):
         cloud, sp, c = build_cloud(pos, s, cluster_idx, sc, L, self.n_cage)
@@ -192,3 +209,29 @@ def train(steps=15000, k=7, n_cage=48, r_c=3.0, hidden_nf=64, n_layers=4, n_step
     if save:
         torch.save(ck, ckpt); print(f"saved ka_cluster_egnn_N{train_N}.pt", flush=True)
     return ck
+
+
+@torch.no_grad()
+def gate(train_N=100, k=7, device="cuda" if torch.cuda.is_available() else "cpu", Bsz=128):
+    from liquid_coupling_flow.ka_cluster_flow import gate_measure
+    ref = torch.load(os.path.join(ART, f"ka_reference_N{train_N}.pt"), map_location=device, weights_only=False)
+    s = ref["s"].to(device).long(); N = ref["x"].shape[1]; sc, L, geo = _scaffold(N, device)
+    ck = torch.load(os.path.join(ART, f"ka_cluster_egnn_N{train_N}.pt"), map_location=device, weights_only=False)
+    P = load_flow(ck, device); P.n_steps = 6              # coarse RK4 for the gate (structural clash/g_BB only)
+    pos0, sso = slot_order(ref["x"][:Bsz].to(device), s, geo, N)
+    out = os.path.join(ART, f"ka_cluster_egnn_gate_N{train_N}.png")
+
+    class _Fast:                                          # gate_measure only uses .sample(...)[0] (positions)
+        def __init__(s, f): s.f = f
+        def sample(s, pos, sp, cl, sc, L): return s.f.sample_fast(pos, sp, cl, sc, L), None
+    res = gate_measure(_Fast(P), pos0, sso, sc, L, N, k, out_png=out)
+    print("GATE(egnn-flow):", res, flush=True); print("saved", out, flush=True)
+
+
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "gate":
+        gate()
+    else:
+        train(steps=int(sys.argv[1]) if len(sys.argv) > 1 else 15000,
+              batch=int(sys.argv[2]) if len(sys.argv) > 2 else 128)

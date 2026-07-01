@@ -51,3 +51,20 @@ def compute_sigma_b(data, s, geo, sc, L, k, n_cage):
         ccen = torch.remainder(sd[:, 0] + _wrap_pm(clu - sd, L).mean(1), L)
         disp.append(_wrap_pm(clu - ccen[:, None], L).reshape(-1, 2))
     return float(torch.cat(disp, 0).std().item())
+
+
+from liquid_coupling_flow.ipl44.learndiffeq.learndiffeq.particles.velocities.egnn_traceable import EGNN_dynamics
+
+
+class ConditionalEGNN(nn.Module):
+    """Wraps a periodic EGNN_dynamics over the fixed cloud (k cluster + n_cage cage). vel_div returns ONLY the
+    cluster velocities and the cluster-restricted divergence (cage is fixed context -> not in the log-det)."""
+    def __init__(self, n_cage=48, k=7, r_c=3.0, L=None, hidden_nf=64, n_layers=4, n_species=2):
+        super().__init__()
+        P = k + n_cage
+        self.egnn = EGNN_dynamics(n_particles=P, n_dimension=2, cutoff=r_c, max_neighbors=P - 1,
+                                  L=L, n_species=n_species, hidden_nf=hidden_nf, n_layers=n_layers)
+
+    def vel_div(self, cloud, t, sp, k):
+        vel, divpp = self.egnn.forward_and_perparticle_divergence(cloud, t, sp)   # [B,P,2],[B,P]
+        return vel[:, :k], divpp[:, :k].sum(-1)                                    # cluster velocities + div

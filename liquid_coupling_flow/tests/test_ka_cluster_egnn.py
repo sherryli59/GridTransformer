@@ -42,3 +42,22 @@ def test_sigma_b_from_data():
     ref = torch.load(f"{E.ART}/ka_reference_N100.pt", map_location=DEV, weights_only=False)
     sb = E.compute_sigma_b(ref["x"].to(DEV), ref["s"].to(DEV).long(), geo, sc, L, 7, n_cage)
     assert 0.7 < sb < 1.6            # cluster spread about its centroid
+
+def test_perparticle_divergence_matches_bruteforce():
+    """Analytic cluster-restricted divergence == trace of the autograd Jacobian of the cluster velocity."""
+    torch.manual_seed(0)
+    sc, L, geo, pos, s, cl, n_cage = _cfg(B=1)
+    ce = E.ConditionalEGNN(n_cage=n_cage, hidden_nf=32, n_layers=2, r_c=3.0, L=L).to(DEV)
+    cloud, sp, c = E.build_cloud(pos, s, cl, sc, L, n_cage)
+    cloud = cloud.double(); ce = ce.double()
+    t = torch.tensor(0.37, device=DEV, dtype=torch.float64)
+    k = 7
+    xcl = cloud[:, :k].reshape(-1).clone().requires_grad_(True)   # [2k]
+    def vel_flat(xf):
+        cl2 = cloud.clone(); cl2[:, :k] = xf.reshape(1, k, 2)
+        v, _ = ce.vel_div(cl2, t, sp, k)
+        return v.reshape(-1)
+    J = torch.autograd.functional.jacobian(vel_flat, xcl)         # [2k,2k]
+    div_bf = torch.diagonal(J).sum()
+    _, div_analytic = ce.vel_div(cloud, t, sp, k)
+    assert abs(div_bf.item() - div_analytic.item()) < 1e-4, (div_bf.item(), div_analytic.item())

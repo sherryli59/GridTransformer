@@ -123,3 +123,72 @@ class EGNNClusterFlow(nn.Module):
         cloud = torch.cat([xC_query, cloud[:, self.k:]], 1)
         z, logdet = self._integrate(cloud, sp, self.k, L, reverse=True)
         return base_logp(z, c, self.sigma_b, L) + logdet
+
+
+from scipy.optimize import linear_sum_assignment
+
+
+def ot_assign(z, x, sp, L):
+    """Species-aware per-particle OT: Hungarian on the min-image squared cost, cross-species forbidden. -> perm[B,k]
+    such that base particle i flows to data particle perm[i] (same species), minimizing total transport."""
+    B, k, _ = z.shape; dev = z.device
+    d = _wrap_pm(z[:, :, None, :] - x[:, None, :, :], L)                          # [B,k,k,2]  z_i vs x_j
+    cost = (d ** 2).sum(-1)                                                       # [B,k,k]
+    cost = cost.masked_fill(sp[:, :, None] != sp[:, None, :], 1e6)                # forbid cross-species matches
+    cc = cost.detach().cpu().numpy(); perms = []
+    for b in range(B):
+        _, col = linear_sum_assignment(cc[b]); perms.append(torch.as_tensor(col, device=dev))
+    return torch.stack(perms, 0)                                                  # [B,k]
+
+
+_ARCH = ("n_cage", "k", "r_c", "hidden_nf", "n_layers", "n_steps", "n_species")
+
+
+def load_flow(ck, device):
+    arch = {kk: ck[kk] for kk in _ARCH if kk in ck}
+    P = EGNNClusterFlow(sigma_b=ck["sigma_b"], L=ck["L"], **arch).to(device).eval()
+    P.load_state_dict(ck["state_dict"]); return P
+
+
+def train(steps=15000, k=7, n_cage=48, r_c=3.0, hidden_nf=64, n_layers=4, n_steps=16, lr=3e-4, train_N=100,
+          save=True, batch=128, ckpt_every=2000, device="cuda" if torch.cuda.is_available() else "cpu"):
+    """OT conditional flow matching: regress the EGNN velocity onto the OT-straightened base->data field. No ODE
+    integration in the loop (velocity-only forward) -> cheap + stable; the exact log_q is inference-only."""
+    import time
+    from liquid_coupling_flow.ka_gridformer_train import augment
+    ref = torch.load(os.path.join(ART, f"ka_reference_N{train_N}.pt"), map_location=device, weights_only=False)
+    data, s = ref["x"].to(device), ref["s"].to(device).long(); N = data.shape[1]
+    sc, L, geo = _scaffold(N, device); sigma_b = compute_sigma_b(data, s, geo, sc, L, k, n_cage)
+    flow = EGNNClusterFlow(sigma_b=sigma_b, n_cage=n_cage, k=k, r_c=r_c, L=L, hidden_nf=hidden_nf,
+                           n_layers=n_layers, n_steps=n_steps).to(device).train()
+    opt = torch.optim.AdamW(flow.parameters(), lr=lr, weight_decay=1e-4); Bsz = batch
+    arch = dict(n_cage=n_cage, k=k, r_c=r_c, hidden_nf=hidden_nf, n_layers=n_layers, n_steps=n_steps, n_species=2)
+    ckpt = os.path.join(ART, f"ka_cluster_egnn_N{train_N}.pt")
+    print(f"EGNN-FLOW train N={train_N} steps={steps} k={k} n_cage={n_cage} batch={Bsz} sigma_b={sigma_b:.3f} "
+          f"params {sum(p.numel() for p in flow.parameters())/1e6:.2f}M", flush=True)
+    loss_first = None; t0 = time.time()
+    for step in range(steps):
+        idx = torch.randint(0, data.shape[0], (Bsz,), device=device)
+        pos, s_ord = slot_order(augment(data[idx], L), s, geo, N)
+        seed = int(torch.randint(0, N, (1,)).item()); cl = KC.cluster_slots(seed, sc, k, L)
+        cloud, sp, c = build_cloud(pos, s_ord, cl, sc, L, n_cage); x1 = cloud[:, :k]
+        z = sample_base(c, k, sigma_b)                                           # base
+        perm = ot_assign(z, x1, sp[:, :k], L)                                    # species-aware per-particle OT
+        x1p = torch.gather(x1, 1, perm[..., None].expand(-1, -1, 2))             # OT-matched data
+        target = _wrap_pm(x1p - z, L)                                            # straight displacement (min-image)
+        t = torch.rand(Bsz, device=device)
+        xt = torch.remainder(z + t[:, None, None] * target, L)                   # interpolant
+        v_pred = flow.ce.egnn.forward(t, torch.cat([xt, cloud[:, k:]], 1), sp)[:, :k]   # velocity-only (fast)
+        loss = ((v_pred - target) ** 2).sum(-1).mean()
+        opt.zero_grad(); loss.backward(); torch.nn.utils.clip_grad_norm_(flow.parameters(), 5.0); opt.step()
+        if loss_first is None: loss_first = loss.item()
+        if step % 1000 == 0:
+            print(f"  step {step:5d} fm-loss {loss.item():.4f} {time.time()-t0:.0f}s", flush=True)
+        if save and (step + 1) % ckpt_every == 0:
+            torch.save({"state_dict": flow.state_dict(), "sigma_b": sigma_b, "L": L, "step": step + 1,
+                        "loss_first": loss_first, "loss_last": loss.item(), **arch}, ckpt)
+    ck = {"state_dict": flow.state_dict(), "sigma_b": sigma_b, "L": L, "step": steps,
+          "loss_first": loss_first, "loss_last": loss.item(), **arch}
+    if save:
+        torch.save(ck, ckpt); print(f"saved ka_cluster_egnn_N{train_N}.pt", flush=True)
+    return ck

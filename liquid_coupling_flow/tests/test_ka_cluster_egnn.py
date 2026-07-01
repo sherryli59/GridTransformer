@@ -102,3 +102,27 @@ def test_perparticle_divergence_matches_bruteforce():
     div_bf = torch.diagonal(J).sum()
     _, div_analytic = ce.vel_div(cloud, t, sp, k)
     assert abs(div_bf.item() - div_analytic.item()) < 1e-4, (div_bf.item(), div_analytic.item())
+
+def test_ot_species_and_cost():
+    torch.manual_seed(0)
+    z = torch.randn(3, 7, 2, device=DEV); x = torch.randn(3, 7, 2, device=DEV)
+    sp = torch.tensor([0, 0, 0, 0, 1, 1, 1], device=DEV)[None].expand(3, 7)
+    perm = E.ot_assign(z, x, sp, L=9.13)
+    assert perm.shape == (3, 7)
+    for b in range(3):
+        assert sorted(perm[b].tolist()) == list(range(7))          # valid permutation
+        assert (sp[b] == sp[b][perm[b]]).all()                     # species preserved by the matching
+    def cost(p):
+        idx = p[:, :, None].expand(-1, -1, 2)
+        return ((z - torch.gather(x, 1, idx)) ** 2).sum((-1, -2))
+    ident = torch.arange(7, device=DEV)[None].expand(3, 7)
+    assert (cost(perm) <= cost(ident) + 1e-5).all()                # OT cost <= identity cost
+
+def test_train_smoke_and_load():
+    torch.cuda.empty_cache()                                        # release prior tests' reserved GPU cache
+    ck = E.train(steps=60, n_cage=48, hidden_nf=32, n_layers=2, batch=16, save=False)
+    assert 0.7 < ck["sigma_b"] < 1.6 and ck["loss_last"] < ck["loss_first"]
+    flow = E.load_flow(ck, DEV)
+    sc, L, geo, pos, s, cl, n_cage = _cfg(B=4)
+    xC, logq = flow.sample(pos, s, cl, sc, L)
+    assert torch.isfinite(logq).all() and xC.shape == (4, 7, 2)

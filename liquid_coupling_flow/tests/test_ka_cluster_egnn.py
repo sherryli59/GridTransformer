@@ -32,7 +32,7 @@ def test_build_cloud_shape_and_cluster_first():
 def test_base_logp_closed_form():
     torch.manual_seed(0)
     c = torch.randn(4, 2, device=DEV); x0 = c[:, None] + 0.3 * torch.randn(4, 7, 2, device=DEV); sb = 1.1
-    got = E.base_logp(x0, c, sb)
+    got = E.base_logp(x0, c, sb, 100.0)                    # L large -> min-image is a no-op, closed form holds
     d2 = ((x0 - c[:, None]) ** 2).sum(-1)
     want = (-d2 / (2 * sb ** 2) - math.log(2 * math.pi * sb ** 2)).sum(-1)
     assert torch.allclose(got, want, atol=1e-5)
@@ -42,6 +42,47 @@ def test_sigma_b_from_data():
     ref = torch.load(f"{E.ART}/ka_reference_N100.pt", map_location=DEV, weights_only=False)
     sb = E.compute_sigma_b(ref["x"].to(DEV), ref["s"].to(DEV).long(), geo, sc, L, 7, n_cage)
     assert 0.7 < sb < 1.6            # cluster spread about its centroid
+
+def _warmed_flow(steps=150, n_steps=32):
+    """A briefly OT-FM-warmed flow: the untrained velocity is zero-init (identity); a few flow-matching steps push
+    it to a TAME nonzero field (straight base->data), so the RK4 round-trip is reversible and sampler==scorer
+    exercises a real (nonzero) log-det rather than the trivial identity. Seeded for reproducibility."""
+    from liquid_coupling_flow.ka_gridformer import _wrap_pm
+    torch.manual_seed(0)
+    sc, L, geo, pos, s, cl, n_cage = _cfg(B=8)
+    flow = E.EGNNClusterFlow(sigma_b=1.1, n_cage=n_cage, r_c=3.0, L=L, hidden_nf=32, n_layers=2, n_steps=n_steps).to(DEV).train()
+    opt = torch.optim.Adam(flow.parameters(), lr=1e-3)
+    cloud, sp, c = E.build_cloud(pos, s, cl, sc, L, n_cage); x1 = cloud[:, :7]
+    for _ in range(steps):
+        z = E.sample_base(c, 7, flow.sigma_b)
+        tgt = _wrap_pm(x1 - z, L); t = torch.rand(8, device=DEV)
+        xt = torch.remainder(z + t[:, None, None] * tgt, L)
+        v, _ = flow.ce.vel_div(torch.cat([xt, cloud[:, 7:]], 1), t, sp, 7)
+        loss = ((v - tgt) ** 2).sum(-1).mean()
+        opt.zero_grad(); loss.backward(); opt.step()
+    return flow.eval()
+
+def test_sampler_equals_scorer():
+    flow = _warmed_flow()
+    sc, L, geo, pos, s, cl, n_cage = _cfg(B=4)
+    xC, logq = flow.sample(pos, s, cl, sc, L)
+    logq2 = flow.log_q(pos, s, cl, xC, sc, L)
+    assert xC.shape == (4, 7, 2)
+    # atol = the RK4 round-trip accuracy on the stiff EGNN central-force field (the 1/r divergence makes it not
+    # exactly reversible; config-dependent ~0.1-0.3). NOT a bug: the DIVERGENCE is exact to 6.48e-8
+    # (test_perparticle_divergence_matches_bruteforce), the identity flow round-trips to 0, and the cutoff is ruled
+    # out. This atol catches gross log-det/sign/base bugs (which were O(10-90)); the gate uses sample() not log_q.
+    # If exact MH/IS is needed downstream, tighten with more RK4 steps / an adaptive or reversible integrator.
+    assert torch.allclose(logq, logq2, atol=3e-1), (logq - logq2).abs().max()
+
+def test_not_translation_invariant():
+    """Translating the cluster ALONE (cage fixed) must change logq (position is pinned by the cage)."""
+    flow = _warmed_flow()
+    sc, L, geo, pos, s, cl, n_cage = _cfg(B=4)
+    xC, _ = flow.sample(pos, s, cl, sc, L)
+    lq0 = flow.log_q(pos, s, cl, xC, sc, L)
+    lq1 = flow.log_q(pos, s, cl, torch.remainder(xC + 0.5, L), sc, L)   # move cluster only
+    assert (lq0 - lq1).abs().max() > 1e-2
 
 def test_perparticle_divergence_matches_bruteforce():
     """Analytic cluster-restricted divergence == trace of the autograd Jacobian of the cluster velocity."""

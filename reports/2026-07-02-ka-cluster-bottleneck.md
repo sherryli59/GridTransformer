@@ -328,3 +328,16 @@ Gate + split on the retrained ckpt (figure: liquid_coupling_flow/artifacts/ka_cl
   contract; one-step true-cage histogram sits on data). MH energy acceptance is the guard by construction.
 
 VERDICT: the frame bug was LOAD-BEARING for the precision wall. Decision rule "clash well below 44%" met.
+
+## Task 6: conditioning probes (retrained ckpt, controller, 2026-07-02)
+
+- cagesens: |dv|(nearest cage) / |dv|(farthest) ~ 8-10x at t=1 (0.42-0.46 vs 0.04-0.06; |v|~0.55) and ~8x at
+  t=0.5 => cage conditioning ALIVE and strongest late — conditioning pathway is NOT the bottleneck.
+- losst (FM sq-err, t x dist-to-cage): U-shaped in t; minimum mid-flow (~0.2-0.4 at t=0.55-0.75), sharp rise at
+  t=0.95 in EVERY distance bin (0.85/0.90/1.55) => residual deficit = LATE-TIME SHARPENING, global not near-cage.
+- traj (clash vs t, n_steps=32): monotonic resolution from base (intra 51%, cage 70%) to (6.6%, 12.7%) at t=1,
+  no overshoot; endpoint == n_steps=8 split values => integrator resolution NOT the limiter, the field is.
+
+READING: remaining 18% is a late-t field-sharpness deficit with healthy conditioning. Targeted lever = Task 8
+analytic repulsive prior (supplies the steep short-r term at t->1); softer lever = Task 7 longer training
+(FM loss still descending at 15k).

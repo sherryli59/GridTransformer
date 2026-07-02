@@ -357,3 +357,12 @@ information that collapses the conditional to near-unimodal, which is exactly wh
 sharpens to 7%. Conclusion: the CNF CAN carve exclusion when the conditional is well-posed; context is not
 the obstacle but the enabler. Bottleneck localization stands: late-t field sharpness (Task 6), levers = Task 8
 physics prior / Task 7 longer training.
+
+## Task 5: overfit probe RESULT (controller, 2026-07-02)
+
+4 configs x seed-5 cluster, no augment, 6k steps: intra 8.7% / cage 11.9% / overall 17.5% / |sample-true(OT)| 0.399.
+OVERFIT (17.5%) == GENERALIZATION (18.1%): the residual is NOT a generalization gap — the field class + OT-CFM
+objective floors at ~18% even when memorizing 4 fixed cages (a perfectly overfit flow would map every base draw
+onto the single observed cluster: clash->0, |sample-true|->0). Confirms Task 6's late-t sharpness deficit as a
+STRUCTURAL floor of the learned field. DECISION: Task 7 (longer training) de-prioritized (cannot beat the floor
+memorization already hits); Task 8 (analytic species-pair repulsive prior, exactness-preserving) is the lever.

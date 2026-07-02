@@ -450,3 +450,18 @@ per-config conditional fields differ; the FM marginal blurs them). Best checkpoi
 52% -> 16.8% overall clash (data 0%). MH cluster kernel GO discussion is open (exact log_q + energy acceptance
 also cures the 3.3b Gibbs collapse). Remaining gap = late-t marginal smearing; further levers (beyond scope):
 per-config conditioning capacity, MLE fine-tune atop FM, or accept-and-let-MH-filter at ~17%.
+
+## Follow-up: prior exactness coverage-hardening (2026-07-02)
+
+Two tests added (16/16 pass):
+- test_divergence_exact_with_rep_prior HARDENED: now checks analytic==brute-force at t=0.37 AND t=0.90
+  (gate g(t)=t^8 open, prior active), + a liveness assert (prior changes the divergence at late t) so the
+  exactness check is non-vacuous. rep_scale fixed to 0.0 (amp 0.69) for an unambiguous prior.
+- test_sampler_equals_scorer_with_rep_prior NEW: full RK4 sample->log_q round-trip with the prior on at the
+  deployed amplitude (0.019).
+FINDING (recorded in the test docstring): the prior DEGRADES the RK4 log_q round-trip, residual ~1.0 (prior on,
+deployed amp) vs ~0.1-0.3 (prior off) — and NON-monotonic in n_steps (64~=32). The divergence is exact pointwise;
+the r^-12 field is just stiff for fixed-step RK4. Gross log-det/base/sign bug scale is O(10-300) (15x amp -> ~300).
+IMPLICATION: an EXACT MH/IS kernel with the prior ON needs an adaptive/reversible integrator, OR use the prior-OFF
+model (18.1% clash, log_q round-trips to ~0.2) as the exact proposal. The g(r) gate is unaffected (sample_fast, no
+log_q). So the "best model" split: prior-ON = best structural sampler (16.8%), prior-OFF = best EXACT-log_q proposal.

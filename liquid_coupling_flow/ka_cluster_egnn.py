@@ -87,23 +87,57 @@ class EGNNClusterFlow(nn.Module):
     position, so there is no zero-COM subspace and no frame."""
 
     def __init__(self, sigma_b, n_cage=48, k=7, r_c=3.0, L=None, hidden_nf=64, n_layers=4, n_steps=16, n_species=2,
-                 max_neighbors=None, rep_prior=False):
+                 max_neighbors=None, rep_prior=False, integrator="rk4", n_picard=32, picard_tol=1e-9):
         super().__init__()
         self.sigma_b = float(sigma_b); self.n_cage = n_cage; self.k = k; self.n_steps = n_steps
+        # integrator: "rk4" (default, 4th-order, NOT time-reversible -> sample==log_q holds only to integration
+        # accuracy, ~4e-3 at n_steps=32) or "midpoint" (implicit midpoint, TIME-REVERSIBLE: div evaluated at the
+        # shared min-image midpoint so forward/reverse log-dets cancel to the inner-solve accuracy). REQUIREMENTS
+        # for the reversible win (measured: 4e-14 vs RK4 4e-3): (1) DOUBLE precision — float32 floors the Picard
+        # solve at ~1e-7 and roundoff accumulates (~6e-3, no better than RK4); (2) enough steps that Picard
+        # CONTRACTS (h*Lip(v) < 1) — n_steps>=32 here converges, n_steps=16 does NOT (residual ~3e-2). NOT suited
+        # to a stiff field (rep_prior on): Picard diverges -> use rk4 or an implicit/Newton solve there. This is
+        # the exact-log_q path for the prior-OFF model (run it in double). Not a trained parameter (integration-
+        # time knob); set post-load like n_steps if desired.
+        self.integrator = integrator; self.n_picard = n_picard; self.picard_tol = picard_tol
         self.ce = ConditionalEGNN(n_cage=n_cage, k=k, r_c=r_c, L=L, hidden_nf=hidden_nf, n_layers=n_layers,
                                   n_species=n_species, max_neighbors=max_neighbors, rep_prior=rep_prior)
         with torch.no_grad():                              # flow-matching init: untrained velocity == 0 (identity, tame)
             self.ce.egnn.pot_model[-1].weight.zero_(); self.ce.egnn.pot_model[-1].bias.zero_()
 
+    def _midpoint_step(self, cl, cage, sp, k, L, t, h, dev, cloud):
+        """One implicit-midpoint step, time-reversible. Solves x_next = cl + h*v(mid) with mid = the MIN-IMAGE
+        midpoint of (cl, x_next) by Picard iteration (velocity-only) to picard_tol, then evaluates the divergence
+        ONCE at the converged midpoint. The min-image midpoint is symmetric in its two endpoints, so the reverse
+        step (-h from x_next) reconstructs the identical mid -> logdet_fwd and logdet_rev cancel to Picard
+        tolerance. Returns (x_next[B,k,2], h*div_mid[B])."""
+        tm = _t(t + 0.5 * h, dev, cloud)
+        x_next = cl
+        for _ in range(self.n_picard):
+            mid = torch.remainder(cl + 0.5 * _wrap_pm(x_next - cl, L), L)
+            v = self.ce.egnn.forward(tm, torch.cat([mid, cage], 1), sp)[:, :k]
+            x_new = torch.remainder(cl + h * v, L)
+            if _wrap_pm(x_new - x_next, L).abs().max() < self.picard_tol:
+                x_next = x_new; break
+            x_next = x_new
+        mid = torch.remainder(cl + 0.5 * _wrap_pm(x_next - cl, L), L)     # converged shared midpoint
+        _, div_mid = self.ce.vel_div(torch.cat([mid, cage], 1), tm, sp, k)
+        return x_next, h * div_mid
+
     def _integrate(self, cloud, sp, k, L, reverse):
-        """RK4 integrate the cluster (first k) over t; cage (rest) fixed. reverse=False: t 0->1 (base->data),
-        accumulate -div; reverse=True: t 1->0 (data->base), accumulate +div. Returns (cluster[B,k,2], logdet)."""
+        """Integrate the cluster (first k) over t; cage (rest) fixed. reverse=False: t 0->1 (base->data),
+        accumulate -div; reverse=True: t 1->0 (data->base), accumulate +div. Returns (cluster[B,k,2], logdet).
+        Integrator per self.integrator: 'rk4' (4th-order) or 'midpoint' (reversible)."""
         dev = cloud.device; B = cloud.shape[0]; dt = 1.0 / self.n_steps
         logdet = torch.zeros(B, device=dev, dtype=cloud.dtype)
         cl = cloud[:, :k]; cage = cloud[:, k:]
         for i in range(self.n_steps):
             t = 1.0 - i * dt if reverse else i * dt
             h = -dt if reverse else dt
+            if self.integrator == "midpoint":
+                cl, dstep = self._midpoint_step(cl, cage, sp, k, L, t, h, dev, cloud)
+                logdet = logdet + dstep
+                continue
             # RK4 the AUGMENTED ODE [x, logdet]: div is computed at all 4 stages (O(dt^4), not Euler) so the
             # forward/reverse log-det cancels to integration precision -> sampler==scorer holds.
             v1, d1 = self.ce.vel_div(torch.cat([cl, cage], 1), _t(t, dev, cloud), sp, k)

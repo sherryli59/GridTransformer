@@ -103,6 +103,25 @@ def test_sampler_equals_scorer_with_rep_prior():
     assert xC.shape == (4, 7, 2)
     assert torch.allclose(logq, logq2, atol=2.5), (logq - logq2).abs().max()
 
+def test_reversible_midpoint_exact_roundtrip():
+    """The reversible implicit-midpoint integrator makes sample()==log_q() to machine precision (vs RK4's
+    integration-accuracy residual), REUSING the same analytic divergence (vel_div) — it only changes the
+    stepping recurrence. Requirements exercised: double precision + n_steps>=32 so Picard contracts. This is
+    the exact-log_q path for an MH/IS kernel on the prior-OFF model."""
+    flow = _warmed_flow(n_steps=32).double()                     # prior-off, mild field
+    sc, L, geo, pos, s, cl, n_cage = _cfg(B=4)
+    pos = pos.double()
+    flow.integrator = "midpoint"; flow.n_picard = 64; flow.picard_tol = 1e-13
+    xC, logq = flow.sample(pos, s, cl, sc, L)
+    logq2 = flow.log_q(pos, s, cl, xC, sc, L)
+    rev = (logq - logq2).abs().max().item()
+    assert rev < 1e-8, rev                                        # machine-exact self-consistency (measured ~4e-14)
+    # and it must be orders of magnitude tighter than RK4 on the SAME field/config (the whole point)
+    flow.integrator = "rk4"
+    xC_r, logq_r = flow.sample(pos, s, cl, sc, L)
+    rk4 = (logq_r - flow.log_q(pos, s, cl, xC_r, sc, L)).abs().max().item()
+    assert rk4 > 100 * rev, (rk4, rev)                            # RK4 ~4e-3 >> midpoint ~4e-14
+
 def test_not_translation_invariant():
     """Translating the cluster ALONE (cage fixed) must change logq (position is pinned by the cage)."""
     flow = _warmed_flow()

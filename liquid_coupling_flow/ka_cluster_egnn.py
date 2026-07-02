@@ -75,8 +75,15 @@ class ConditionalEGNN(nn.Module):
                                   rep_prior=rep_prior)
 
     def vel_div(self, cloud, t, sp, k):
-        vel, divpp = self.egnn.forward_and_perparticle_divergence(cloud, t, sp)   # [B,P,2],[B,P]
-        return vel[:, :k], divpp[:, :k].sum(-1)                                    # cluster velocities + div
+        # Under inference (@torch.no_grad — sample/log_q/integrators) do NOT build the second-order graph the
+        # divergence's inner autograd would otherwise retain (create_graph/retain_graph=True): it is pure waste
+        # and, in the dopri5 loop (hundreds of field evals/solve), accumulates retained graphs -> memory + slow.
+        # Detach the outputs so no graph is carried through the integrator. Grad-enabled callers (the exactness
+        # tests, which take the Jacobian of vel) keep differentiability.
+        diff = torch.is_grad_enabled()
+        vel, divpp = self.egnn.forward_and_perparticle_divergence(cloud, t, sp, differentiable=diff)  # [B,P,2],[B,P]
+        vel, div = vel[:, :k], divpp[:, :k].sum(-1)                                # cluster velocities + div
+        return (vel, div) if diff else (vel.detach(), div.detach())
 
 
 class EGNNClusterFlow(nn.Module):
@@ -87,9 +94,11 @@ class EGNNClusterFlow(nn.Module):
     position, so there is no zero-COM subspace and no frame."""
 
     def __init__(self, sigma_b, n_cage=48, k=7, r_c=3.0, L=None, hidden_nf=64, n_layers=4, n_steps=16, n_species=2,
-                 max_neighbors=None, rep_prior=False, integrator="rk4", n_picard=32, picard_tol=1e-9):
+                 max_neighbors=None, rep_prior=False, integrator="rk4", n_picard=32, picard_tol=1e-9,
+                 ode_rtol=1e-7, ode_atol=1e-7):
         super().__init__()
         self.sigma_b = float(sigma_b); self.n_cage = n_cage; self.k = k; self.n_steps = n_steps
+        self.ode_rtol = ode_rtol; self.ode_atol = ode_atol      # for integrator="dopri5"
         # integrator: "rk4" (default, 4th-order, NOT time-reversible -> sample==log_q holds only to integration
         # accuracy, ~4e-3 at n_steps=32) or "midpoint" (implicit midpoint, TIME-REVERSIBLE: div evaluated at the
         # shared min-image midpoint so forward/reverse log-dets cancel to the inner-solve accuracy). REQUIREMENTS
@@ -152,11 +161,37 @@ class EGNNClusterFlow(nn.Module):
             logdet = logdet + h * div_mid                               # div at the ALI midpoint (reversible given v)
         return cl, logdet
 
+    def _dopri5_integrate(self, cloud, sp, k, L, reverse):
+        """Adaptive Dormand-Prince (dopri5) on the AUGMENTED [x_cluster, logdet] ODE, cage frozen. This is the
+        natural home for our EXACT cheap divergence: the log-det dynamics dℓ/dt = ∇·v uses vel_div's analytic
+        per-particle divergence (NOT a stochastic Hutchinson trace), so each of dopri5's ~6 stages/step costs one
+        exact div eval with ZERO estimator variance. Auxiliary-free (a true bijection on x -> exact arbitrary-
+        point scoring, unlike ALI) and adaptive (shrinks steps through the stiff regions where midpoint's Picard
+        died and fixed-step rk4 plateaued). Self-consistent to ~rtol: forward-solve(z)->x and reverse-solve(x)->z
+        both track the true continuous trajectory, so sample==log_q to tolerance without needing reversibility-
+        by-construction. THE trustworthy-log_q path for the stiff trained flow (run in double, tight rtol)."""
+        from torchdiffeq import odeint
+        dev = cloud.device; B = cloud.shape[0]
+        cl = cloud[:, :k]; cage = cloud[:, k:]
+
+        def func(t, y):
+            x, _ = y
+            xw = torch.remainder(x, L)                              # periodic velocity: wrap before evaluating
+            v, div = self.ce.vel_div(torch.cat([xw, cage], 1), t, sp, k)
+            return (v, div)                                         # dx/dt = v, dℓ/dt = ∇·v (exact)
+
+        t_span = torch.tensor([1.0, 0.0] if reverse else [0.0, 1.0], device=dev, dtype=cloud.dtype)
+        ld0 = torch.zeros(B, device=dev, dtype=cloud.dtype)
+        xf, ldf = odeint(func, (cl, ld0), t_span, method="dopri5", rtol=self.ode_rtol, atol=self.ode_atol)
+        return torch.remainder(xf[-1], L), ldf[-1]                  # logdet = ∫ ∇·v dt (sign matches rk4/midpoint)
+
     def _integrate(self, cloud, sp, k, L, reverse):
         """Integrate the cluster (first k) over t; cage (rest) fixed. reverse=False: t 0->1 (base->data),
         accumulate -div; reverse=True: t 1->0 (data->base), accumulate +div. Returns (cluster[B,k,2], logdet).
         Integrator per self.integrator: 'rk4' (4th-order) | 'midpoint' (reversible, implicit) | 'ali'
-        (reversible, explicit — Asynchronous Leapfrog)."""
+        (reversible, explicit — Asynchronous Leapfrog) | 'dopri5' (adaptive, exact-div augmented state)."""
+        if self.integrator == "dopri5":
+            return self._dopri5_integrate(cloud, sp, k, L, reverse)
         if self.integrator == "ali":
             return self._ali_integrate(cloud, sp, k, L, reverse)
         dev = cloud.device; B = cloud.shape[0]; dt = 1.0 / self.n_steps

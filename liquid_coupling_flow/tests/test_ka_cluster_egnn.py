@@ -122,6 +122,21 @@ def test_reversible_midpoint_exact_roundtrip():
     rk4 = (logq_r - flow.log_q(pos, s, cl, xC_r, sc, L)).abs().max().item()
     assert rk4 > 100 * rev, (rk4, rev)                            # RK4 ~4e-3 >> midpoint ~4e-14
 
+def test_ali_integrator_runs_and_is_explicit_reversible():
+    """The Asynchronous Leapfrog integrator ('ali') runs and produces a finite log-density. It is EXPLICIT
+    (1 vel eval/step, no inner solve) and reversible on the augmented (x,v) tuple, but — unlike the auxiliary-
+    free 'midpoint' — its sample()->log_q() self-consistency for a re-scored point is NOT machine-exact (the
+    velocity memory is re-initialized at the boundary when scoring): measured ~1e-2 on this smooth toy flow vs
+    midpoint's ~1e-13. This test PINS that documented behavior (finite logq, round-trip < 0.05); it does NOT
+    assert machine-exactness because ALI does not provide it for arbitrary-point scoring."""
+    flow = _warmed_flow(n_steps=32).double()
+    flow.integrator = "ali"
+    sc, L, geo, pos, s, cl, n_cage = _cfg(B=4); pos = pos.double()
+    xC, logq = flow.sample(pos, s, cl, sc, L)
+    logq2 = flow.log_q(pos, s, cl, xC, sc, L)
+    assert xC.shape == (4, 7, 2) and torch.isfinite(logq).all() and torch.isfinite(logq2).all()
+    assert (logq - logq2).abs().max() < 5e-2, (logq - logq2).abs().max()      # documented: not machine-exact
+
 def test_not_translation_invariant():
     """Translating the cluster ALONE (cage fixed) must change logq (position is pinned by the cage)."""
     flow = _warmed_flow()

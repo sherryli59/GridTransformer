@@ -124,10 +124,41 @@ class EGNNClusterFlow(nn.Module):
         _, div_mid = self.ce.vel_div(torch.cat([mid, cage], 1), tm, sp, k)
         return x_next, h * div_mid
 
+    def _ali_integrate(self, cloud, sp, k, L, reverse):
+        """Asynchronous Leapfrog Integrator (Mutze; Zhuang et al. MALI 2021): EXPLICIT and algebraically
+        time-reversible, 1 velocity eval/step (vs the implicit midpoint's iterative inner solve, which does not
+        contract on this stiff field). Carries a velocity MEMORY v (an auxiliary state) alongside x:
+            x_mid = x + (h/2) v ;   f_mid, div_mid = vel_div(x_mid) ;   v <- 2 f_mid - v ;   x <- x + h f_mid
+        The reverse step (-h from (x, v)) reconstructs x_mid from (x, v) alone and inverts v exactly -> the
+        (x, v, logdet) tuple is machine-exact reversible WITHIN a pass (1 eval/step, no solve). v is initialized
+        at the starting boundary as f(x_start, t_start). CAVEAT (fundamental to augmented-state reversible
+        integrators): sample() gets x AND its exact density in one forward pass, but SCORING an externally-given
+        point (log_q of a point the flow did not sample) must re-init v = f(x,t_1) and is only exact to the extent
+        that boundary v matches the trajectory's carried v -> arbitrary-point self-consistency is NOT guaranteed
+        machine-exact (measure it). For arbitrary-point exactness use 'midpoint' (no auxiliary). NOT stiff-stable
+        (explicit): needs enough steps to stay stable. Returns (cluster[B,k,2], logdet)."""
+        dev = cloud.device; B = cloud.shape[0]; dt = 1.0 / self.n_steps
+        logdet = torch.zeros(B, device=dev, dtype=cloud.dtype)
+        cl = cloud[:, :k]; cage = cloud[:, k:]
+        t0 = 1.0 if reverse else 0.0
+        v = self.ce.egnn.forward(_t(t0, dev, cloud), torch.cat([cl, cage], 1), sp)[:, :k]   # v_0 = f(x_start, t_start)
+        for i in range(self.n_steps):
+            t = 1.0 - i * dt if reverse else i * dt
+            h = -dt if reverse else dt
+            x_mid = torch.remainder(cl + 0.5 * h * v, L)
+            f_mid, div_mid = self.ce.vel_div(torch.cat([x_mid, cage], 1), _t(t + 0.5 * h, dev, cloud), sp, k)
+            v = 2.0 * f_mid - v                                          # asynchronous leapfrog velocity update
+            cl = torch.remainder(cl + h * f_mid, L)                      # == x_mid + (h/2) v_new (torus-consistent)
+            logdet = logdet + h * div_mid                               # div at the ALI midpoint (reversible given v)
+        return cl, logdet
+
     def _integrate(self, cloud, sp, k, L, reverse):
         """Integrate the cluster (first k) over t; cage (rest) fixed. reverse=False: t 0->1 (base->data),
         accumulate -div; reverse=True: t 1->0 (data->base), accumulate +div. Returns (cluster[B,k,2], logdet).
-        Integrator per self.integrator: 'rk4' (4th-order) or 'midpoint' (reversible)."""
+        Integrator per self.integrator: 'rk4' (4th-order) | 'midpoint' (reversible, implicit) | 'ali'
+        (reversible, explicit — Asynchronous Leapfrog)."""
+        if self.integrator == "ali":
+            return self._ali_integrate(cloud, sp, k, L, reverse)
         dev = cloud.device; B = cloud.shape[0]; dt = 1.0 / self.n_steps
         logdet = torch.zeros(B, device=dev, dtype=cloud.dtype)
         cl = cloud[:, :k]; cage = cloud[:, k:]

@@ -341,3 +341,19 @@ VERDICT: the frame bug was LOAD-BEARING for the precision wall. Decision rule "c
 READING: remaining 18% is a late-t field-sharpness deficit with healthy conditioning. Targeted lever = Task 8
 analytic repulsive prior (supplies the steep short-r term at t->1); softer lever = Task 7 longer training
 (FM loss still descending at 15k).
+
+## Task 4: no-context ablation RESULT (controller, 2026-07-02)
+
+nocage flow (n_cage=0, base at TRUE cluster centroid, full intra attention, 15k/batch256; FM loss noisy 1.2-1.8):
+- intra-clash 28.1/27.6/27.4% at n_steps 8/32/64 (flat), mean-minr 0.95 (TRUE 0.0%/1.00)
+- WITH-CAGE retrained model: intra-clash 7.0% => removing context made intra-exclusion 4x WORSE
+- pair-distance histograms (liquid_coupling_flow/artifacts/ka_egnn_nocage_intra.png): data's sharp AA/AB/BB
+  first-shell peaks smeared into broad humps
+
+INTERPRETATION (inverts the plan's naive decision rule): no-context is NOT the easy capability baseline — a
+free k=7 cluster has unbroken rotational multimodality, so the OT-CFM marginal velocity field averages over
+modes and blurs (loss can't converge: irreducible conditional entropy). The CAGE is symmetry-BREAKING
+information that collapses the conditional to near-unimodal, which is exactly where the with-cage flow
+sharpens to 7%. Conclusion: the CNF CAN carve exclusion when the conditional is well-posed; context is not
+the obstacle but the enabler. Bottleneck localization stands: late-t field sharpness (Task 6), levers = Task 8
+physics prior / Task 7 longer training.

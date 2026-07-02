@@ -114,22 +114,43 @@ def test_no_phantom_edges_fullcloud():
 
 
 def test_divergence_exact_with_rep_prior():
+    """Analytic cluster-restricted divergence == brute-force Jacobian trace WITH the repulsive prior ON, at both
+    a low-t point (t=0.37, g(t)=t^8~3.5e-4 so the prior is nearly gated off) AND a late-t point (t=0.90,
+    g(t)~0.43 so the prior is meaningfully active — this is where the sharpening term does its work). A liveness
+    assertion confirms the prior actually changes the divergence at late t, so the exactness check is NOT vacuous
+    (a broken/no-op prior would still trivially match its own brute force). rep_scale is fixed to 0.0
+    (softplus(0)=0.69) so the prior amplitude is unambiguously large regardless of random init."""
     import torch
     from liquid_coupling_flow import ka_cluster_egnn as E
     torch.manual_seed(0)
     cloud, sp, L = _cloud(B=1)
     ce = E.ConditionalEGNN(n_cage=48, k=7, r_c=3.0, L=L, hidden_nf=32, n_layers=2,
                            max_neighbors=24, rep_prior=True).to(DEV).double()
-    cloud = cloud.double()
-    t = torch.tensor(0.37, device=DEV, dtype=torch.float64)
-    k = 7
-    xcl = cloud[:, :k].reshape(-1).clone().requires_grad_(True)
+    ce.egnn.rep_scale.data.fill_(0.0)                 # softplus(0)=0.69: a clearly-active prior amplitude
+    cloud = cloud.double(); k = 7
+    xcl0 = cloud[:, :k].reshape(-1).clone()
 
-    def vel_flat(xf):
-        cl2 = cloud.clone(); cl2[:, :k] = xf.reshape(1, k, 2)
-        v, _ = ce.vel_div(cl2, t, sp, k)
-        return v.reshape(-1)
+    def div_at(t, rep_on):
+        ce.egnn.rep_prior = rep_on
+        xcl = xcl0.clone().requires_grad_(True)
 
-    J = torch.autograd.functional.jacobian(vel_flat, xcl)
-    _, div_analytic = ce.vel_div(cloud, t, sp, k)
-    assert abs(torch.diagonal(J).sum().item() - div_analytic.item()) < 1e-4
+        def vel_flat(xf):
+            cl2 = cloud.clone(); cl2[:, :k] = xf.reshape(1, k, 2)
+            v, _ = ce.vel_div(cl2, t, sp, k)
+            return v.reshape(-1)
+
+        bf = torch.diagonal(torch.autograd.functional.jacobian(vel_flat, xcl)).sum().item()
+        _, an = ce.vel_div(cloud, t, sp, k)
+        return bf, an.item()
+
+    for tv in (0.37, 0.90):                           # gate off / gate meaningfully open
+        t = torch.tensor(tv, device=DEV, dtype=torch.float64)
+        bf, an = div_at(t, True)
+        assert abs(bf - an) < 1e-4, (tv, bf, an)      # analytic == brute-force with the prior ON
+
+    # liveness at late t: the prior must actually move the divergence (else the exactness check above is vacuous)
+    t9 = torch.tensor(0.90, device=DEV, dtype=torch.float64)
+    _, an_on = div_at(t9, True)
+    _, an_off = div_at(t9, False)
+    assert abs(an_on - an_off) > 1e-3, (an_on, an_off)
+    ce.egnn.rep_prior = True

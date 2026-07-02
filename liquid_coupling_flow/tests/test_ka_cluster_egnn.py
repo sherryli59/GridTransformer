@@ -43,14 +43,19 @@ def test_sigma_b_from_data():
     sb = E.compute_sigma_b(ref["x"].to(DEV), ref["s"].to(DEV).long(), geo, sc, L, 7, n_cage)
     assert 0.7 < sb < 1.6            # cluster spread about its centroid
 
-def _warmed_flow(steps=150, n_steps=32):
+def _warmed_flow(steps=150, n_steps=32, rep_prior=False, rep_scale_init=None):
     """A briefly OT-FM-warmed flow: the untrained velocity is zero-init (identity); a few flow-matching steps push
     it to a TAME nonzero field (straight base->data), so the RK4 round-trip is reversible and sampler==scorer
-    exercises a real (nonzero) log-det rather than the trivial identity. Seeded for reproducibility."""
+    exercises a real (nonzero) log-det rather than the trivial identity. Seeded for reproducibility.
+    rep_prior/rep_scale_init: warm a flow WITH the analytic repulsive prior active (set rep_scale before warmup so
+    the learned field is trained to be reversible INCLUDING the prior term)."""
     from liquid_coupling_flow.ka_gridformer import _wrap_pm
     torch.manual_seed(0)
     sc, L, geo, pos, s, cl, n_cage = _cfg(B=8)
-    flow = E.EGNNClusterFlow(sigma_b=1.1, n_cage=n_cage, r_c=3.0, L=L, hidden_nf=32, n_layers=2, n_steps=n_steps).to(DEV).train()
+    flow = E.EGNNClusterFlow(sigma_b=1.1, n_cage=n_cage, r_c=3.0, L=L, hidden_nf=32, n_layers=2, n_steps=n_steps,
+                             rep_prior=rep_prior).to(DEV).train()
+    if rep_scale_init is not None:
+        flow.ce.egnn.rep_scale.data.fill_(rep_scale_init)
     opt = torch.optim.Adam(flow.parameters(), lr=1e-3)
     cloud, sp, c = E.build_cloud(pos, s, cl, sc, L, n_cage); x1 = cloud[:, :7]
     for _ in range(steps):
@@ -74,6 +79,29 @@ def test_sampler_equals_scorer():
     # out. This atol catches gross log-det/sign/base bugs (which were O(10-90)); the gate uses sample() not log_q.
     # If exact MH/IS is needed downstream, tighten with more RK4 steps / an adaptive or reversible integrator.
     assert torch.allclose(logq, logq2, atol=3e-1), (logq - logq2).abs().max()
+
+def test_sampler_equals_scorer_with_rep_prior():
+    """Close the exactness chain END-TO-END through the repulsive-prior path at the DEPLOYED amplitude (default
+    init softplus(-4)=0.019, matching the trained model's learned amps 0.010-0.026). The divergence test
+    (test_egnn_audit.test_divergence_exact_with_rep_prior) proves vel_div's log-det integrand is exact with the
+    prior on; this proves the full RK4 sample()->log_q() round-trip integrates it without a gross log-det/sign/base
+    bug when the prior is wired in.
+
+    KNOWN, DOCUMENTED: the round-trip residual with the prior on (~1.0) is LARGER than the no-prior case
+    (~0.1-0.3, test_sampler_equals_scorer). This is NOT a bug in the prior's divergence (that is exact pointwise);
+    it is fixed-step RK4 losing accuracy on the STIFF r^-12 field, and it does not shrink monotonically with
+    n_steps (empirically 64 steps ~= 32). A gross log-det/base/sign bug would be O(10-300) (a 15x-larger prior
+    amplitude drives the residual to ~300), so atol=2.5 cleanly separates 'stiff-field integrator residual' from
+    'broken machinery'. IMPLICATION: exact MH/IS with the prior ON wants a stiffer/adaptive/reversible integrator
+    (or the prior-OFF model, whose log_q round-trips to ~0.2); the g(r) gate is unaffected (uses sample_fast, no
+    log_q)."""
+    flow = _warmed_flow(rep_prior=True)                           # default rep_scale init = -4.0 (deployed magnitude)
+    assert flow.ce.egnn.rep_prior                                 # guard: the prior path is actually live
+    sc, L, geo, pos, s, cl, n_cage = _cfg(B=4)
+    xC, logq = flow.sample(pos, s, cl, sc, L)
+    logq2 = flow.log_q(pos, s, cl, xC, sc, L)
+    assert xC.shape == (4, 7, 2)
+    assert torch.allclose(logq, logq2, atol=2.5), (logq - logq2).abs().max()
 
 def test_not_translation_invariant():
     """Translating the cluster ALONE (cage fixed) must change logq (position is pinned by the cage)."""

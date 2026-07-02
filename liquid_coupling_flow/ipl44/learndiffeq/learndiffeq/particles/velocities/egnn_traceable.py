@@ -218,7 +218,12 @@ class EGNN_dynamics(nn.Module):
             return pot_flat
         sig = self.sig_pair[common["a_central_idx"], common["a_nbr_idx"]][:, None]
         amp = torch.nn.functional.softplus(self.rep_scale)[common["a_central_idx"], common["a_nbr_idx"]][:, None]
-        return pot_flat - amp * (sig / rij.clamp_min(0.05)) ** 12
+        # Clamp r at 0.6*sig_ij PER PAIR, not a tiny absolute floor: (sig/r)^12 at r=0.05 is ~4e15, which
+        # bombs the FM regression with rare astronomically-large-loss batches (observed: step-0 fm-loss 1.3e22)
+        # even at the near-no-op init amplitude. 0.6*sig caps the term at (1/0.6)^12 ~= 458*amp (O(10) at init)
+        # while keeping the steep repulsive ramp over the physical 0.6*sig..sig shell. torch.maximum is
+        # piecewise and autograd-consistent on the same rij graph -> the analytic divergence stays exact.
+        return pot_flat - amp * (sig / torch.maximum(rij, 0.6 * sig)) ** 12
 
     def forward(self, t, xs, a=None):
         common = self._compute_common_terms(xs, t, a)

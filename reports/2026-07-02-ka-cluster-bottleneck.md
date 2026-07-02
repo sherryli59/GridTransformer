@@ -465,3 +465,19 @@ the r^-12 field is just stiff for fixed-step RK4. Gross log-det/base/sign bug sc
 IMPLICATION: an EXACT MH/IS kernel with the prior ON needs an adaptive/reversible integrator, OR use the prior-OFF
 model (18.1% clash, log_q round-trips to ~0.2) as the exact proposal. The g(r) gate is unaffected (sample_fast, no
 log_q). So the "best model" split: prior-ON = best structural sampler (16.8%), prior-OFF = best EXACT-log_q proposal.
+
+## Follow-up: reversible integrator option (2026-07-02)
+
+Added EGNNClusterFlow integrator="midpoint" (implicit midpoint, time-reversible) alongside the default "rk4".
+It REUSES the existing analytic divergence (vel_div) — the augmented [x, logdet] is stepped by the reversible
+scheme; div is evaluated at the shared MIN-IMAGE midpoint so forward/reverse log-dets cancel exactly. It does
+NOT use a discrete-map Jacobian (that would abandon the cheap divergence).
+
+MEASURED sample==log_q round-trip (prior-off warmed flow, B=4):
+  DOUBLE n_steps=32:  midpoint 4.3e-14   vs   rk4 4.1e-3   (11 orders tighter — reversible win confirmed)
+  DOUBLE n_steps=16:  midpoint 3.3e-2 (WORSE) — Picard does not contract at h=1/16
+  FLOAT32 n_steps=32: midpoint 6.4e-3 (~= rk4) — float32 floors the Picard solve at ~1e-7
+REQUIREMENTS: (1) double precision; (2) enough steps for Picard contraction (h*Lip(v)<1, n_steps>=32 here).
+NOT for the stiff rep_prior-on field (Picard diverges: midpoint 21 vs rk4 1.6) -> that needs implicit/Newton.
+USE: exact-log_q proposal for the MH/IS kernel on the prior-OFF model (ka_cluster_egnn_N100.pt), run in double.
+Default integrator stays rk4 (checkpoints/behavior unchanged). Test: test_reversible_midpoint_exact_roundtrip.

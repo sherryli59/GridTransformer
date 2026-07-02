@@ -241,3 +241,75 @@ of numbers are not comparable at face value. This is expected and documented
 here as the old-weights/new-code caveat per the brief. Metric
 cross-validation (split's overall clash % vs. the controller's gate_measure
 on the same checkpoint) happens in Task 3 Step 7.
+
+## Task 4: nocage edits
+
+Implemented the no-context ablation (n_cage=0) plumbing in
+`liquid_coupling_flow/ka_cluster_egnn.py`, per the Task-4 brief, Steps 1-4 (code
++ smoke tests only — the real nocage training run and its evaluation, Steps
+5-6, are deferred to the controller):
+
+- **Step 1** (`build_cloud`): with `n_cage=0` the cage is empty and
+  `cage_centroid` is NaN (mean over zero cage members), so the base anchor now
+  falls back to the cluster centroid `ccen` when `n_cage == 0`, else the
+  original `cage_centroid(cage, L)`. Note this anchor leaks the true cluster
+  position, so nocage results below speak only to intra (k=7 mutual)
+  exclusion, not to a fair generative test.
+- **Step 2** (`train()`): added keyword-only args `tag="", n_configs=None,
+  fix_seed=None, use_augment=True, resume=False` at the end of the signature
+  (all defaulted, existing calls unchanged). Four body edits: (a) optional
+  `data = data[:n_configs]` truncation for the overfit probe; (b) checkpoint
+  path now `ka_cluster_egnn{tag}_N{train_N}.pt` with an optional `resume`
+  load of an existing checkpoint's `state_dict` before training starts; (c)
+  the per-step batch now honors `use_augment` (skips `augment()` when False)
+  and `fix_seed` (pins the cluster seed instead of randomizing it); (d) the
+  final save print now reports the actual resolved `ckpt` path instead of a
+  hardcoded `ka_cluster_egnn_N{train_N}.pt` string.
+- **Step 3** (`__main__`): added `nocage` mode (`n_cage=0, max_neighbors=None,
+  batch=256, tag="_nocage"`, 15000 steps) and `overfit` mode (`n_configs=4,
+  fix_seed=5, use_augment=False, tag="_overfit"`, 6000 steps, batch=64),
+  alongside the existing `gate` and default-train dispatch.
+
+No deviations from the brief were needed — both smoke-test steps passed
+against the brief's code as given, no minimal fixes required.
+
+### Step 4 — smoke tests
+
+**60-step nocage train (`save=False`)**, exercising the NaN-anchor path:
+
+```
+python -c "from liquid_coupling_flow.ka_cluster_egnn import train; train(steps=60, n_cage=0, max_neighbors=None, batch=32, save=False)"
+```
+
+```
+EGNN-FLOW train N=100 steps=60 k=7 n_cage=0 batch=32 sigma_b=0.944 params 0.13M
+  step     0 fm-loss 1.3307 0s
+```
+
+`sigma_b=0.944` (matches the expected ≈0.94), 60 steps ran to completion,
+loss finite (1.3307), no NaN. Confirms the `ccen` fallback anchor is wired
+correctly for `n_cage=0`.
+
+**Existing exactness suite** (unchanged defaults, so all should still pass):
+
+```
+python -m pytest liquid_coupling_flow/tests/test_ka_cluster_egnn.py -v 2>&1 | tail -5
+```
+
+```
+liquid_coupling_flow/tests/test_ka_cluster_egnn.py::test_ot_species_and_cost PASSED [ 87%]
+liquid_coupling_flow/tests/test_ka_cluster_egnn.py::test_train_smoke_and_load PASSED [100%]
+======================== 8 passed, 7 warnings in 34.68s ========================
+```
+
+**8/8 pass.** `test_train_smoke_and_load` (a real 60-step GPU train+load
+round trip under the unmodified default `train()` path) confirms the new
+keyword-only args are fully backward compatible.
+
+### Steps 5-6 — nocage training + evaluation (deferred)
+
+Skipped per controller instruction — the real `nocage` training run
+(`python -u -m liquid_coupling_flow.ka_cluster_egnn nocage`) and its
+evaluation (`python -m liquid_coupling_flow.ka_cluster_egnn_diag nocage`,
+intra-clash/mean-minr decision rule) run separately and will be appended to
+this section by the controller after completion.

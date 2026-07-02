@@ -33,7 +33,9 @@ def build_cloud(pos, s, cluster_idx, sc, L, n_cage):
     cage_sp = torch.gather(s, 1, cage_idx)                                        # [B,n_cage]
     cloud = torch.cat([clu, cage], 1)                                            # [B,P,2]
     sp = torch.cat([s[:, cluster_idx], cage_sp], 1)                              # [B,P]
-    return cloud, sp, cage_centroid(cage, L)
+    # n_cage=0 (no-context ablation): base anchor falls back to the CLUSTER centroid (cage_centroid of an
+    # empty cage is NaN). The anchor leaks the true position -> nocage results speak ONLY to intra exclusion.
+    return cloud, sp, (ccen if n_cage == 0 else cage_centroid(cage, L))
 
 
 def base_logp(x0, c, sigma_b, L):                          # x0 [B,k,2], c [B,2] -> [B]
@@ -170,7 +172,8 @@ def load_flow(ck, device):
 
 
 def train(steps=15000, k=7, n_cage=48, r_c=3.0, hidden_nf=64, n_layers=4, n_steps=16, lr=3e-4, train_N=100,
-          save=True, batch=128, ckpt_every=2000, max_neighbors=24,
+          save=True, batch=128, ckpt_every=2000, max_neighbors=24, tag="", n_configs=None, fix_seed=None,
+          use_augment=True, resume=False,
           device="cuda" if torch.cuda.is_available() else "cpu"):
     """OT conditional flow matching: regress the EGNN velocity onto the OT-straightened base->data field. No ODE
     integration in the loop (velocity-only forward) -> cheap + stable; the exact log_q is inference-only.
@@ -179,21 +182,28 @@ def train(steps=15000, k=7, n_cage=48, r_c=3.0, hidden_nf=64, n_layers=4, n_step
     import time
     from liquid_coupling_flow.ka_gridformer_train import augment
     ref = torch.load(os.path.join(ART, f"ka_reference_N{train_N}.pt"), map_location=device, weights_only=False)
-    data, s = ref["x"].to(device), ref["s"].to(device).long(); N = data.shape[1]
+    data, s = ref["x"].to(device), ref["s"].to(device).long()
+    if n_configs is not None:
+        data = data[:n_configs]                      # overfit probe: memorize a fixed tiny subset
+    N = data.shape[1]
     sc, L, geo = _scaffold(N, device); sigma_b = compute_sigma_b(data, s, geo, sc, L, k, n_cage)
     flow = EGNNClusterFlow(sigma_b=sigma_b, n_cage=n_cage, k=k, r_c=r_c, L=L, hidden_nf=hidden_nf,
                            n_layers=n_layers, n_steps=n_steps, max_neighbors=max_neighbors).to(device).train()
     opt = torch.optim.AdamW(flow.parameters(), lr=lr, weight_decay=1e-4); Bsz = batch
     arch = dict(n_cage=n_cage, k=k, r_c=r_c, hidden_nf=hidden_nf, n_layers=n_layers, n_steps=n_steps, n_species=2,
                 max_neighbors=max_neighbors)
-    ckpt = os.path.join(ART, f"ka_cluster_egnn_N{train_N}.pt")
+    ckpt = os.path.join(ART, f"ka_cluster_egnn{tag}_N{train_N}.pt")
+    if resume and os.path.exists(ckpt):
+        old = torch.load(ckpt, map_location=device, weights_only=False)
+        flow.load_state_dict(old["state_dict"]); print(f"resumed {ckpt} @ step {old['step']}", flush=True)
     print(f"EGNN-FLOW train N={train_N} steps={steps} k={k} n_cage={n_cage} batch={Bsz} sigma_b={sigma_b:.3f} "
           f"params {sum(p.numel() for p in flow.parameters())/1e6:.2f}M", flush=True)
     loss_first = None; t0 = time.time()
     for step in range(steps):
         idx = torch.randint(0, data.shape[0], (Bsz,), device=device)
-        pos, s_ord = slot_order(augment(data[idx], L), s, geo, N)
-        seed = int(torch.randint(0, N, (1,)).item()); cl = KC.cluster_slots(seed, sc, k, L)
+        pos, s_ord = slot_order(augment(data[idx], L) if use_augment else data[idx], s, geo, N)
+        seed = fix_seed if fix_seed is not None else int(torch.randint(0, N, (1,)).item())
+        cl = KC.cluster_slots(seed, sc, k, L)
         cloud, sp, c = build_cloud(pos, s_ord, cl, sc, L, n_cage); x1 = cloud[:, :k]
         z = sample_base(c, k, sigma_b)                                           # base
         perm = ot_assign(z, x1, sp[:, :k], L)                                    # species-aware per-particle OT
@@ -213,7 +223,7 @@ def train(steps=15000, k=7, n_cage=48, r_c=3.0, hidden_nf=64, n_layers=4, n_step
     ck = {"state_dict": flow.state_dict(), "sigma_b": sigma_b, "L": L, "step": steps,
           "loss_first": loss_first, "loss_last": loss.item(), **arch}
     if save:
-        torch.save(ck, ckpt); print(f"saved ka_cluster_egnn_N{train_N}.pt", flush=True)
+        torch.save(ck, ckpt); print(f"saved {ckpt}", flush=True)
     return ck
 
 
@@ -236,8 +246,13 @@ def gate(train_N=100, k=7, device="cuda" if torch.cuda.is_available() else "cpu"
 
 if __name__ == "__main__":
     import sys
-    if len(sys.argv) > 1 and sys.argv[1] == "gate":
+    mode = sys.argv[1] if len(sys.argv) > 1 else ""
+    if mode == "gate":
         gate()
+    elif mode == "nocage":       # no-context ablation: k=7 alone, base at the true cluster centroid
+        train(steps=15000, n_cage=0, max_neighbors=None, batch=256, tag="_nocage")
+    elif mode == "overfit":      # capacity probe: memorize 4 configs x 1 cluster, no augmentation
+        train(steps=6000, batch=64, n_configs=4, fix_seed=5, use_augment=False, tag="_overfit")
     else:
         train(steps=int(sys.argv[1]) if len(sys.argv) > 1 else 15000,
               batch=int(sys.argv[2]) if len(sys.argv) > 2 else 128)

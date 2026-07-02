@@ -82,32 +82,32 @@ def test_central_force_semantics_pot_one():
     assert torch.allclose(v, exp, atol=1e-3), f"central-force frame wrong: max diff {(v - exp).abs().max()}"
 
 
-def _phantom_count(cloud, L, mn, cutoff=3.0):
-    """compute_edges min-images the CENTERED cloud coords with the box L; a genuinely-distant cloud pair
-    (raw sep > L - cutoff = 6.13) would get a spurious edge whose edge_attr is the RAW distance."""
+def _production_phantom_count(cloud, L, mn, cutoff=3.0):
+    """Count edges the PRODUCTION compute_edges selects whose RAW cloud-frame separation exceeds the cutoff.
+    The per-particle clouds are contiguous (min-imaged about the central particle upstream), so any such edge
+    is a phantom; guards against re-introducing box-L folding in compute_edges."""
+    ce = _rand_ce(L, max_neighbors=mn)
+    dyn = ce.egnn
     B, P, D = cloud.shape
     d = cloud[:, None, :, :] - cloud[:, :, None, :]
     d = d - L * torch.round(d / L)
     dist = d.norm(dim=-1) + torch.eye(P, device=cloud.device)[None] * 1e6
-    idx = dist.argsort(-1)[:, :, :mn]
-    nbr = torch.gather(d, 2, idx[..., None].expand(-1, -1, -1, D))    # contiguous cloud around each particle
-    xs_c = (nbr - nbr.mean(2, keepdim=True)).reshape(B * P, mn, D)
-    pv = xs_c[:, None] - xs_c[:, :, None]
-    raw = pv.norm(dim=-1)
-    folded = (pv - L * torch.round(pv / L)).norm(dim=-1)
-    return int(((folded < cutoff) & (raw >= cutoff)).sum())
+    idx = dist.argsort(-1)[:, :, :dyn.max_nb_neighbors]
+    nbr = torch.gather(d, 2, idx[..., None].expand(-1, -1, -1, D))    # contiguated cloud, as in _compute_common_terms
+    xs_c = (nbr - nbr.mean(2, keepdim=True)).reshape(B * P, dyn.max_nb_neighbors, D)
+    rows, cols = dyn.compute_edges(xs_c, cutoff=cutoff)
+    flat = xs_c.reshape(-1, D)
+    raw = (flat[rows] - flat[cols]).norm(dim=-1)
+    return int((raw >= cutoff).sum())
 
 
 def test_no_phantom_edges_knn24():
     cloud, sp, L = _cloud()
-    n = _phantom_count(cloud, L, 24)
+    n = _production_phantom_count(cloud, L, 24)
     assert n == 0, f"{n} phantom inner edges at kNN-24"
 
 
-def test_phantom_edges_fullcloud_report():
-    """Informational: the FULL cloud (P-1=54) spans diameter ~7.6 > L - cutoff = 6.13, so phantom edges are
-    geometrically possible there. If count > 0 the full-cloud reference config is contaminated and must not
-    be used for trained A/B comparisons."""
+def test_no_phantom_edges_fullcloud():
     cloud, sp, L = _cloud()
-    n = _phantom_count(cloud, L, cloud.shape[1] - 1)
-    print(f"\nfull-cloud phantom inner edges: {n}")
+    n = _production_phantom_count(cloud, L, cloud.shape[1] - 1)
+    assert n == 0, f"{n} phantom inner edges at full cloud"

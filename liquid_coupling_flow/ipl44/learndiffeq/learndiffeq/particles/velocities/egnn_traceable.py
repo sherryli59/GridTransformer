@@ -223,7 +223,12 @@ class EGNN_dynamics(nn.Module):
         # even at the near-no-op init amplitude. 0.6*sig caps the term at (1/0.6)^12 ~= 458*amp (O(10) at init)
         # while keeping the steep repulsive ramp over the physical 0.6*sig..sig shell. torch.maximum is
         # piecewise and autograd-consistent on the same rij graph -> the analytic divergence stays exact.
-        return pot_flat - amp * (sig / torch.maximum(rij, 0.6 * sig)) ** 12
+        # t-gate g(t)=t^8: the prior fires only in the late sharpening regime (t>~0.85) where the FM-error
+        # diagnostic located the deficit; at early t the true field is transport-dominated and a static
+        # repulsion contaminates it (retrain evidence: static prior degraded clash 18.1%->50.3% and the
+        # optimizer crushed the amplitudes). t is constant w.r.t. x -> the analytic divergence stays exact.
+        tg = common["t_neighbors"].reshape(-1, 1) ** 8
+        return pot_flat - amp * tg * (sig / torch.maximum(rij, 0.6 * sig)) ** 12
 
     def forward(self, t, xs, a=None):
         common = self._compute_common_terms(xs, t, a)

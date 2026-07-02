@@ -386,7 +386,9 @@ derivative for free, so the central-force divergence identity is preserved exact
   (`None` when `n_species == 1`, matching the existing `a_nbr`/`a_central` None-guard pattern).
 - New helper `_apply_rep_prior(self, pot_flat, rij, common)`: no-ops (returns `pot_flat` unchanged) when
   `self.rep_prior` is False OR either species-index tensor is None; otherwise gathers `sig`/`amp` by
-  `(a_central_idx, a_nbr_idx)` and subtracts `amp * (sig / rij.clamp_min(0.05))**12`.
+  `(a_central_idx, a_nbr_idx)` and subtracts the repulsive term. [SUPERSEDED by 3c8ad51 + c97299c: the shipped
+  form is `amp * t^8 * (sig / torch.maximum(rij, 0.6*sig))**12` — per-pair 0.6σ clamp (the original absolute
+  0.05 clamp bombed FM training) and a g(t)=t^8 late-time gate; see the retrain sections below.]
 - Call sites: `forward` (split the inline `pot_model(...).reshape(...)` into `pot = pot_model(...)`;
   `pot = self._apply_rep_prior(pot, rij, common)`; `pot = pot.reshape(...)`), `forward_and_divergence`
   (parity), `forward_and_perparticle_divergence` (the one actually used by `ConditionalEGNN.vel_div`) —
@@ -423,7 +425,7 @@ False) — the defaults-off path is byte-identical to pre-Task-8 behavior.
 Step 4 (the `rep_prior=True` retrain + `diag split`/`diag nocage` decision) is deferred to the controller
 per the task scope; this section covers code + exactness evidence only.
 
-Commit: `<filled in after Step 5 commit>`.
+Commit: `dde6de8` (follow-ups: `3c8ad51` 0.6σ clamp, `c97299c` t-gate).
 
 ## Task 8: STATIC prior retrain RESULT (controller, 2026-07-02) — NEGATIVE
 

@@ -434,3 +434,17 @@ always-on repulsive term contaminates the trajectory everywhere while helping on
 violated the tree's own localization. NEXT (single further iteration): t-gated amplitude g(t)=t^8 so the prior
 fires only in the late sharpening regime. Note first attempt with absolute 0.05 clamp bombed FM outright
 (step-0 loss 1.3e22, fixed in 3c8ad51).
+
+## Task 8 FINAL: t-gated prior RESULT (controller, 2026-07-02) — MILDLY POSITIVE, adopted as best model
+
+g(t)=t^8 gate (c97299c), 15k/batch64: FM plateau 0.476 (== no-prior 0.46 — optimizer conflict GONE);
+split overall **16.8%** / intra 6.1 / cage 12.3 (no-prior 18.1/7.0/12.8) — consistent ~1pp gains across all
+metrics. Learned amps: AA 0.013, AB 0.010/0.020, BB **0.026** (GREW from 0.018 init) — the prior is used most
+for B-B, the campaign's historically weakest exclusion. CONCLUSION: t-gating turned the prior from harmful to
+mildly helpful; the residual ~17% floor is NOT missing short-range repulsion but marginal-field smearing (the
+per-config conditional fields differ; the FM marginal blurs them). Best checkpoint: ka_cluster_egnn_prior_N100.pt.
+
+## EXIT (plan criterion 1+2): bug-driven breakthrough + located wall + measurably-moved lever
+52% -> 16.8% overall clash (data 0%). MH cluster kernel GO discussion is open (exact log_q + energy acceptance
+also cures the 3.3b Gibbs collapse). Remaining gap = late-t marginal smearing; further levers (beyond scope):
+per-config conditioning capacity, MLE fine-tune atop FM, or accept-and-let-MH-filter at ~17%.

@@ -63,10 +63,11 @@ from liquid_coupling_flow.ipl44.learndiffeq.learndiffeq.particles.velocities.egn
 class ConditionalEGNN(nn.Module):
     """Wraps a periodic EGNN_dynamics over the fixed cloud (k cluster + n_cage cage). vel_div returns ONLY the
     cluster velocities and the cluster-restricted divergence (cage is fixed context -> not in the log-det)."""
-    def __init__(self, n_cage=48, k=7, r_c=3.0, L=None, hidden_nf=64, n_layers=4, n_species=2):
+    def __init__(self, n_cage=48, k=7, r_c=3.0, L=None, hidden_nf=64, n_layers=4, n_species=2, max_neighbors=None):
         super().__init__()
         P = k + n_cage
-        self.egnn = EGNN_dynamics(n_particles=P, n_dimension=2, cutoff=r_c, max_neighbors=P - 1,
+        mn = P - 1 if max_neighbors is None else min(int(max_neighbors), P - 1)   # None -> full cloud; else k-NN
+        self.egnn = EGNN_dynamics(n_particles=P, n_dimension=2, cutoff=r_c, max_neighbors=mn,
                                   L=L, n_species=n_species, hidden_nf=hidden_nf, n_layers=n_layers)
 
     def vel_div(self, cloud, t, sp, k):
@@ -81,11 +82,12 @@ class EGNNClusterFlow(nn.Module):
     for the cluster alone (design keystone): the cage is a fixed reference that pins the cluster's absolute
     position, so there is no zero-COM subspace and no frame."""
 
-    def __init__(self, sigma_b, n_cage=48, k=7, r_c=3.0, L=None, hidden_nf=64, n_layers=4, n_steps=16, n_species=2):
+    def __init__(self, sigma_b, n_cage=48, k=7, r_c=3.0, L=None, hidden_nf=64, n_layers=4, n_steps=16, n_species=2,
+                 max_neighbors=None):
         super().__init__()
         self.sigma_b = float(sigma_b); self.n_cage = n_cage; self.k = k; self.n_steps = n_steps
         self.ce = ConditionalEGNN(n_cage=n_cage, k=k, r_c=r_c, L=L, hidden_nf=hidden_nf, n_layers=n_layers,
-                                  n_species=n_species)
+                                  n_species=n_species, max_neighbors=max_neighbors)
         with torch.no_grad():                              # flow-matching init: untrained velocity == 0 (identity, tame)
             self.ce.egnn.pot_model[-1].weight.zero_(); self.ce.egnn.pot_model[-1].bias.zero_()
 
@@ -158,7 +160,7 @@ def ot_assign(z, x, sp, L):
     return torch.stack(perms, 0)                                                  # [B,k]
 
 
-_ARCH = ("n_cage", "k", "r_c", "hidden_nf", "n_layers", "n_steps", "n_species")
+_ARCH = ("n_cage", "k", "r_c", "hidden_nf", "n_layers", "n_steps", "n_species", "max_neighbors")
 
 
 def load_flow(ck, device):
@@ -168,18 +170,22 @@ def load_flow(ck, device):
 
 
 def train(steps=15000, k=7, n_cage=48, r_c=3.0, hidden_nf=64, n_layers=4, n_steps=16, lr=3e-4, train_N=100,
-          save=True, batch=128, ckpt_every=2000, device="cuda" if torch.cuda.is_available() else "cpu"):
+          save=True, batch=128, ckpt_every=2000, max_neighbors=24,
+          device="cuda" if torch.cuda.is_available() else "cpu"):
     """OT conditional flow matching: regress the EGNN velocity onto the OT-straightened base->data field. No ODE
-    integration in the loop (velocity-only forward) -> cheap + stable; the exact log_q is inference-only."""
+    integration in the loop (velocity-only forward) -> cheap + stable; the exact log_q is inference-only.
+    max_neighbors=24 (k-NN) keeps the all-see-all intra-cluster fix (co-cluster particles are the nearest) but
+    cuts the O(P^2) memory -> big batch. None -> full cloud."""
     import time
     from liquid_coupling_flow.ka_gridformer_train import augment
     ref = torch.load(os.path.join(ART, f"ka_reference_N{train_N}.pt"), map_location=device, weights_only=False)
     data, s = ref["x"].to(device), ref["s"].to(device).long(); N = data.shape[1]
     sc, L, geo = _scaffold(N, device); sigma_b = compute_sigma_b(data, s, geo, sc, L, k, n_cage)
     flow = EGNNClusterFlow(sigma_b=sigma_b, n_cage=n_cage, k=k, r_c=r_c, L=L, hidden_nf=hidden_nf,
-                           n_layers=n_layers, n_steps=n_steps).to(device).train()
+                           n_layers=n_layers, n_steps=n_steps, max_neighbors=max_neighbors).to(device).train()
     opt = torch.optim.AdamW(flow.parameters(), lr=lr, weight_decay=1e-4); Bsz = batch
-    arch = dict(n_cage=n_cage, k=k, r_c=r_c, hidden_nf=hidden_nf, n_layers=n_layers, n_steps=n_steps, n_species=2)
+    arch = dict(n_cage=n_cage, k=k, r_c=r_c, hidden_nf=hidden_nf, n_layers=n_layers, n_steps=n_steps, n_species=2,
+                max_neighbors=max_neighbors)
     ckpt = os.path.join(ART, f"ka_cluster_egnn_N{train_N}.pt")
     print(f"EGNN-FLOW train N={train_N} steps={steps} k={k} n_cage={n_cage} batch={Bsz} sigma_b={sigma_b:.3f} "
           f"params {sum(p.numel() for p in flow.parameters())/1e6:.2f}M", flush=True)

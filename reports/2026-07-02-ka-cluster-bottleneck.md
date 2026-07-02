@@ -313,3 +313,18 @@ Skipped per controller instruction — the real `nocage` training run
 evaluation (`python -m liquid_coupling_flow.ka_cluster_egnn_diag nocage`,
 intra-clash/mean-minr decision rule) run separately and will be appended to
 this section by the controller after completion.
+
+## Task 3 Steps 6-7: retrain + re-gate (controller, 2026-07-02)
+
+Retrain under fixed semantics, identical budget (15k, batch 64, kNN-24): FM loss 1.39 -> 0.46-0.53 band
+(framebug run plateaued 0.64 => ~28% lower floor: capacity freed from cancelling the position leak).
+
+Gate + split on the retrained ckpt (figure: liquid_coupling_flow/artifacts/ka_cluster_egnn_gate_N100.png):
+- overall single-cluster clash **18.1%** (framebug 52 / A-sharp 44 / B 55 / data 0)
+- intra 24 -> **7.0%** (mean 0.95, TRUE 1.00); cage 35 -> **12.8%** (mean 0.83, TRUE 0.88); parity clean 42%~43%
+- harness cross-validation: gate_measure clash_pct 18.3% == split overall 18.1% (within noise) => harness validated
+- 3.3b g_BB "peak" 12.14 = **r->0 core collapse under iterated self-conditioned resampling** (pure-Gibbs collapse,
+  the known full-cage-lever-needs-energy mechanism, now EXPRESSED because the conditional is sharp enough to
+  contract; one-step true-cage histogram sits on data). MH energy acceptance is the guard by construction.
+
+VERDICT: the frame bug was LOAD-BEARING for the precision wall. Decision rule "clash well below 44%" met.

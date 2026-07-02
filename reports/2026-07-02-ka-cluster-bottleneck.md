@@ -209,3 +209,35 @@ Skipped per controller instruction — these run separately (hours-long
 background job). Results (loss curve vs. old 0.64 plateau, gate clash/g_BB
 numbers, old-vs-new A/B split) will be appended to this section after
 training completes.
+
+## Task 2: diagnostic harness
+
+Created `liquid_coupling_flow/ka_cluster_egnn_diag.py` with six CLI subcommands
+(split | nocage | cagesens | losst | traj | overfit) for bottleneck analysis.
+Harness shakeout on the framebug checkpoint to establish the diagnostic
+infrastructure and record a baseline reading:
+
+```
+python -m liquid_coupling_flow.ka_cluster_egnn_diag split ka_cluster_egnn_N100_framebug.pt
+```
+
+Output (n_steps=8, B=128, 20 seeds sampled at stride 5):
+
+```
+ckpt ka_cluster_egnn_N100_framebug.pt step 15000 loss 0.642 n_steps 8
+intra: clash<0.7  23.3%  mean 0.92   (TRUE 0.0% / 1.00)
+cage : clash<0.7  34.4%  mean 0.75   (TRUE 0.0% / 0.88)
+overall: clash 51.6%   [EGNN-15k 52 / A-sharp 44 / B 55 / data 0]
+parity among intra clashes: same 43% (43% by construction)
+```
+
+**Note on old-weights-under-new-code:** The recorded framebug-checkpoint
+baseline (51.6% overall clash) is numerically close to the old-code record
+(52%), but this is NOT a direct reproduction. The backend fix (frame-mixing
+and phantom-edge corrections in `egnn_traceable.py`) changed the model
+semantics; the old checkpoint's weights learned to compensate for the old
+bugs, so they produce different readings under the fixed code. The two sets
+of numbers are not comparable at face value. This is expected and documented
+here as the old-weights/new-code caveat per the brief. Metric
+cross-validation (split's overall clash % vs. the controller's gate_measure
+on the same checkpoint) happens in Task 3 Step 7.

@@ -424,3 +424,13 @@ Step 4 (the `rep_prior=True` retrain + `diag split`/`diag nocage` decision) is d
 per the task scope; this section covers code + exactness evidence only.
 
 Commit: `<filled in after Step 5 commit>`.
+
+## Task 8: STATIC prior retrain RESULT (controller, 2026-07-02) — NEGATIVE
+
+Bounded static prior (0.6*sig clamp, amp init 0.018), 15k/batch64: FM plateau ~0.88-1.03 (no-prior: 0.46-0.53);
+split overall 50.3% / intra 20.9 / cage 35.2 (no-prior: 18.1/7.0/12.8); learned amps CRUSHED to 0.006-0.009.
+The optimizer rejects a t-STATIC repulsion: the true FM field is transport-dominated for most of t, so an
+always-on repulsive term contaminates the trajectory everywhere while helping only at t>0.85 (losst). Design
+violated the tree's own localization. NEXT (single further iteration): t-gated amplitude g(t)=t^8 so the prior
+fires only in the late sharpening regime. Note first attempt with absolute 0.05 clamp bombed FM outright
+(step-0 loss 1.3e22, fixed in 3c8ad51).

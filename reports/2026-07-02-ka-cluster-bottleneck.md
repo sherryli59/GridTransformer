@@ -366,3 +366,61 @@ objective floors at ~18% even when memorizing 4 fixed cages (a perfectly overfit
 onto the single observed cluster: clash->0, |sample-true|->0). Confirms Task 6's late-t sharpness deficit as a
 STRUCTURAL floor of the learned field. DECISION: Task 7 (longer training) de-prioritized (cannot beat the floor
 memorization already hits); Task 8 (analytic species-pair repulsive prior, exactness-preserving) is the lever.
+
+## Task 8: repulsive prior (code)
+
+Added an OPTIONAL analytic species-pair repulsive prior to the `pot` central-force scalar in
+`egnn_traceable.py`: `pot <- pot - softplus(A[sp_i,sp_j]) * (sig_pair[sp_i,sp_j]/r_ij)^12`, with
+`sig_pair` fixed to `ka_energy.SIGMA = [[1.0,0.8],[0.8,0.88]]` and `A` a learnable `n_species x n_species`
+matrix initialized at `-4.0` (`softplus(-4)≈0.018`, a gentle start). The term is applied INSIDE the same
+`torch.enable_grad()` block on the same `rij` tensor that `dpotdr = torch.autograd.grad(pot.sum(), rij, ...)`
+differentiates, and BEFORE the `[B,P,nb,1]` reshape, in all three pot sites (`forward`,
+`forward_and_divergence`, `forward_and_perparticle_divergence`) — autograd picks up the prior's analytic
+derivative for free, so the central-force divergence identity is preserved exactly.
+
+**Backend changes** (`liquid_coupling_flow/ipl44/learndiffeq/learndiffeq/particles/velocities/egnn_traceable.py`):
+- `EGNN_dynamics.__init__`: `self.rep_prior = bool(kwargs.get("rep_prior", False))`; when True, creates
+  `self.rep_scale` (learnable `[n_species,n_species]`, init -4.0) and registers buffer `self.sig_pair`.
+  When False, NEITHER is created (guards `load_state_dict` strict-mode compatibility with existing checkpoints).
+- `_compute_common_terms`: returns two new flat `LongTensor` entries, `a_central_idx` / `a_nbr_idx`
+  (`None` when `n_species == 1`, matching the existing `a_nbr`/`a_central` None-guard pattern).
+- New helper `_apply_rep_prior(self, pot_flat, rij, common)`: no-ops (returns `pot_flat` unchanged) when
+  `self.rep_prior` is False OR either species-index tensor is None; otherwise gathers `sig`/`amp` by
+  `(a_central_idx, a_nbr_idx)` and subtracts `amp * (sig / rij.clamp_min(0.05))**12`.
+- Call sites: `forward` (split the inline `pot_model(...).reshape(...)` into `pot = pot_model(...)`;
+  `pot = self._apply_rep_prior(pot, rij, common)`; `pot = pot.reshape(...)`), `forward_and_divergence`
+  (parity), `forward_and_perparticle_divergence` (the one actually used by `ConditionalEGNN.vel_div`) —
+  all applied before their respective reshape, inside `enable_grad()` where applicable.
+
+**Plumbing** (`liquid_coupling_flow/ka_cluster_egnn.py`): `rep_prior=False` added to
+`ConditionalEGNN.__init__` (passed to `EGNN_dynamics`), `EGNNClusterFlow.__init__` (passed to
+`ConditionalEGNN`), `train()` (passed to `EGNNClusterFlow` and included in the saved `arch` dict); added
+`"rep_prior"` to `_ARCH`. `load_flow` builds `arch` as `{kk: ck[kk] for kk in _ARCH if kk in ck}`, so old
+checkpoints (no `rep_prior` key) silently default to `False` — verified below.
+
+**Test evidence:**
+
+1. `python -m pytest liquid_coupling_flow/tests/test_ka_cluster_egnn.py -v` — **8/8 passed** (defaults-off
+   regression; includes a real GPU `train()` round trip in `test_train_smoke_and_load`, confirming the new
+   keyword-only `rep_prior` arg is fully backward compatible).
+
+2. Added `test_divergence_exact_with_rep_prior` (brief Step 3) to `test_egnn_audit.py` and ran the full file:
+   `python -m pytest liquid_coupling_flow/tests/test_egnn_audit.py -v` — **7/7 passed**, including the new
+   test: brute-force Jacobian trace vs analytic `vel_div` divergence agree to `< 1e-4` with `rep_prior=True`
+   (double precision, random-init weights, `n_layers=2`, `max_neighbors=24`) — the prior's analytic `-12/r`
+   derivative is correctly picked up by autograd; exactness is preserved with the prior ON.
+
+3. Old-checkpoint load check: loaded `liquid_coupling_flow/artifacts/ka_cluster_egnn_N100.pt` (no
+   `rep_prior` key in the saved dict) via `load_flow` — `rep_prior` defaults to `False`, no `rep_scale`/
+   `sig_pair` are instantiated, `load_state_dict` (strict) succeeds, and a `sample_fast` call on real
+   scaffold data produces a finite `[4,7,2]` tensor. Confirms the flag is fully additive: existing
+   checkpoints are unaffected.
+
+Also spot-checked that with `rep_prior=False` no new parameters/buffers appear on a fresh
+`ConditionalEGNN` (`state_dict()` key count unchanged, `hasattr(egnn, "rep_scale")` / `"sig_pair"` both
+False) — the defaults-off path is byte-identical to pre-Task-8 behavior.
+
+Step 4 (the `rep_prior=True` retrain + `diag split`/`diag nocage` decision) is deferred to the controller
+per the task scope; this section covers code + exactness evidence only.
+
+Commit: `<filled in after Step 5 commit>`.

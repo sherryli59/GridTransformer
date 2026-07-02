@@ -65,12 +65,14 @@ from liquid_coupling_flow.ipl44.learndiffeq.learndiffeq.particles.velocities.egn
 class ConditionalEGNN(nn.Module):
     """Wraps a periodic EGNN_dynamics over the fixed cloud (k cluster + n_cage cage). vel_div returns ONLY the
     cluster velocities and the cluster-restricted divergence (cage is fixed context -> not in the log-det)."""
-    def __init__(self, n_cage=48, k=7, r_c=3.0, L=None, hidden_nf=64, n_layers=4, n_species=2, max_neighbors=None):
+    def __init__(self, n_cage=48, k=7, r_c=3.0, L=None, hidden_nf=64, n_layers=4, n_species=2, max_neighbors=None,
+                 rep_prior=False):
         super().__init__()
         P = k + n_cage
         mn = P - 1 if max_neighbors is None else min(int(max_neighbors), P - 1)   # None -> full cloud; else k-NN
         self.egnn = EGNN_dynamics(n_particles=P, n_dimension=2, cutoff=r_c, max_neighbors=mn,
-                                  L=L, n_species=n_species, hidden_nf=hidden_nf, n_layers=n_layers)
+                                  L=L, n_species=n_species, hidden_nf=hidden_nf, n_layers=n_layers,
+                                  rep_prior=rep_prior)
 
     def vel_div(self, cloud, t, sp, k):
         vel, divpp = self.egnn.forward_and_perparticle_divergence(cloud, t, sp)   # [B,P,2],[B,P]
@@ -85,11 +87,11 @@ class EGNNClusterFlow(nn.Module):
     position, so there is no zero-COM subspace and no frame."""
 
     def __init__(self, sigma_b, n_cage=48, k=7, r_c=3.0, L=None, hidden_nf=64, n_layers=4, n_steps=16, n_species=2,
-                 max_neighbors=None):
+                 max_neighbors=None, rep_prior=False):
         super().__init__()
         self.sigma_b = float(sigma_b); self.n_cage = n_cage; self.k = k; self.n_steps = n_steps
         self.ce = ConditionalEGNN(n_cage=n_cage, k=k, r_c=r_c, L=L, hidden_nf=hidden_nf, n_layers=n_layers,
-                                  n_species=n_species, max_neighbors=max_neighbors)
+                                  n_species=n_species, max_neighbors=max_neighbors, rep_prior=rep_prior)
         with torch.no_grad():                              # flow-matching init: untrained velocity == 0 (identity, tame)
             self.ce.egnn.pot_model[-1].weight.zero_(); self.ce.egnn.pot_model[-1].bias.zero_()
 
@@ -162,7 +164,7 @@ def ot_assign(z, x, sp, L):
     return torch.stack(perms, 0)                                                  # [B,k]
 
 
-_ARCH = ("n_cage", "k", "r_c", "hidden_nf", "n_layers", "n_steps", "n_species", "max_neighbors")
+_ARCH = ("n_cage", "k", "r_c", "hidden_nf", "n_layers", "n_steps", "n_species", "max_neighbors", "rep_prior")
 
 
 def load_flow(ck, device):
@@ -173,7 +175,7 @@ def load_flow(ck, device):
 
 def train(steps=15000, k=7, n_cage=48, r_c=3.0, hidden_nf=64, n_layers=4, n_steps=16, lr=3e-4, train_N=100,
           save=True, batch=128, ckpt_every=2000, max_neighbors=24, tag="", n_configs=None, fix_seed=None,
-          use_augment=True, resume=False,
+          use_augment=True, resume=False, rep_prior=False,
           device="cuda" if torch.cuda.is_available() else "cpu"):
     """OT conditional flow matching: regress the EGNN velocity onto the OT-straightened base->data field. No ODE
     integration in the loop (velocity-only forward) -> cheap + stable; the exact log_q is inference-only.
@@ -188,10 +190,11 @@ def train(steps=15000, k=7, n_cage=48, r_c=3.0, hidden_nf=64, n_layers=4, n_step
     N = data.shape[1]
     sc, L, geo = _scaffold(N, device); sigma_b = compute_sigma_b(data, s, geo, sc, L, k, n_cage)
     flow = EGNNClusterFlow(sigma_b=sigma_b, n_cage=n_cage, k=k, r_c=r_c, L=L, hidden_nf=hidden_nf,
-                           n_layers=n_layers, n_steps=n_steps, max_neighbors=max_neighbors).to(device).train()
+                           n_layers=n_layers, n_steps=n_steps, max_neighbors=max_neighbors,
+                           rep_prior=rep_prior).to(device).train()
     opt = torch.optim.AdamW(flow.parameters(), lr=lr, weight_decay=1e-4); Bsz = batch
     arch = dict(n_cage=n_cage, k=k, r_c=r_c, hidden_nf=hidden_nf, n_layers=n_layers, n_steps=n_steps, n_species=2,
-                max_neighbors=max_neighbors)
+                max_neighbors=max_neighbors, rep_prior=rep_prior)
     ckpt = os.path.join(ART, f"ka_cluster_egnn{tag}_N{train_N}.pt")
     if resume and os.path.exists(ckpt):
         old = torch.load(ckpt, map_location=device, weights_only=False)

@@ -91,6 +91,14 @@ class EGNN_dynamics(nn.Module):
         )
         self.counter = 0
 
+        # Optional analytic species-pair repulsive prior added to pot: -softplus(A[sp_i,sp_j]) * (sig/r)^12.
+        # Central-force form -> the exact divergence is preserved automatically (dpotdr is computed by
+        # autograd on rij, which sees this term). KA 2D sigma (ka_energy.SIGMA).
+        self.rep_prior = bool(kwargs.get("rep_prior", False))
+        if self.rep_prior:
+            self.rep_scale = nn.Parameter(torch.full((self.n_species, self.n_species), -4.0))  # softplus(-4)≈0.018
+            self.register_buffer("sig_pair", torch.tensor([[1.0, 0.8], [0.8, 0.88]]))
+
     def _expand_t(self, t, batch_size, device, dtype):
         if not torch.is_tensor(t):
             return torch.full((batch_size, 1), float(t), device=device, dtype=dtype)
@@ -189,6 +197,9 @@ class EGNN_dynamics(nn.Module):
             "t_neighbors": t_neighbors,
             "t_flat": t_flat,
             "a_central": a_central,
+            "a_central_idx": (a.long()[:, :, None].expand(B, P, self.max_nb_neighbors).reshape(-1)
+                              if self.n_species > 1 else None),
+            "a_nbr_idx": (a_nbr.reshape(-1) if self.n_species > 1 else None),
             "B": B,
             "P": P,
         }
@@ -198,6 +209,16 @@ class EGNN_dynamics(nn.Module):
         if self.n_species > 1:
             return common["a_central"].reshape(-1, self.n_species)
         return None
+
+    def _apply_rep_prior(self, pot_flat, rij, common):
+        """pot_flat, rij: [B*P*nb, 1] inside the autograd graph on rij. Adds the analytic repulsion."""
+        if not self.rep_prior:
+            return pot_flat
+        if common["a_central_idx"] is None or common["a_nbr_idx"] is None:
+            return pot_flat
+        sig = self.sig_pair[common["a_central_idx"], common["a_nbr_idx"]][:, None]
+        amp = torch.nn.functional.softplus(self.rep_scale)[common["a_central_idx"], common["a_nbr_idx"]][:, None]
+        return pot_flat - amp * (sig / rij.clamp_min(0.05)) ** 12
 
     def forward(self, t, xs, a=None):
         common = self._compute_common_terms(xs, t, a)
@@ -213,7 +234,9 @@ class EGNN_dynamics(nn.Module):
         sp = self._sp_feat(common, n_neighbors)
 
         parts = (rij, t_pot, h_flat) if sp is None else (rij, t_pot, h_flat, sp)
-        pot = self.pot_model(torch.cat(parts, dim=-1)).reshape(B, P, n_neighbors, 1)
+        pot = self.pot_model(torch.cat(parts, dim=-1))
+        pot = self._apply_rep_prior(pot, rij, common)
+        pot = pot.reshape(B, P, n_neighbors, 1)
 
         if self.L is not None:
             return (diffij * pot).sum(dim=2)
@@ -243,7 +266,9 @@ class EGNN_dynamics(nn.Module):
         with torch.enable_grad():
             rij = rearrange(diffij.norm(dim=-1), 'b p m -> (b p m) 1').requires_grad_(True)
             parts = (rij, t_pot, h_flat) if sp is None else (rij, t_pot, h_flat, sp)
-            pot = self.pot_model(torch.cat(parts, dim=-1)).reshape(B, P, n_neighbors, 1)
+            pot = self.pot_model(torch.cat(parts, dim=-1))
+            pot = self._apply_rep_prior(pot, rij, common)
+            pot = pot.reshape(B, P, n_neighbors, 1)
 
             vel = (diffij * pot).sum(dim=2)
 
@@ -270,7 +295,9 @@ class EGNN_dynamics(nn.Module):
         with torch.enable_grad():
             rij = rearrange(diffij.norm(dim=-1), 'b p m -> (b p m) 1').requires_grad_(True)
             parts = (rij, t_pot, h_flat) if sp is None else (rij, t_pot, h_flat, sp)
-            pot = self.pot_model(torch.cat(parts, dim=-1)).reshape(B, P, n_neighbors, 1)
+            pot = self.pot_model(torch.cat(parts, dim=-1))
+            pot = self._apply_rep_prior(pot, rij, common)
+            pot = pot.reshape(B, P, n_neighbors, 1)
             vel = (diffij * pot).sum(dim=2)
             dpotdr = torch.autograd.grad(pot.sum(), rij, create_graph=differentiable, retain_graph=differentiable)[0]
             dpotdr = dpotdr.reshape(B, P, n_neighbors, 1); rij_r = rij.reshape(B, P, n_neighbors, 1)

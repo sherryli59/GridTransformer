@@ -111,3 +111,25 @@ def test_no_phantom_edges_fullcloud():
     cloud, sp, L = _cloud()
     n = _production_phantom_count(cloud, L, cloud.shape[1] - 1)
     assert n == 0, f"{n} phantom inner edges at full cloud"
+
+
+def test_divergence_exact_with_rep_prior():
+    import torch
+    from liquid_coupling_flow import ka_cluster_egnn as E
+    torch.manual_seed(0)
+    cloud, sp, L = _cloud(B=1)
+    ce = E.ConditionalEGNN(n_cage=48, k=7, r_c=3.0, L=L, hidden_nf=32, n_layers=2,
+                           max_neighbors=24, rep_prior=True).to(DEV).double()
+    cloud = cloud.double()
+    t = torch.tensor(0.37, device=DEV, dtype=torch.float64)
+    k = 7
+    xcl = cloud[:, :k].reshape(-1).clone().requires_grad_(True)
+
+    def vel_flat(xf):
+        cl2 = cloud.clone(); cl2[:, :k] = xf.reshape(1, k, 2)
+        v, _ = ce.vel_div(cl2, t, sp, k)
+        return v.reshape(-1)
+
+    J = torch.autograd.functional.jacobian(vel_flat, xcl)
+    _, div_analytic = ce.vel_div(cloud, t, sp, k)
+    assert abs(torch.diagonal(J).sum().item() - div_analytic.item()) < 1e-4

@@ -137,13 +137,14 @@ class EGNN_dynamics(nn.Module):
             a_full = a.long().unsqueeze(1).expand(B, P, P)[keep_sp.expand(B, -1, -1)].view(B, P, P - 1)
             a_nbr = torch.gather(a_full, 2, idx)                       # [B,P,max_nb] neighbour species (same order)
 
-        if self.L is None:
-            com = neighbors.mean(dim=2)
-            source_xs_com = source_xs - com
-            rcom = source_xs_com.norm(dim=-1, keepdim=True)
-        else:
-            source_xs_com = source_xs
-            rcom = None
+        # Central particle expressed in the SAME cloud-centered frame as x_final (xs_centered subtracts the
+        # cloud mean; skipping this for the periodic branch mixed frames: r_ij was |cloud-frame v_j - raw x_i|,
+        # not the physical pair distance, and the velocity leaked absolute position). d(com)/d(x_i) = 0
+        # (the min-imaged d_ij all shift with x_i and the mean cancels it), so d(diffij)/d(x_i) = -I still
+        # holds exactly -> the analytic divergence is unchanged (re-verified by the brute-force test).
+        com = neighbors.mean(dim=2)
+        source_xs_com = source_xs - com
+        rcom = source_xs_com.norm(dim=-1, keepdim=True) if self.L is None else None
 
         xs_centered = neighbors.reshape(B * P, self.max_nb_neighbors, D)
         xs_centered = xs_centered - xs_centered.mean(dim=1, keepdim=True)
@@ -333,9 +334,10 @@ class EGNN_dynamics(nn.Module):
         # x: [B, P, D]
         B, P, _ = x.shape
 
+        # x is the CONTIGUATED neighbour cloud (min-imaged about the central particle upstream) — non-periodic
+        # by construction. Folding pairwise diffs with the box L here wrongly creates edges between genuinely
+        # distant cloud members (phantom edges) whose edge_attr is the RAW difference — inconsistent. Raw only.
         pvec = x.unsqueeze(-3) - x.unsqueeze(-2)
-        if self.L is not None:
-            pvec = pvec - self.L * torch.round(pvec / self.L)
         dist = torch.norm(pvec, dim=-1)
 
         eye = torch.eye(P, dtype=torch.bool, device=x.device).unsqueeze(0)

@@ -163,7 +163,9 @@ def train(steps=15000, k=7, n_bins=24, box=3.0, n_ctx=16, d_model=128, n_head=4,
         idx = torch.randint(0, data.shape[0], (B,), device=device)
         pos, s_ord = slot_order(augment(data[idx], L), s, geo, N)                    # curve-order -> slot order
         seed = int(torch.randint(0, N, (1,)).item()); cl = KC.cluster_slots(seed, sc, k, L)
-        with torch.autocast("cuda", dtype=torch.bfloat16, enabled=(device == "cuda")):
+        # bf16 autocast only for the binned head: the RQS spline (transforms_spline masked_scatter) is not
+        # autocast-safe (bf16/fp32 mismatch) and the spec mandates fp32 for the spline arm anyway.
+        with torch.autocast("cuda", dtype=torch.bfloat16, enabled=(device == "cuda" and head == "bins")):
             loss = -(P.log_q(pos, s_ord, cl, pos[:, cl], sc, L) / k).mean()
         opt.zero_grad(); loss.backward(); torch.nn.utils.clip_grad_norm_(P.parameters(), 5.0); opt.step(); sched.step()
         if step % 1000 == 0:

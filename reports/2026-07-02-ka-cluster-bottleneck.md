@@ -519,3 +519,12 @@ unforgiving over a 7-particle simultaneous move). Plain-MH viability would need 
 levers: more capacity/training (curve still descending), smaller k, or (validated) SMC/annealed correction
 where single-shot acceptance does not gate. NOTE fp64-on-GeForce lesson: the estimator ran 1:64-throughput
 double precision unnecessarily (acceptance is energy-dominated); fp32 rerun ~20x faster, same conclusion.
+
+## 2026-07-03: ARM-H (spline head only, old scale) — NULL, attribution secured
+
+ka_cluster_flow_armH_N100.pt (spline head, d192/L4/ctx32, 1.92M, 15k): clash 53.3% (bins-40k: 44%; bins-15k-small:
+70%), seed spread 0.79-0.82 ~ nn-dist, g_BB(3.3b) 1.26. The head swap alone does NOT unlock the AR generator —
+REPLICATES the 2026-06-26 full-config null in the cluster setting: the transformer-context conditional is diffuse
+regardless of head expressiveness. Attribution: A's wall = context/representation pathway (+possibly scale), NOT
+the output head. ARM-FULL (pair features + d256/L6 + 40k) is the arm that tests exactly that lever.
+Figure: liquid_coupling_flow/artifacts/ka_cluster_armH_gate.png

@@ -16,7 +16,7 @@ lam = float(sys.argv[5]) if len(sys.argv) > 5 else 1.0
 ot = sys.argv[6] if len(sys.argv) > 6 else "global"
 two_time = len(sys.argv) > 7 and sys.argv[7] == "tt"
 system = sys.argv[8] if len(sys.argv) > 8 else "ipl"
-B, lr, warmup, ema_decay = 256, 1e-3, 500, 0.999
+B, lr, warmup, ema_decay = 256, 1e-3, 500, 0.999   # (overridden to 128 for ka below)
 D = "/mnt/ssd/GridTransformer/datasets"; ART = os.path.join(os.path.dirname(__file__), "data")
 
 if system == "ka":
@@ -30,6 +30,8 @@ else:
     x = torch.remainder(torch.load(f"{D}/ipl44_T0.1_positions.pt", weights_only=False).float(), Lf)
     sp = torch.load(f"{D}/ipl44_T0.1_species.pt", weights_only=False).long()
     o = sp.argsort(-1); sp = torch.gather(sp, 1, o); x = torch.gather(x, 1, o.unsqueeze(-1).expand(-1, -1, 2))
+if system == "ka":
+    B = 128                                  # N=100 graph is 5x IPL44; B=256 OOMs 24GB
 nva = 1000
 xtr, str_, xva, sva = x[:-nva].to(dev), sp[:-nva].to(dev), x[-nva:].to(dev), sp[-nva:].to(dev)
 nA = int((str_[0] == 0).sum())

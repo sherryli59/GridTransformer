@@ -118,3 +118,24 @@ def test_run_chain_and_band():
     # sweeps_to_band: monotone curve hitting the band -> first index's sweep
     curves = {"sweep": [0, 10, 20, 30], "U_median": [30.0, 16.0, 14.8, 14.6], "gbb_peak": [0.5, 2.0, 4.0, 4.2]}
     assert sweeps_to_band(curves, U_ref_med=14.7, gbb_ref_peak=4.3) == 20
+
+
+def test_per_species_ot_blocks():
+    from liquid_coupling_flow.ipl44.joint_flow import per_species_ot
+    B, N, nA, L = 8, 44, 22, 9.38
+    x0, x1 = torch.rand(B, N, 2) * L, torch.rand(B, N, 2) * L
+    xa = per_species_ot(x0, x1, nA, L)
+    # block structure: aligned A-block is a permutation of x0's A-block (set equality of rows)
+    for b in range(B):
+        s0 = set(map(tuple, x0[b, :nA].round(decimals=5).tolist()))
+        sa = set(map(tuple, xa[b, :nA].round(decimals=5).tolist()))
+        assert s0 == sa
+
+
+def test_denoiser_eval_runs():
+    from liquid_coupling_flow.ipl44.joint_flow import JointSpeciesFlow, denoiser_eval
+    m = JointSpeciesFlow(n_particles=44, L=9.38, hidden_nf=16, n_layers=2)
+    x1 = torch.rand(6, 44, 2) * 9.38
+    s1 = torch.zeros(6, 44, dtype=torch.long); s1[:, 22:] = 1
+    out = denoiser_eval(m, x1, s1, t_eval=0.9, n_rep=2)
+    assert 0.0 <= out["acc"] <= 1.0 and 0.0 <= out["ece"] <= 1.0

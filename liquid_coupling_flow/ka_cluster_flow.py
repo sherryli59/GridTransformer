@@ -16,10 +16,11 @@ ART = os.path.join(os.path.dirname(__file__), "artifacts")
 
 class ClusterProposal(nn.Module):
     def __init__(self, rho=1.2, n_bins=24, d_model=128, n_head=4, n_layer=3, n_ctx=16, box=3.0,
-                 n_species=2, **_):
+                 n_species=2, head="bins", num_flow_bins=16, tail_bound=3.5, **_):
         super().__init__()
         self.rho, self.n_bins, self.n_ctx, self.box = rho, n_bins, n_ctx, box
         self.bin_w = 2 * box / n_bins
+        self.head_mode = head
         self.enc = nn.Sequential(nn.Linear(6, d_model), nn.GELU(), nn.Linear(d_model, d_model))  # in-frame pos -> feat
         self.sp_emb = nn.Embedding(n_species, d_model)
         self.role_emb = nn.Embedding(2, d_model)                     # 0 = x_R neighbour, 1 = placed cluster particle
@@ -30,6 +31,9 @@ class ClusterProposal(nn.Module):
         self.head_a = nn.Linear(d_model, n_bins)
         self.head_b = nn.Linear(d_model, n_bins)
         self.bin_a_emb = nn.Embedding(n_bins, d_model)
+        if head == "spline":
+            from liquid_coupling_flow.ka_flowhead import SplineFlowHead
+            self.flow = SplineFlowHead(d_model, num_bins=num_flow_bins, tail_bound=tail_bound)
 
     # ---- binning (in-frame coord in [-box, box); genuine zero outside) ----
     def _bin(self, u):
@@ -77,12 +81,16 @@ class ClusterProposal(nn.Module):
         logq = torch.zeros(B, device=dev)
         for i in range(k):
             ctx = self._step_ctx(q_scaf[:, i], i, ctx_tok, self._placed_tok(placed_u, placed_sp))
-            la = F.log_softmax(self.head_a(ctx), -1); ba = torch.multinomial(la.exp(), 1).squeeze(1)
-            lb = F.log_softmax(self.head_b(ctx + self.bin_a_emb(ba)), -1); bb = torch.multinomial(lb.exp(), 1).squeeze(1)
-            a = self._bin_center(ba) + (torch.rand(B, device=dev) - 0.5) * self.bin_w
-            b = self._bin_center(bb) + (torch.rand(B, device=dev) - 0.5) * self.bin_w
-            u_i = torch.stack([a, b], -1)
-            logq = logq + la.gather(1, ba[:, None]).squeeze(1) + lb.gather(1, bb[:, None]).squeeze(1) - 2 * math.log(self.bin_w)
+            if self.head_mode == "spline":
+                u_i, lstep = self.flow.sample(ctx)               # [B,2], [B] continuous exact
+                logq = logq + lstep
+            else:
+                la = F.log_softmax(self.head_a(ctx), -1); ba = torch.multinomial(la.exp(), 1).squeeze(1)
+                lb = F.log_softmax(self.head_b(ctx + self.bin_a_emb(ba)), -1); bb = torch.multinomial(lb.exp(), 1).squeeze(1)
+                a = self._bin_center(ba) + (torch.rand(B, device=dev) - 0.5) * self.bin_w
+                b = self._bin_center(bb) + (torch.rand(B, device=dev) - 0.5) * self.bin_w
+                u_i = torch.stack([a, b], -1)
+                logq = logq + la.gather(1, ba[:, None]).squeeze(1) + lb.gather(1, bb[:, None]).squeeze(1) - 2 * math.log(self.bin_w)
             placed_u = torch.cat([placed_u, u_i[:, None]], 1)
             placed_sp = torch.cat([placed_sp, sp[:, i:i + 1]], 1)
         xC_lab = KC.from_frame(placed_u, origin, R, L)                               # [B,k,2]
@@ -93,17 +101,21 @@ class ClusterProposal(nn.Module):
         origin, R, ctx_tok, q_scaf = self._ctx_tokens(pos, s, cluster_idx, sc, L)
         sp = s[:, cluster_idx]
         u = KC.to_frame(xC_query, origin, R, L)                                      # [B,k,2] query in-frame
-        ba_all = self._bin(u[..., 0]); bb_all = self._bin(u[..., 1])                 # [B,k] (-1 if out of box)
+        if self.head_mode != "spline":
+            ba_all = self._bin(u[..., 0]); bb_all = self._bin(u[..., 1])             # [B,k] (-1 if out of box)
         placed_u = torch.zeros(B, 0, 2, device=dev); placed_sp = torch.zeros(B, 0, dtype=torch.long, device=dev)
         logq = torch.zeros(B, device=dev)
         for i in range(k):
             ctx = self._step_ctx(q_scaf[:, i], i, ctx_tok, self._placed_tok(placed_u, placed_sp))
-            la = F.log_softmax(self.head_a(ctx), -1); ba = ba_all[:, i]
-            lb = F.log_softmax(self.head_b(ctx + self.bin_a_emb(ba.clamp(0))), -1); bb = bb_all[:, i]
-            ok = (ba >= 0) & (bb >= 0)
-            step = (la.gather(1, ba.clamp(0)[:, None]).squeeze(1) + lb.gather(1, bb.clamp(0)[:, None]).squeeze(1)
-                    - 2 * math.log(self.bin_w))
-            logq = logq + torch.where(ok, step, torch.full_like(step, -69.0))        # genuine zero outside box
+            if self.head_mode == "spline":
+                logq = logq + self.flow.log_prob(ctx, u[:, i])
+            else:
+                la = F.log_softmax(self.head_a(ctx), -1); ba = ba_all[:, i]
+                lb = F.log_softmax(self.head_b(ctx + self.bin_a_emb(ba.clamp(0))), -1); bb = bb_all[:, i]
+                ok = (ba >= 0) & (bb >= 0)
+                step = (la.gather(1, ba.clamp(0)[:, None]).squeeze(1) + lb.gather(1, bb.clamp(0)[:, None]).squeeze(1)
+                        - 2 * math.log(self.bin_w))
+                logq = logq + torch.where(ok, step, torch.full_like(step, -69.0))    # genuine zero outside box
             placed_u = torch.cat([placed_u, u[:, i][:, None]], 1)
             placed_sp = torch.cat([placed_sp, sp[:, i:i + 1]], 1)
         return logq
@@ -127,7 +139,8 @@ def slot_order(pos, s, geo, N):
 
 
 def train(steps=15000, k=7, n_bins=24, box=3.0, n_ctx=16, d_model=128, n_head=4, n_layer=3, lr=3e-4,
-          train_N=100, device="cuda" if torch.cuda.is_available() else "cpu"):
+          train_N=100, head="bins", num_flow_bins=16, tail_bound=3.5, tag="",
+          device="cuda" if torch.cuda.is_available() else "cpu"):
     """Conditional MLE: maximize log q(true cluster | true surroundings) over random slot-clusters on the
     reference. A random seed slot per step (shared across the B configs); covers all clusters over training."""
     import time
@@ -136,8 +149,10 @@ def train(steps=15000, k=7, n_bins=24, box=3.0, n_ctx=16, d_model=128, n_head=4,
     data, s = ref["x"].to(device), ref["s"].to(device).long(); N = data.shape[1]
     sc, L, geo = _scaffold(N, device)
     P = ClusterProposal(rho=1.2, n_bins=n_bins, box=box, n_ctx=n_ctx, d_model=d_model, n_head=n_head,
-                        n_layer=n_layer).to(device).train()
-    arch = {"n_bins": n_bins, "box": box, "n_ctx": n_ctx, "d_model": d_model, "n_head": n_head, "n_layer": n_layer}
+                        n_layer=n_layer, head=head, num_flow_bins=num_flow_bins, tail_bound=tail_bound
+                        ).to(device).train()
+    arch = {"n_bins": n_bins, "box": box, "n_ctx": n_ctx, "d_model": d_model, "n_head": n_head, "n_layer": n_layer,
+            "head": head, "num_flow_bins": num_flow_bins, "tail_bound": tail_bound}
     opt = torch.optim.AdamW(P.parameters(), lr=lr, weight_decay=1e-4); B, t0 = 128, time.time()
     warm = 400
     sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda st: min((st + 1) / warm,
@@ -155,10 +170,10 @@ def train(steps=15000, k=7, n_bins=24, box=3.0, n_ctx=16, d_model=128, n_head=4,
             print(f"  step {step:5d} -logq/k {loss.item():.3f} lr {sched.get_last_lr()[0]:.1e} {time.time()-t0:.0f}s", flush=True)
         if (step + 1) % max(1, steps // 3) == 0:
             torch.save({"state_dict": P.state_dict(), "k": k, "step": step + 1, **arch},
-                       os.path.join(ART, f"ka_cluster_flow_N{train_N}.pt"))
+                       os.path.join(ART, f"ka_cluster_flow{tag}_N{train_N}.pt"))
     torch.save({"state_dict": P.state_dict(), "k": k, "step": steps, **arch},
-               os.path.join(ART, f"ka_cluster_flow_N{train_N}.pt"))
-    print(f"saved ka_cluster_flow_N{train_N}.pt", flush=True)
+               os.path.join(ART, f"ka_cluster_flow{tag}_N{train_N}.pt"))
+    print(f"saved ka_cluster_flow{tag}_N{train_N}.pt", flush=True)
 
 
 def _load(ck, device):
@@ -166,7 +181,9 @@ def _load(ck, device):
     keys -> fall back to the original 128/4/3)."""
     P = ClusterProposal(rho=1.2, n_bins=ck["n_bins"], box=ck["box"], n_ctx=ck["n_ctx"],
                         d_model=ck.get("d_model", 128), n_head=ck.get("n_head", 4),
-                        n_layer=ck.get("n_layer", 3)).to(device).eval()
+                        n_layer=ck.get("n_layer", 3), head=ck.get("head", "bins"),
+                        num_flow_bins=ck.get("num_flow_bins", 16),
+                        tail_bound=ck.get("tail_bound", 3.5)).to(device).eval()
     P.load_state_dict(ck["state_dict"]); return P
 
 

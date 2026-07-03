@@ -506,3 +506,16 @@ Split (single-cluster resample given TRUE cage, n_steps 8): intra 6.8% / cage **
 (small 0.13M: 7.0/12.8/18.1; +prior 16.8). Gain concentrated in CAGE exclusion (mean min-r 0.85 vs data 0.88) —
 the component once called the "fundamental wall". Trajectory 52 -> 18.1 -> 16.8 -> 13.3, still descending with
 capacity (batch-16 run, likely under-trained). Ckpt artifacts/ka_cluster_egnn_big_N100.pt.
+
+## 2026-07-03: MH acceptance with the BIG model (fp32, rk4-64, 640 moves)
+
+small 0.13M -> big 1.64M: mean acceptance **0.64% -> 1.02%**; no-clash fraction 35.9 -> **50.0%**;
+acceptance|no-clash 1.79 -> 2.03%; logq_rev-logq_fwd 1.12 -> 0.20; P(dU<0) 0.8 -> 2.7%.
+Self-consistency (fp32): big-model max 0.36 vs small 1.49 — the higher-capacity field is also SMOOTHER to
+integrate (further under-capacity corroboration). READING: capacity fixed hard-core avoidance (50% clash-free
+proposals) but acceptance-given-no-clash barely moved — the binding constraint is now FINE ENERGY PRECISION
+among valid placements (clash-free proposals still land a few kT above the basin; beta=2 exponentially
+unforgiving over a 7-particle simultaneous move). Plain-MH viability would need acc|no-clash to rise ~5-10x;
+levers: more capacity/training (curve still descending), smaller k, or (validated) SMC/annealed correction
+where single-shot acceptance does not gate. NOTE fp64-on-GeForce lesson: the estimator ran 1:64-throughput
+double precision unnecessarily (acceptance is energy-dominated); fp32 rerun ~20x faster, same conclusion.

@@ -57,6 +57,77 @@ def swap_attempt(x, s, U, beta, energy_fn, weight_fn):
     return s_new, U_new, acc
 
 
+# ---------- conditional-Bernoulli block relabeling (k-site coordinated species moves) ----------
+def _cb_poly(w):
+    """DP table of the Poisson-binomial 'polynomial': P[b, c] = sum over subsets S of {sites} with |S|=c of
+    prod_{i in S} w_i prod_{j not in S} (1-w_j). w [B,k] -> P [B,k+1]."""
+    B, k = w.shape
+    P = torch.zeros(B, k + 1, dtype=w.dtype, device=w.device); P[:, 0] = 1.0
+    for i in range(k):
+        wi = w[:, i:i + 1]
+        P = torch.cat([P[:, :1] * (1 - wi), P[:, 1:] * (1 - wi) + P[:, :-1] * wi], dim=1)
+    return P
+
+
+def _cb_logZ(w, m):
+    """log of the count-m sector mass. w [B,k], m [B] long -> [B]."""
+    P = _cb_poly(w)
+    return (P.gather(1, m[:, None]).squeeze(1) + EPS).log()
+
+
+def _cb_logprob(w, sblk):
+    """Exact log q(sblk | w, sum=m): independent-Bernoulli logmass minus the m-sector normalizer."""
+    sf = sblk.to(w.dtype)
+    lp = (sf * (w + EPS).log() + (1 - sf) * (1 - w + EPS).log()).sum(1)
+    return lp - _cb_logZ(w, sblk.sum(1).long())
+
+
+def _cb_sample(w, m):
+    """Sequential exact sampler of the conditional Bernoulli: at site i with remaining budget r,
+    P(s_i=1) = w_i * Zsuf_{i+1}(r-1) / Zsuf_i(r). w [B,k], m [B] long -> s [B,k] long with row sums m."""
+    B, k = w.shape
+    # suffix polynomials: Zsuf[i][B, c] over sites i..k-1
+    Zsuf = [None] * (k + 1)
+    Zsuf[k] = torch.zeros(B, k + 2, dtype=w.dtype, device=w.device); Zsuf[k][:, 0] = 1.0
+    for i in range(k - 1, -1, -1):
+        wi = w[:, i:i + 1]; Pn = Zsuf[i + 1]
+        Zsuf[i] = torch.cat([Pn[:, :1] * (1 - wi), (Pn[:, 1:] * (1 - wi) + Pn[:, :-1] * wi)], dim=1)
+    s = torch.zeros(B, k, dtype=torch.long, device=w.device)
+    r = m.clone()
+    for i in range(k):
+        num = w[:, i] * Zsuf[i + 1].gather(1, (r - 1).clamp_min(0)[:, None]).squeeze(1)
+        den = Zsuf[i].gather(1, r[:, None]).squeeze(1) + EPS
+        p1 = torch.where(r > 0, (num / den).clamp(0, 1), torch.zeros_like(num))
+        take = torch.rand_like(p1) < p1
+        s[:, i] = take.long(); r = r - take.long()
+    return s
+
+
+def block_relabel_attempt(x, s, U, beta, energy_fn, table_fn, k):
+    """One batched MH block-relabel: sample k sites via Gumbel-top-k weighted by table uncertainty (x-ONLY and
+    RANDOMIZED: the selection distribution is s-independent, so P_sel(block|x) is identical for the forward and
+    reverse move and cancels in the MH ratio — exact; randomization keeps the chain irreducible even at fixed x).
+    Redraw the block's labels from the conditional Bernoulli preserving the block's count. Returns (s_new, U_new, acc)."""
+    B, N = s.shape
+    W = table_fn(x).clamp(1e-6, 1 - 1e-6)                                 # [B,N], must NOT depend on s
+    score = -((W - 0.5).abs() + 1e-3).log()                               # uncertainty-weighted (x-only)
+    gumbel = -torch.log(-torch.log(torch.rand_like(score) + 1e-12) + 1e-12)
+    blk = torch.argsort(score + gumbel, dim=1, descending=True)[:, :k]    # randomized k-subset, all subsets possible
+    wblk = W.gather(1, blk)
+    sblk = s.gather(1, blk)
+    m = sblk.sum(1).long()                                                # invariant under the move
+    sblk_new = _cb_sample(wblk, m)
+    q_fwd = _cb_logprob(wblk, sblk_new)
+    q_rev = _cb_logprob(wblk, sblk)
+    s_prop = s.scatter(1, blk, sblk_new)
+    U_prop = energy_fn(x, s_prop)
+    log_ratio = -beta * (U_prop - U) + q_rev - q_fwd
+    acc = torch.log(torch.rand(B, device=x.device)) < log_ratio
+    s_new = torch.where(acc[:, None], s_prop, s)
+    U_new = torch.where(acc, U_prop, U)
+    return s_new, U_new, acc
+
+
 def position_sweep(x, s, U, beta, L, step, energy_fn):
     """One sweep = N sequential batched single-particle Metropolis moves. Returns (x, U, acc_rate)."""
     B, N, _ = x.shape; n_acc = 0.0

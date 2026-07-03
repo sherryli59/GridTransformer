@@ -132,6 +132,83 @@ def test_per_species_ot_blocks():
         assert s0 == sa
 
 
+def test_cond_bernoulli_dp_exact():
+    """DP normalizer and logprob vs brute-force enumeration (k=6)."""
+    from liquid_coupling_flow.ipl44.ipl_swap_smc import _cb_logZ, _cb_logprob
+    torch.manual_seed(4)
+    B, k = 5, 6
+    w = torch.rand(B, k).clamp(0.05, 0.95).double()
+    # brute force over all 2^k labelings
+    for m in range(k + 1):
+        states = [c for c in itertools.combinations(range(k), m)]
+        Zbf = torch.zeros(B, dtype=torch.float64)
+        for c in states:
+            sv = torch.zeros(k, dtype=torch.float64); sv[list(c)] = 1
+            Zbf += (w ** sv * (1 - w) ** (1 - sv)).prod(1)
+        lZ = _cb_logZ(w, torch.full((B,), m, dtype=torch.long))
+        assert torch.allclose(lZ.exp(), Zbf, rtol=1e-6), f"m={m}"
+        # logprob of each state sums to 1 within the m-sector
+        if states:
+            tot = torch.zeros(B, dtype=torch.float64)
+            for c in states:
+                sv = torch.zeros(B, k, dtype=torch.long); sv[:, list(c)] = 1
+                tot += _cb_logprob(w, sv).exp()
+            assert torch.allclose(tot, torch.ones(B, dtype=torch.float64), rtol=1e-6)
+
+
+def test_cond_bernoulli_sample_matches():
+    """Sampler's empirical distribution matches the exact conditional probabilities."""
+    from liquid_coupling_flow.ipl44.ipl_swap_smc import _cb_sample, _cb_logprob
+    torch.manual_seed(5)
+    k, m, n = 5, 2, 40000
+    w = torch.rand(1, k).clamp(0.1, 0.9).double().expand(n, -1).contiguous()
+    s = _cb_sample(w, torch.full((n,), m, dtype=torch.long))
+    assert (s.sum(1) == m).all()
+    states = [c for c in itertools.combinations(range(k), m)]
+    emp = torch.zeros(len(states)); exact = torch.zeros(len(states))
+    for i, c in enumerate(states):
+        sv = torch.zeros(1, k, dtype=torch.long); sv[0, list(c)] = 1
+        exact[i] = _cb_logprob(w[:1], sv).exp()
+        emp[i] = ((s == sv).all(1)).float().mean()
+    tv = 0.5 * (emp - exact).abs().sum()
+    assert tv < 0.03, f"TV {tv:.3f}"
+
+
+def test_block_relabel_stationarity():
+    """Tiny-system enumeration: block-relabel moves (x-only table, k=4) must preserve the exact Boltzmann
+    distribution over the C(6,3)=20 labelings (positions frozen)."""
+    from liquid_coupling_flow.ipl44.ipl_swap_smc import block_relabel_attempt
+    torch.manual_seed(6)
+    N, nB, beta, L = 6, 3, 1.0, 6.0
+    x1 = torch.rand(1, N, 2) * L
+    states = [c for c in itertools.combinations(range(N), nB)]
+    svecs = torch.zeros(len(states), N, dtype=torch.long)
+    for i, c in enumerate(states):
+        svecs[i, list(c)] = 1
+    Uex = toy_energy(x1.expand(len(states), -1, -1), svecs, L)
+    p_exact = torch.softmax(-beta * Uex, 0)
+
+    def table_fn(x):                                                     # x-ONLY (s-independent) table
+        return torch.sigmoid(x[..., 0] - 3.0)
+
+    B = 256
+    x = x1.expand(B, -1, -1).contiguous()
+    s = svecs[torch.randint(0, len(states), (B,))].clone()
+    U = toy_energy(x, s, L)
+    key = {tuple(v.tolist()): i for i, v in enumerate(svecs)}
+    counts = torch.zeros(len(states))
+    for t in range(500):
+        s, U, _ = block_relabel_attempt(x, s, U, beta=beta, energy_fn=lambda a, b: toy_energy(a, b, L),
+                                        table_fn=table_fn, k=4)
+        assert (s.sum(1) == nB).all()
+        if t >= 250:
+            for b in range(B):
+                counts[key[tuple(s[b].tolist())]] += 1
+    emp = counts / counts.sum()
+    tv = 0.5 * (emp - p_exact).abs().sum()
+    assert tv < 0.05, f"TV(empirical, exact) = {tv:.3f} for block relabel"
+
+
 def test_kawasaki_vectorized_matches_reference():
     """Vectorized kawasaki_interpolate must equal the loop reference exactly (same u), incl. count preservation."""
     from liquid_coupling_flow.ipl44.joint_flow import kawasaki_interpolate, _kawasaki_interpolate_ref, random_22_labeling

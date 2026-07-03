@@ -133,7 +133,7 @@ def denoiser_eval(model, x1, s1, t_eval=0.9, n_rep=4):
     """G1 metric: denoiser accuracy + ECE at the swap-proposer operating point. Builds (x_t, s_t) at t=t_eval
     from random s0 + Kawasaki, x_t on the interpolant toward x1 (x0 uniform, globally OT-aligned)."""
     B, N = s1.shape; dev = x1.device; L = model.L
-    accs, confs, cors = [], [], []
+    accs, confs, cors, mm_accs = [], [], [], []
     for _ in range(n_rep):
         x0 = torch.rand(B, N, 2, device=dev) * L
         x0 = global_position_ot(x0, x1, L)
@@ -145,6 +145,9 @@ def denoiser_eval(model, x1, s1, t_eval=0.9, n_rep=4):
         p = torch.softmax(logits, -1)
         pred = p.argmax(-1)
         accs.append((pred == s1).float().mean())
+        mm = s_t != s1                                                   # the still-misassigned sites
+        if mm.any():
+            mm_accs.append((pred == s1)[mm].float().mean())              # the honest discriminator
         confs.append(p.max(-1).values.flatten()); cors.append((pred == s1).float().flatten())
     conf = torch.cat(confs); cor = torch.cat(cors)
     bins = torch.linspace(0.5, 1.0, 11, device=conf.device); ece = torch.tensor(0.0, device=conf.device)
@@ -152,7 +155,8 @@ def denoiser_eval(model, x1, s1, t_eval=0.9, n_rep=4):
         m = (conf >= lo) & (conf < hi)
         if m.any():
             ece = ece + m.float().mean() * (conf[m].mean() - cor[m].mean()).abs()
-    return {"acc": float(torch.stack(accs).mean()), "ece": float(ece)}
+    return {"acc": float(torch.stack(accs).mean()), "ece": float(ece),
+            "acc_mismatch": float(torch.stack(mm_accs).mean()) if mm_accs else float("nan")}
 
 
 def joint_loss(model, x0, x1, s0, s1, lam=1.0):

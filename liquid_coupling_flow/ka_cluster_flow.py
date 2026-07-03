@@ -16,11 +16,12 @@ ART = os.path.join(os.path.dirname(__file__), "artifacts")
 
 class ClusterProposal(nn.Module):
     def __init__(self, rho=1.2, n_bins=24, d_model=128, n_head=4, n_layer=3, n_ctx=16, box=3.0,
-                 n_species=2, head="bins", num_flow_bins=16, tail_bound=3.5, **_):
+                 n_species=2, head="bins", num_flow_bins=16, tail_bound=3.5, pair_feats=False, **_):
         super().__init__()
         self.rho, self.n_bins, self.n_ctx, self.box = rho, n_bins, n_ctx, box
         self.bin_w = 2 * box / n_bins
         self.head_mode = head
+        self.pair_feats = pair_feats
         self.enc = nn.Sequential(nn.Linear(6, d_model), nn.GELU(), nn.Linear(d_model, d_model))  # in-frame pos -> feat
         self.sp_emb = nn.Embedding(n_species, d_model)
         self.role_emb = nn.Embedding(2, d_model)                     # 0 = x_R neighbour, 1 = placed cluster particle
@@ -34,6 +35,24 @@ class ClusterProposal(nn.Module):
         if head == "spline":
             from liquid_coupling_flow.ka_flowhead import SplineFlowHead
             self.flow = SplineFlowHead(d_model, num_bins=num_flow_bins, tail_bound=tail_bound)
+        if pair_feats:
+            from liquid_coupling_flow.ka_energy import SIGMA
+            self.pair_proj = nn.Linear(4, d_model)
+            nn.init.zeros_(self.pair_proj.weight); nn.init.zeros_(self.pair_proj.bias)   # inert at init
+            self.register_buffer("sig_tab", torch.tensor(SIGMA))
+
+    def _pair_feat(self, tok_u, tok_sp, q_u, q_sp):
+        """Radial excluded-volume features of each token relative to the current query slot.
+        tok_u [B,T,2] in-frame token positions; tok_sp [B,T]; q_u [B,2]; q_sp [B].
+        Returns [B,T,d_model] additive embedding (zero-init -> inert at start of training)."""
+        d = tok_u - q_u[:, None, :]
+        r = d.norm(dim=-1).clamp_min(1e-3)                                   # [B,T]
+        sig = self.sig_tab[q_sp[:, None].expand_as(tok_sp), tok_sp]          # [B,T] sigma_ij
+        x = r / sig
+        inv6 = x.clamp_min(0.5).pow(-6)
+        elj = 4.0 * (inv6 * inv6 - inv6)                                     # shifted-form LJ shape, clamped core
+        f = torch.stack([r, 1.0 / (x * x).clamp_min(0.25), x, elj], -1)      # [B,T,4]
+        return self.pair_proj(f)
 
     # ---- binning (in-frame coord in [-box, box); genuine zero outside) ----
     def _bin(self, u):
@@ -63,9 +82,10 @@ class ClusterProposal(nn.Module):
         sc_c = KC.cluster_scaffold_center(cluster_idx, sc, L).to(pos.dtype)
         origin, R = KC.frame_from_positions(pos[:, slots, :], sc_c, L)               # [B,2],[B,2,2]
         ctx_u = KC.to_frame(pos[:, slots, :], origin, R, L)                          # [B,n_ctx,2] x_R in-frame
-        ctx_tok = self._featpos(ctx_u) + self.sp_emb(s[:, slots]) + self.role_emb.weight[0]   # s [B,N] -> [B,n_ctx]
+        ctx_sp = s[:, slots]                                                          # [B,n_ctx] ctx slot species
+        ctx_tok = self._featpos(ctx_u) + self.sp_emb(ctx_sp) + self.role_emb.weight[0]
         q_scaf = KC.to_frame(sc[cluster_idx].to(pos.dtype)[None].expand(pos.shape[0], -1, -1), origin, R, L)  # [B,k,2]
-        return origin, R, ctx_tok, q_scaf
+        return origin, R, ctx_tok, q_scaf, ctx_u, ctx_sp
 
     def _placed_tok(self, placed_u, placed_sp):
         if placed_u.shape[1] == 0:
@@ -75,12 +95,17 @@ class ClusterProposal(nn.Module):
     @torch.no_grad()
     def sample(self, pos, s, cluster_idx, sc, L):
         B = pos.shape[0]; k = cluster_idx.shape[0]; dev = pos.device
-        origin, R, ctx_tok, q_scaf = self._ctx_tokens(pos, s, cluster_idx, sc, L)
+        origin, R, ctx_tok, q_scaf, ctx_u, ctx_sp = self._ctx_tokens(pos, s, cluster_idx, sc, L)
         sp = s[:, cluster_idx]                                                       # [B,k] cluster species (fixed)
         placed_u = torch.zeros(B, 0, 2, device=dev); placed_sp = torch.zeros(B, 0, dtype=torch.long, device=dev)
         logq = torch.zeros(B, device=dev)
         for i in range(k):
-            ctx = self._step_ctx(q_scaf[:, i], i, ctx_tok, self._placed_tok(placed_u, placed_sp))
+            ctx_tok_i, placed_tok = ctx_tok, self._placed_tok(placed_u, placed_sp)
+            if self.pair_feats:
+                ctx_tok_i = ctx_tok + self._pair_feat(ctx_u, ctx_sp, q_scaf[:, i], sp[:, i])
+                if placed_tok is not None:
+                    placed_tok = placed_tok + self._pair_feat(placed_u, placed_sp, q_scaf[:, i], sp[:, i])
+            ctx = self._step_ctx(q_scaf[:, i], i, ctx_tok_i, placed_tok)
             if self.head_mode == "spline":
                 u_i, lstep = self.flow.sample(ctx)               # [B,2], [B] continuous exact
                 logq = logq + lstep
@@ -98,7 +123,7 @@ class ClusterProposal(nn.Module):
 
     def log_q(self, pos, s, cluster_idx, xC_query, sc, L):          # grad-capable (training); MH wraps in no_grad
         B = pos.shape[0]; k = cluster_idx.shape[0]; dev = pos.device
-        origin, R, ctx_tok, q_scaf = self._ctx_tokens(pos, s, cluster_idx, sc, L)
+        origin, R, ctx_tok, q_scaf, ctx_u, ctx_sp = self._ctx_tokens(pos, s, cluster_idx, sc, L)
         sp = s[:, cluster_idx]
         u = KC.to_frame(xC_query, origin, R, L)                                      # [B,k,2] query in-frame
         if self.head_mode != "spline":
@@ -106,7 +131,12 @@ class ClusterProposal(nn.Module):
         placed_u = torch.zeros(B, 0, 2, device=dev); placed_sp = torch.zeros(B, 0, dtype=torch.long, device=dev)
         logq = torch.zeros(B, device=dev)
         for i in range(k):
-            ctx = self._step_ctx(q_scaf[:, i], i, ctx_tok, self._placed_tok(placed_u, placed_sp))
+            ctx_tok_i, placed_tok = ctx_tok, self._placed_tok(placed_u, placed_sp)
+            if self.pair_feats:
+                ctx_tok_i = ctx_tok + self._pair_feat(ctx_u, ctx_sp, q_scaf[:, i], sp[:, i])
+                if placed_tok is not None:
+                    placed_tok = placed_tok + self._pair_feat(placed_u, placed_sp, q_scaf[:, i], sp[:, i])
+            ctx = self._step_ctx(q_scaf[:, i], i, ctx_tok_i, placed_tok)
             if self.head_mode == "spline":
                 logq = logq + self.flow.log_prob(ctx, u[:, i])
             else:
@@ -139,7 +169,7 @@ def slot_order(pos, s, geo, N):
 
 
 def train(steps=15000, k=7, n_bins=24, box=3.0, n_ctx=16, d_model=128, n_head=4, n_layer=3, lr=3e-4,
-          train_N=100, head="bins", num_flow_bins=16, tail_bound=3.5, tag="",
+          train_N=100, head="bins", num_flow_bins=16, tail_bound=3.5, pair_feats=False, tag="",
           device="cuda" if torch.cuda.is_available() else "cpu"):
     """Conditional MLE: maximize log q(true cluster | true surroundings) over random slot-clusters on the
     reference. A random seed slot per step (shared across the B configs); covers all clusters over training."""
@@ -149,10 +179,10 @@ def train(steps=15000, k=7, n_bins=24, box=3.0, n_ctx=16, d_model=128, n_head=4,
     data, s = ref["x"].to(device), ref["s"].to(device).long(); N = data.shape[1]
     sc, L, geo = _scaffold(N, device)
     P = ClusterProposal(rho=1.2, n_bins=n_bins, box=box, n_ctx=n_ctx, d_model=d_model, n_head=n_head,
-                        n_layer=n_layer, head=head, num_flow_bins=num_flow_bins, tail_bound=tail_bound
-                        ).to(device).train()
+                        n_layer=n_layer, head=head, num_flow_bins=num_flow_bins, tail_bound=tail_bound,
+                        pair_feats=pair_feats).to(device).train()
     arch = {"n_bins": n_bins, "box": box, "n_ctx": n_ctx, "d_model": d_model, "n_head": n_head, "n_layer": n_layer,
-            "head": head, "num_flow_bins": num_flow_bins, "tail_bound": tail_bound}
+            "head": head, "num_flow_bins": num_flow_bins, "tail_bound": tail_bound, "pair_feats": pair_feats}
     opt = torch.optim.AdamW(P.parameters(), lr=lr, weight_decay=1e-4); B, t0 = 128, time.time()
     warm = 400
     sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda st: min((st + 1) / warm,
@@ -185,7 +215,8 @@ def _load(ck, device):
                         d_model=ck.get("d_model", 128), n_head=ck.get("n_head", 4),
                         n_layer=ck.get("n_layer", 3), head=ck.get("head", "bins"),
                         num_flow_bins=ck.get("num_flow_bins", 16),
-                        tail_bound=ck.get("tail_bound", 3.5)).to(device).eval()
+                        tail_bound=ck.get("tail_bound", 3.5),
+                        pair_feats=ck.get("pair_feats", False)).to(device).eval()
     P.load_state_dict(ck["state_dict"]); return P
 
 
@@ -259,7 +290,7 @@ def gate_measure(P, pos0, sso, sc, L, N, k, out_png):
     if hasattr(P, "_ctx_tokens") and hasattr(P, "head_a") and hasattr(P, "_bin"):
         spreads = []
         for seed in (5, 20):
-            cl = KC.cluster_slots(seed, sc, k, L); o, R, ctx_tok, q_scaf = P._ctx_tokens(pos0, sso, cl, sc, L)
+            cl = KC.cluster_slots(seed, sc, k, L); o, R, ctx_tok, q_scaf, *_ = P._ctx_tokens(pos0, sso, cl, sc, L)
             ctx = P._step_ctx(q_scaf[:, 0], 0, ctx_tok, None); la = F.log_softmax(P.head_a(ctx), -1)
             u_true = KC.to_frame(pos0[:, cl], o, R, L)[:, 0]
             ptrue = la.exp().gather(1, P._bin(u_true[:, 0]).clamp(0)[:, None]).squeeze(1)

@@ -49,3 +49,30 @@ def test_spline_out_of_box_finite():
     far = torch.remainder(pos[:, cl] + 4.0, L)
     lq = P.log_q(pos, s, cl, far, sc, L)
     assert torch.isfinite(lq).all()
+
+def test_pair_feats_forward_and_roundtrip():
+    torch.manual_seed(0)
+    sc, L, pos, s, cl = _env()
+    P = ClusterProposal(head="spline", pair_feats=True).to(DEV).eval()
+    xC, logq = P.sample(pos, s, cl, sc, L)
+    logq2 = P.log_q(pos, s, cl, xC, sc, L)
+    assert torch.allclose(logq, logq2, atol=1e-4), (logq - logq2).abs().max()
+
+def test_pair_feats_off_is_inert():
+    """pair_feats=False (default) leaves the module WITHOUT pair_proj -> old ckpts still strict-load."""
+    P = ClusterProposal(head="bins")
+    assert not hasattr(P, "pair_proj")
+
+def test_pair_feats_zero_init_matches_off():
+    """pair_proj is zero-init -> a pair_feats=True model behaves identically to pair_feats=False at init
+    (same seed, same weights via state_dict transplant) since the additive pair feature is exactly zero."""
+    torch.manual_seed(0)
+    sc, L, pos, s, cl = _env(B=4)
+    torch.manual_seed(1)
+    P_off = ClusterProposal(head="spline", pair_feats=False).to(DEV).eval()
+    torch.manual_seed(1)
+    P_on = ClusterProposal(head="spline", pair_feats=True).to(DEV).eval()
+    P_on.load_state_dict(P_off.state_dict(), strict=False)          # copy shared weights; pair_proj stays zero-init
+    lq_off = P_off.log_q(pos, s, cl, pos[:, cl], sc, L)
+    lq_on = P_on.log_q(pos, s, cl, pos[:, cl], sc, L)
+    assert torch.allclose(lq_off, lq_on, atol=1e-5), (lq_off - lq_on).abs().max()

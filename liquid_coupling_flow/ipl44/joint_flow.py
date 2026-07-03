@@ -12,16 +12,23 @@ from learndiffeq.particles.utils import linear_assignment_permutation
 class JointSpeciesFlow(nn.Module):
     """Shared EGNN trunk -> (position velocity v, per-particle species logits)."""
 
-    def __init__(self, n_particles, L, hidden_nf=32, n_layers=3, n_species=2, tanh=True, attention=True):
+    def __init__(self, n_particles, L, hidden_nf=32, n_layers=3, n_species=2, tanh=True, attention=True,
+                 two_time=False):
         super().__init__()
-        self.N = n_particles; self.L = float(L); self.n_species = n_species
+        self.N = n_particles; self.L = float(L); self.n_species = n_species; self.two_time = two_time
         self.dyn = EGNN_dynamics(n_particles=n_particles, n_dimension=2, hidden_nf=hidden_nf, n_layers=n_layers,
                                  recurrent=True, attention=attention, condition_time=True, tanh=tanh, agg="sum",
                                  L=float(L), n_species=n_species)
         self.species_head = nn.Sequential(nn.Linear(hidden_nf, hidden_nf), nn.SiLU(), nn.Linear(hidden_nf, n_species))
+        if two_time:
+            # decoupled species-noise clock: injected additively after the EGNN input projection so the
+            # vendored EGNN stays untouched. Enables querying (t_pos=1, t_spec=0) = "clean geometry, garbage
+            # labels" -> an s-independent geometry table (the coupled-t model is OOD there: t=0 also noises x).
+            self.tspec_proj = nn.Linear(1, hidden_nf)
 
-    def forward(self, t, x, s):
-        """t [B,1,1], x [B,N,2], s [B,N] long -> v [B,N,2], logits [B,N,n_species]."""
+    def forward(self, t, x, s, t_spec=None):
+        """t (=t_pos) [B,1,1], x [B,N,2], s [B,N] long, t_spec [B,1,1] (two_time only; default = t)
+        -> v [B,N,2], logits [B,N,n_species]."""
         dyn = self.dyn; B = x.shape[0]; N = self.N; dev = x.device
         edges = dyn._cast_edges2batch(dyn.edges, B, N); edges = [edges[0].to(dev), edges[1].to(dev)]
         xf = x.reshape(B * N, 2)
@@ -30,6 +37,9 @@ class JointSpeciesFlow(nn.Module):
         edge_attr = dist_sq_torus(xf[edges[0]], xf[edges[1]], self.L).unsqueeze(-1)
         egnn = dyn.egnn
         hh = egnn.embedding(h); xx = xf.clone()
+        if self.two_time:
+            ts = t if t_spec is None else t_spec
+            hh = hh + self.tspec_proj(ts.expand(-1, N, -1).reshape(B * N, 1))
         for i in range(egnn.n_layers):
             hh, xx, _ = egnn._modules["gcl_%d" % i](hh, edges, xx, edge_attr=edge_attr)
         vel = log_map(xf, xx, self.L).view(B, N, 2)                       # torus velocity = coordinate update
@@ -129,19 +139,26 @@ def per_species_ot(x0, x1, nA, L):
 
 
 @torch.no_grad()
-def denoiser_eval(model, x1, s1, t_eval=0.9, n_rep=4):
+def denoiser_eval(model, x1, s1, t_eval=0.9, n_rep=4, t_pos=None):
     """G1 metric: denoiser accuracy + ECE at the swap-proposer operating point. Builds (x_t, s_t) at t=t_eval
-    from random s0 + Kawasaki, x_t on the interpolant toward x1 (x0 uniform, globally OT-aligned)."""
+    from random s0 + Kawasaki, x_t on the interpolant toward x1 (x0 uniform, globally OT-aligned).
+    Two-time models: t_pos controls the POSITION interpolant separately (t_pos=1.0, t_eval=0.0 = the
+    geometry-table query: clean positions, uninformative labels)."""
     B, N = s1.shape; dev = x1.device; L = model.L
+    tp_val = t_eval if t_pos is None else t_pos
     accs, confs, cors, mm_accs = [], [], [], []
     for _ in range(n_rep):
         x0 = torch.rand(B, N, 2, device=dev) * L
         x0 = global_position_ot(x0, x1, L)
+        tp = torch.full((B,), tp_val, device=dev)
         t = torch.full((B,), t_eval, device=dev)
-        x_t = exp_map(x1, (1.0 - t)[:, None, None] * log_map(x1, x0, L), L)
+        x_t = exp_map(x1, (1.0 - tp)[:, None, None] * log_map(x1, x0, L), L)
         s0 = random_22_labeling(B, N, int(s1[0].sum()), dev)
         s_t = kawasaki_interpolate(s0, s1, t)
-        _, logits = model(t.view(B, 1, 1), x_t, s_t)
+        if getattr(model, "two_time", False):
+            _, logits = model(tp.view(B, 1, 1), x_t, s_t, t_spec=t.view(B, 1, 1))
+        else:
+            _, logits = model(t.view(B, 1, 1), x_t, s_t)
         p = torch.softmax(logits, -1)
         pred = p.argmax(-1)
         accs.append((pred == s1).float().mean())
@@ -161,12 +178,19 @@ def denoiser_eval(model, x1, s1, t_eval=0.9, n_rep=4):
 
 def joint_loss(model, x0, x1, s0, s1, lam=1.0):
     """L_pos (division-free FM) + lam * L_spec (denoiser CE), on shared interpolated (x_t, s_t). x0 already
-    OT-aligned to x1. s0 random 22:22, s1 data labeling (aligned to x1's index order)."""
+    OT-aligned to x1. s0 random 22:22, s1 data labeling (aligned to x1's index order).
+    If model.two_time: t_pos and t_spec are sampled INDEPENDENTLY, so the model learns all four corners —
+    including (t_pos=1, t_spec=0): clean geometry + uninformative labels = the geometry table."""
     B, N = x1.shape[0], x1.shape[1]; dev = x1.device; L = model.L
     t = torch.rand(B, device=dev)
     x_t = exp_map(x1, (1.0 - t)[:, None, None] * log_map(x1, x0, L), L)
-    s_t = kawasaki_interpolate(s0, s1, t)
-    v, logits = model(t.view(B, 1, 1), x_t, s_t)
+    if getattr(model, "two_time", False):
+        t_spec = torch.rand(B, device=dev)
+        s_t = kawasaki_interpolate(s0, s1, t_spec)
+        v, logits = model(t.view(B, 1, 1), x_t, s_t, t_spec=t_spec.view(B, 1, 1))
+    else:
+        s_t = kawasaki_interpolate(s0, s1, t)
+        v, logits = model(t.view(B, 1, 1), x_t, s_t)
     target = -log_map(x1, x0, L)
     L_pos = (torch.sum((v - target) ** 2, dim=(1, 2)) / (N * 2)).mean()
     L_spec = F.cross_entropy(logits.reshape(B * N, -1), s1.reshape(B * N))

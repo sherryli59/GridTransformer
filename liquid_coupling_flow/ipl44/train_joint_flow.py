@@ -14,6 +14,7 @@ hidden = int(sys.argv[3]) if len(sys.argv) > 3 else 64
 layers = int(sys.argv[4]) if len(sys.argv) > 4 else 4
 lam = float(sys.argv[5]) if len(sys.argv) > 5 else 1.0
 ot = sys.argv[6] if len(sys.argv) > 6 else "global"
+two_time = len(sys.argv) > 7 and sys.argv[7] == "tt"
 B, lr, warmup, ema_decay = 256, 1e-3, 500, 0.999
 D = "/mnt/ssd/GridTransformer/datasets"; ART = os.path.join(os.path.dirname(__file__), "data")
 
@@ -23,11 +24,11 @@ o = sp.argsort(-1); sp = torch.gather(sp, 1, o); x = torch.gather(x, 1, o.unsque
 xtr, str_, xva, sva = x[:9000].to(dev), sp[:9000].to(dev), x[9000:].to(dev), sp[9000:].to(dev)
 nA = int((str_[0] == 0).sum())
 
-m = JointSpeciesFlow(n_particles=N, L=Lf, hidden_nf=hidden, n_layers=layers).to(dev)
+m = JointSpeciesFlow(n_particles=N, L=Lf, hidden_nf=hidden, n_layers=layers, two_time=two_time).to(dev)
 ema = copy.deepcopy(m).eval()
 opt = torch.optim.Adam(m.parameters(), lr=lr)
 npar = sum(p.numel() for p in m.parameters())
-print(f"[{tag}] {npar/1e3:.1f}k params | hidden {hidden} layers {layers} lam {lam} ot {ot} | {steps} steps", flush=True)
+print(f"[{tag}] {npar/1e3:.1f}k params | hidden {hidden} layers {layers} lam {lam} ot {ot} two_time {two_time} | {steps} steps", flush=True)
 
 def build_ot_bank():
     """Precompute one OT-aligned x0 per training target (refreshed periodically) — removes the ~160ms/step
@@ -64,7 +65,7 @@ for step in range(steps):
     if step % 1000 == 0 or step == steps - 1:
         ev = denoiser_eval(ema, xva[:512], sva[:512])
         ck = {"state_dict": ema.state_dict(), "raw_state_dict": m.state_dict(),
-              "cfg": {"hidden_nf": hidden, "n_layers": layers, "lam": lam, "ot": ot},
+              "cfg": {"hidden_nf": hidden, "n_layers": layers, "lam": lam, "ot": ot, "two_time": two_time},
               "step": step, "val_acc": ev["acc"], "val_ece": ev["ece"]}
         torch.save(ck, f"{ART}/jf_{tag}_last.pt")
         star = ""

@@ -83,3 +83,38 @@ def test_stationarity_exact_enumeration(wfn_name):
     emp = counts / counts.sum()
     tv = 0.5 * (emp - p_exact).abs().sum()
     assert tv < 0.05, f"TV(empirical, exact) = {tv:.3f} for {wfn_name} proposer"
+
+
+def test_position_sweep_preserves_equilibrium():
+    """Start FROM reference equilibrium configs at beta=10: 30 sweeps must not drift the energy median
+    outside the 5% band (stationarity of the position kernel)."""
+    from liquid_coupling_flow.ipl44.ipl_swap_smc import position_sweep
+    from liquid_coupling_flow.ipl44.ipl_energy import ipl_energy, ipl_box
+    N, L = ipl_box()
+    D = "/mnt/ssd/GridTransformer/datasets"
+    x = torch.remainder(torch.load(f"{D}/ipl44_T0.1_positions.pt", weights_only=False).float(), float(L))[:64]
+    sp = torch.load(f"{D}/ipl44_T0.1_species.pt", weights_only=False).long()[:64]
+    o = sp.argsort(-1); sp = torch.gather(sp, 1, o)
+    x = torch.gather(x, 1, o.unsqueeze(-1).expand(-1, -1, 2))
+    ref_med = ipl_energy(x, sp).median()
+    U = ipl_energy(x, sp)
+    acc = 0.0
+    for _ in range(30):
+        x, U, acc = position_sweep(x, sp, U, beta=10.0, L=float(L), step=0.08, energy_fn=ipl_energy)
+    assert (U.median() - ref_med).abs() / ref_med.abs() < 0.05
+    assert 0.05 < acc < 0.95
+
+
+def test_run_chain_and_band():
+    from liquid_coupling_flow.ipl44.ipl_swap_smc import run_chain, sweeps_to_band
+    from liquid_coupling_flow.ipl44.ipl_energy import ipl_energy, ipl_box
+    N, L = ipl_box()
+    x0 = torch.rand(16, N, 2) * float(L)
+    s0 = torch.zeros(16, N, dtype=torch.long); s0[:, 22:] = 1
+    out = run_chain(x0, s0, n_sweeps=20, beta=10.0, L=float(L), energy_fn=ipl_energy,
+                    weight_fn=uniform_weight_fn, n_swap=4, record_every=5)
+    assert len(out["sweep"]) == len(out["U_median"]) == len(out["gbb_peak"])
+    assert (out["s"].sum(1) == 22).all()
+    # sweeps_to_band: monotone curve hitting the band -> first index's sweep
+    curves = {"sweep": [0, 10, 20, 30], "U_median": [30.0, 16.0, 14.8, 14.6], "gbb_peak": [0.5, 2.0, 4.0, 4.2]}
+    assert sweeps_to_band(curves, U_ref_med=14.7, gbb_ref_peak=4.3) == 20

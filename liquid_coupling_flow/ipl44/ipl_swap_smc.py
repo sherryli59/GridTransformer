@@ -55,3 +55,49 @@ def swap_attempt(x, s, U, beta, energy_fn, weight_fn):
     s_new = torch.where(acc[:, None], s_prop, s)
     U_new = torch.where(acc, U_prop, U)
     return s_new, U_new, acc
+
+
+def position_sweep(x, s, U, beta, L, step, energy_fn):
+    """One sweep = N sequential batched single-particle Metropolis moves. Returns (x, U, acc_rate)."""
+    B, N, _ = x.shape; n_acc = 0.0
+    for i in torch.randperm(N).tolist():
+        xp = x.clone()
+        xp[:, i] = torch.remainder(xp[:, i] + step * torch.randn(B, 2, device=x.device), L)
+        Up = energy_fn(xp, s)
+        acc = torch.log(torch.rand(B, device=x.device)) < (-beta * (Up - U))
+        x = torch.where(acc[:, None, None], xp, x); U = torch.where(acc, Up, U)
+        n_acc += acc.float().mean().item()
+    return x, U, n_acc / N
+
+
+def run_chain(x0, s0, n_sweeps, beta, L, energy_fn, weight_fn=None, n_swap=8, step=0.08, record_every=10):
+    """Alternate position sweeps and swap attempts; record batch-ensemble metrics every record_every sweeps."""
+    from liquid_coupling_flow.ipl44.ipl_energy import ipl_gr_partials
+    x, s = x0.clone(), s0.clone(); U = energy_fn(x, s)
+    rec = {"sweep": [], "U_median": [], "gbb_peak": [], "swap_acc": [], "pos_acc": []}
+    for k in range(n_sweeps + 1):
+        if k % record_every == 0:
+            _, _, _, gbb = ipl_gr_partials(x.cpu(), s.cpu(), L)
+            rec["sweep"].append(k); rec["U_median"].append(float(U.median()))
+            rec["gbb_peak"].append(float(gbb.max()))
+        if k == n_sweeps:
+            break
+        x, U, pacc = position_sweep(x, s, U, beta, L, step, energy_fn)
+        sacc = 0.0
+        if weight_fn is not None:
+            for _ in range(n_swap):
+                s, U, a = swap_attempt(x, s, U, beta, energy_fn, weight_fn)
+                sacc += a.float().mean().item()
+            sacc /= n_swap
+        if (k + 1) % record_every == 0 or k == 0:
+            rec["swap_acc"].append(sacc); rec["pos_acc"].append(pacc)
+    rec["x"], rec["s"] = x, s
+    return rec
+
+
+def sweeps_to_band(curves, U_ref_med, gbb_ref_peak, u_tol=0.05, g_tol=0.15):
+    """First recorded sweep where BOTH |U_med-ref|/|ref| < u_tol and |gbb-ref|/ref < g_tol; None if never."""
+    for k, u, g in zip(curves["sweep"], curves["U_median"], curves["gbb_peak"]):
+        if abs(u - U_ref_med) / abs(U_ref_med) < u_tol and abs(g - gbb_ref_peak) / gbb_ref_peak < g_tol:
+            return k
+    return None

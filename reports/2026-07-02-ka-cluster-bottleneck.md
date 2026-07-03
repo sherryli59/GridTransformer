@@ -528,3 +528,16 @@ REPLICATES the 2026-06-26 full-config null in the cluster setting: the transform
 regardless of head expressiveness. Attribution: A's wall = context/representation pathway (+possibly scale), NOT
 the output head. ARM-FULL (pair features + d256/L6 + 40k) is the arm that tests exactly that lever.
 Figure: liquid_coupling_flow/artifacts/ka_cluster_armH_gate.png
+
+## 2026-07-03: ARM-FULL verdict — AR line CLOSED with full attribution
+
+ka_cluster_flow_full_N100.pt (spline + per-step radial/LJ pair features + d256/L6/ctx32, ~6.5M, 40k):
+**clash 32.7%** (best AR ever: bins-40k 44, ARM-H 53.3), -logq/k plateau ~-1.8 to -2.2 (2 nats/particle sharper
+than ARM-H — the pair-feature/scale lever is real). BUT: misses tier 1 (<30), far from tier 2 (18); EGNN-big is
+13.3% at 1/4 the params. NOTE: the printed seed-spread (0.74-0.78) is from gate_measure's aux probe which does
+NOT apply pair features (known Minor) — discount it; the clash metric uses P.sample() and is correct.
+ATTRIBUTION COMPLETE: order sound; head not the constraint (ARM-H null); context is the constraint, and explicit
+distance features + scale through a transformer close only part of the gap — the EGNN's equivariant distance-based
+message passing is the load-bearing ingredient for precision placement in the glass. Per spec gates: no MH
+acceptance rerun. AR's exact-1-forward log_q remains attractive ONLY if some future context pathway reaches
+EGNN-level clash. Figure: liquid_coupling_flow/artifacts/ka_cluster_full_gate.png

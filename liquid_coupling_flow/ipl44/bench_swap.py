@@ -76,7 +76,7 @@ for seed_kind in ["uniform", "tfbank", "flow"]:
         print(f"{seed_kind:8s} {prop_name:10s}: sweeps-to-band {stb} | wall {wall:.0f}s "
               f"| final U_med {cur['U_median'][-1]:.2f} g_BB {cur['gbb_peak'][-1]:.2f} "
               f"| swap acc {sum(cur['swap_acc'])/max(len(cur['swap_acc']),1):.3f}", flush=True)
-torch.save(results, f"{ART}/bench_swap_curves.pt")
+torch.save(results, f"{ART}/bench_swap_curves_{tag}.pt")
 
 fig, axes = plt.subplots(2, 3, figsize=(17, 8))
 for c, seed_kind in enumerate(["uniform", "tfbank", "flow"]):
@@ -89,5 +89,5 @@ for c, seed_kind in enumerate(["uniform", "tfbank", "flow"]):
     axes[0, c].set_yscale("symlog"); axes[0, c].legend(fontsize=7)
     axes[1, c].axhline(GBB_REF, ls="--", c="k"); axes[1, c].set_title(f"{seed_kind}: g_BB peak"); axes[1, c].set_xlabel("sweep")
     axes[1, c].legend(fontsize=7)
-plt.tight_layout(); plt.savefig(f"{ART}/bench_swap.png", dpi=110)
-print(f"saved {ART}/bench_swap.png", flush=True)
+plt.tight_layout(); plt.savefig(f"{ART}/bench_swap_{tag}.png", dpi=110)
+print(f"saved {ART}/bench_swap_{tag}.png", flush=True)

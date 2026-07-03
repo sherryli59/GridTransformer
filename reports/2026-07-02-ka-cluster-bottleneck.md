@@ -541,3 +541,11 @@ distance features + scale through a transformer close only part of the gap — t
 message passing is the load-bearing ingredient for precision placement in the glass. Per spec gates: no MH
 acceptance rerun. AR's exact-1-forward log_q remains attractive ONLY if some future context pathway reaches
 EGNN-level clash. Figure: liquid_coupling_flow/artifacts/ka_cluster_full_gate.png
+
+## 2026-07-03: ARM-FULL MH acceptance (user follow-up)
+
+640-move protocol: mean **0.308%** (EGNN small 0.64 / EGNN big 1.02). Decomposition: clash-free 10.3% (vs 50%
+EGNN-big — pure per-particle compounding, (0.673)^7) BUT acceptance|no-clash 2.99% > EGNN-big 2.03%, and
+logq_rev-logq_fwd = +4.26: the AR is diffuse-but-CALIBRATED (assigns the true cluster far higher density than
+its own samples; clash-free draws are energetically slightly better than the EGNN's). Bottleneck = hit rate,
+not energy quality or density calibration.

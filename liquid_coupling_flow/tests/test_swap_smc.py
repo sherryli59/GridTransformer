@@ -132,6 +132,21 @@ def test_per_species_ot_blocks():
         assert s0 == sa
 
 
+def test_kawasaki_vectorized_matches_reference():
+    """Vectorized kawasaki_interpolate must equal the loop reference exactly (same u), incl. count preservation."""
+    from liquid_coupling_flow.ipl44.joint_flow import kawasaki_interpolate, _kawasaki_interpolate_ref, random_22_labeling
+    torch.manual_seed(3)
+    B, N, nB = 64, 44, 22
+    for _ in range(5):
+        s0 = random_22_labeling(B, N, nB, "cpu")
+        s1 = random_22_labeling(B, N, nB, "cpu")
+        t = torch.rand(B); u = torch.rand(B, N)
+        sv = kawasaki_interpolate(s0, s1, t, u=u)
+        sr = _kawasaki_interpolate_ref(s0, s1, t, u)
+        assert torch.equal(sv, sr)
+        assert (sv.sum(1) == nB).all()
+
+
 def test_denoiser_eval_runs():
     from liquid_coupling_flow.ipl44.joint_flow import JointSpeciesFlow, denoiser_eval
     m = JointSpeciesFlow(n_particles=44, L=9.38, hidden_nf=16, n_layers=2)

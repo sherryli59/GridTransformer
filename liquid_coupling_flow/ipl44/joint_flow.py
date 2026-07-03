@@ -76,26 +76,46 @@ def random_22_labeling(B, N, nB, device):
     return torch.gather(base, 1, perm)
 
 
-def kawasaki_interpolate(s0, s1, t):
+def kawasaki_interpolate(s0, s1, t, u=None):
     """Count-preserving species path: each pending A<->B mismatch (matched in equal-size sets) is resolved with
-    prob t. Returns s_t [B,N] long, exactly 22:22 at every t. t is [B] in [0,1]."""
+    prob t. Returns s_t [B,N] long, exactly 22:22 at every t. t is [B] in [0,1]. Vectorized (no per-config
+    loop); `u` [B,N] optional for deterministic testing against the reference implementation."""
     B, N = s0.shape; dev = s0.device
     st = s0.clone()
     AtoB = (s0 == 0) & (s1 == 1)                                          # pending A->B per config
     BtoA = (s0 == 1) & (s1 == 0)                                          # pending B->A (equal count to AtoB)
     # order the pending sets within each config; pair the k-th A->B with the k-th B->A; resolve pair iff u<t
-    oa = torch.argsort(AtoB.float(), dim=1, descending=True)             # pending-A indices first
-    ob = torch.argsort(BtoA.float(), dim=1, descending=True)
+    oa = torch.argsort(AtoB.float(), dim=1, descending=True, stable=True)  # pending-A indices first
+    ob = torch.argsort(BtoA.float(), dim=1, descending=True, stable=True)
     na = AtoB.sum(1)                                                      # = nb per config
-    u = torch.rand(B, N, device=dev)                                     # one uniform per pending pair slot
-    resolve = u < t[:, None]                                             # [B,N] slot-resolve mask
-    for b in range(B):                                                   # apply resolves (m<=22, cheap)
+    if u is None:
+        u = torch.rand(B, N, device=dev)                                 # one uniform per pending pair slot
+    valid = torch.arange(N, device=dev)[None, :] < na[:, None]           # slot k active iff k < na[b]
+    sel = (u < t[:, None]) & valid                                        # [B,N] resolved slots
+    rows = torch.arange(B, device=dev)[:, None].expand(B, N)[sel]
+    ai = oa[sel]; bi = ob[sel]
+    st[rows, ai] = s1[rows, ai]                                           # resolved A->B
+    st[rows, bi] = s1[rows, bi]                                           # resolved B->A
+    return st
+
+
+def _kawasaki_interpolate_ref(s0, s1, t, u):
+    """Reference (loop) implementation kept for the equivalence test."""
+    B, N = s0.shape
+    st = s0.clone()
+    AtoB = (s0 == 0) & (s1 == 1)
+    BtoA = (s0 == 1) & (s1 == 0)
+    oa = torch.argsort(AtoB.float(), dim=1, descending=True, stable=True)
+    ob = torch.argsort(BtoA.float(), dim=1, descending=True, stable=True)
+    na = AtoB.sum(1)
+    resolve = u < t[:, None]
+    for b in range(B):
         m = int(na[b])
         if m == 0:
             continue
         ai = oa[b, :m]; bi = ob[b, :m]; r = resolve[b, :m]
-        st[b, ai[r]] = s1[b, ai[r]]                                       # resolved A->B
-        st[b, bi[r]] = s1[b, bi[r]]                                       # resolved B->A
+        st[b, ai[r]] = s1[b, ai[r]]
+        st[b, bi[r]] = s1[b, bi[r]]
     return st
 
 

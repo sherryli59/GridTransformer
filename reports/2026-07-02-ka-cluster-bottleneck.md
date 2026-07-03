@@ -549,3 +549,20 @@ EGNN-big — pure per-particle compounding, (0.673)^7) BUT acceptance|no-clash 2
 logq_rev-logq_fwd = +4.26: the AR is diffuse-but-CALIBRATED (assigns the true cluster far higher density than
 its own samples; clash-free draws are energetically slightly better than the EGNN's). Bottleneck = hit rate,
 not energy quality or density calibration.
+
+## 2026-07-03: MTM cluster kernel — BUILT, VALIDATED, economics measured
+
+K1 Barker/Tjelmeland ensemble independence-MTM over the ARM-FULL spline proposal (ka_cluster_mtm.py, b033f1d;
+spec 2026-07-03-cluster-mtm-design.md; review: detailed-balance arithmetic verified airtight).
+VALIDATION (exactness-by-stationarity, B=64 chains):
+- from the FIRST-64 reference slice (found to be 0.04/N SHALLOW — early PT frames): kernel relaxed it ONTO the
+  true ensemble mean (-3.2614 vs file U_per_N -3.2600) holding g_BB — correct behavior initially misread as drift;
+- from a RANDOM (representative) slice: non-monotone HOLD, max excursion 0.024 ~ reference plateau_drift 0.0155,
+  ending -0.013 and shrinking; g_BB flat 2.21-2.29 (data 2.30);
+- K3 negative control (SIR w/o current state, M=2): U/N explodes to ~1e10 within 5 sweeps — test sensitivity proven.
+ECONOMICS: move_prob 2.6/5.5/16.2% at M=8/32/128 on the shallow slice; ~26s per ACCEPTED move roughly FLAT in M
+(batched AR forward scales linearly — no free lunch, MTM converts compute->acceptance at fixed rate). At TRUE
+equilibrium move_prob is lower (M=8: ~0.8-1.5% settled) — deeper minima are harder to beat.
+OPEN (the decisive follow-up): mixing-vs-swap-MC benchmark — does a ~26s accepted 7-particle coordinated move buy
+more cage-escape/decorrelation than the same wall-clock of single-site swap-MC. Lesson logged: stationarity gates
+need REPRESENTATIVE initial slices (first-frames of a PT reference are shallow).

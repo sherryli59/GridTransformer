@@ -499,3 +499,10 @@ CORRECTED DIAGNOSIS: no core bug; the dense-glass conditional velocity field nee
 (task-complexity-dependent); the late-t sharpness deficit is what under-capacity looks like. Residual FM tail is
 never exactly 0 (LJ7 shows ~0.7% at 0.13M) but scales down with capacity/task. LEVER = SCALE. Production big run
 (hidden 192 / 6 layers, full data, 20k steps, tag=_big) launched 2026-07-03.
+
+## 2026-07-03: BIG production model (1.64M, hidden 192/6 layers, full task, 20k steps batch 16)
+
+Split (single-cluster resample given TRUE cage, n_steps 8): intra 6.8% / cage **7.8%** / overall **13.3%**
+(small 0.13M: 7.0/12.8/18.1; +prior 16.8). Gain concentrated in CAGE exclusion (mean min-r 0.85 vs data 0.88) —
+the component once called the "fundamental wall". Trajectory 52 -> 18.1 -> 16.8 -> 13.3, still descending with
+capacity (batch-16 run, likely under-trained). Ckpt artifacts/ka_cluster_egnn_big_N100.pt.

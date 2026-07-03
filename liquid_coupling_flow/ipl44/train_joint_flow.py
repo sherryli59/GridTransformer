@@ -15,13 +15,23 @@ layers = int(sys.argv[4]) if len(sys.argv) > 4 else 4
 lam = float(sys.argv[5]) if len(sys.argv) > 5 else 1.0
 ot = sys.argv[6] if len(sys.argv) > 6 else "global"
 two_time = len(sys.argv) > 7 and sys.argv[7] == "tt"
+system = sys.argv[8] if len(sys.argv) > 8 else "ipl"
 B, lr, warmup, ema_decay = 256, 1e-3, 500, 0.999
 D = "/mnt/ssd/GridTransformer/datasets"; ART = os.path.join(os.path.dirname(__file__), "data")
 
-x = torch.remainder(torch.load(f"{D}/ipl44_T0.1_positions.pt", weights_only=False).float(), Lf)
-sp = torch.load(f"{D}/ipl44_T0.1_species.pt", weights_only=False).long()
-o = sp.argsort(-1); sp = torch.gather(sp, 1, o); x = torch.gather(x, 1, o.unsqueeze(-1).expand(-1, -1, 2))
-xtr, str_, xva, sva = x[:9000].to(dev), sp[:9000].to(dev), x[9000:].to(dev), sp[9000:].to(dev)
+if system == "ka":
+    # KA 2D glass: PT-reference configs at N=100, ONE fixed 65:35 labeling (quenched), L from the artifact.
+    KART = os.path.join(os.path.dirname(__file__), "..", "artifacts")
+    ref = torch.load(os.path.join(KART, "ka_reference_N100.pt"), map_location="cpu", weights_only=False)
+    N = ref["x"].shape[1]; Lf = float(ref["L"])
+    x = torch.remainder(ref["x"].float(), Lf)
+    sp = ref["s"].long()[None].expand(x.shape[0], -1).contiguous()
+else:
+    x = torch.remainder(torch.load(f"{D}/ipl44_T0.1_positions.pt", weights_only=False).float(), Lf)
+    sp = torch.load(f"{D}/ipl44_T0.1_species.pt", weights_only=False).long()
+    o = sp.argsort(-1); sp = torch.gather(sp, 1, o); x = torch.gather(x, 1, o.unsqueeze(-1).expand(-1, -1, 2))
+nva = 1000
+xtr, str_, xva, sva = x[:-nva].to(dev), sp[:-nva].to(dev), x[-nva:].to(dev), sp[-nva:].to(dev)
 nA = int((str_[0] == 0).sum())
 
 m = JointSpeciesFlow(n_particles=N, L=Lf, hidden_nf=hidden, n_layers=layers, two_time=two_time).to(dev)
@@ -65,7 +75,7 @@ for step in range(steps):
     if step % 1000 == 0 or step == steps - 1:
         ev = denoiser_eval(ema, xva[:512], sva[:512])
         ck = {"state_dict": ema.state_dict(), "raw_state_dict": m.state_dict(),
-              "cfg": {"hidden_nf": hidden, "n_layers": layers, "lam": lam, "ot": ot, "two_time": two_time},
+              "cfg": {"hidden_nf": hidden, "n_layers": layers, "lam": lam, "ot": ot, "two_time": two_time, "system": system, "N": N, "L": Lf},
               "step": step, "val_acc": ev["acc"], "val_ece": ev["ece"]}
         torch.save(ck, f"{ART}/jf_{tag}_last.pt")
         star = ""

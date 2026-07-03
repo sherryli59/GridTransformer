@@ -120,6 +120,34 @@ def test_run_chain_and_band():
     assert sweeps_to_band(curves, U_ref_med=14.7, gbb_ref_peak=4.3) == 20
 
 
+def test_ka_wiring_smoke():
+    """KA adapter smoke: ka_energy in position_sweep preserves reference equilibrium at beta=2; pair and
+    block4 moves preserve the 65:35 composition."""
+    from liquid_coupling_flow.ipl44.ipl_swap_smc import position_sweep, swap_attempt, block_relabel_attempt
+    from liquid_coupling_flow.ka_energy import ka_energy
+    import os
+    ART = os.path.join(os.path.dirname(__file__), "..", "artifacts")
+    ref = torch.load(os.path.join(ART, "ka_reference_N100.pt"), map_location="cpu", weights_only=False)
+    L = float(ref["L"]); N = 100
+    x = torch.remainder(ref["x"][:16].float(), L)
+    s = ref["s"].long()[None].expand(16, -1).contiguous()
+    nB = int(s[0].sum())
+    efn = lambda a, b: ka_energy(a, b, L)
+    U = efn(x, s); ref_med = U.median()
+    acc = 0.0
+    for _ in range(10):
+        x, U, acc = position_sweep(x, s, U, beta=2.0, L=L, step=0.12, energy_fn=efn)
+    assert (U.median() - ref_med).abs() / ref_med.abs() < 0.03
+    assert 0.1 < acc < 0.9
+    wfn = lambda xa, sa: torch.full_like(sa, 0.5, dtype=xa.dtype)
+    tfn = lambda xa: torch.sigmoid(xa[..., 0] - L / 2)
+    for _ in range(5):
+        s, U, _ = swap_attempt(x, s, U, beta=2.0, energy_fn=efn, weight_fn=wfn)
+        s, U, _ = block_relabel_attempt(x, s, U, beta=2.0, energy_fn=efn, table_fn=tfn, k=4)
+    assert (s.sum(1) == nB).all()
+    assert torch.allclose(U, efn(x, s), atol=1e-3)
+
+
 def test_per_species_ot_blocks():
     from liquid_coupling_flow.ipl44.joint_flow import per_species_ot
     B, N, nA, L = 8, 44, 22, 9.38

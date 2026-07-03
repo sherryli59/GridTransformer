@@ -142,18 +142,23 @@ def position_sweep(x, s, U, beta, L, step, energy_fn):
 
 
 def run_chain(x0, s0, n_sweeps, beta, L, energy_fn, weight_fn=None, n_swap=8, step=0.08, record_every=10,
-              move_fn=None):
+              move_fn=None, obs_fn=None):
     """Alternate position sweeps and swap attempts; record batch-ensemble metrics every record_every sweeps.
     move_fn(x, s, U) -> (s, U, acc_mean): custom species mover (e.g. block relabel with per-sweep table
-    caching); takes precedence over weight_fn."""
-    from liquid_coupling_flow.ipl44.ipl_energy import ipl_gr_partials
+    caching); takes precedence over weight_fn. obs_fn(x, s) -> float fills the 'gbb_peak' slot for non-IPL
+    systems (default = IPL g_BB peak)."""
+    if obs_fn is None:
+        from liquid_coupling_flow.ipl44.ipl_energy import ipl_gr_partials
+
+        def obs_fn(xa, sa):
+            _, _, _, gbb = ipl_gr_partials(xa.cpu(), sa.cpu(), L)
+            return float(gbb.max())
     x, s = x0.clone(), s0.clone(); U = energy_fn(x, s)
     rec = {"sweep": [], "U_median": [], "gbb_peak": [], "swap_acc": [], "pos_acc": []}
     for k in range(n_sweeps + 1):
         if k % record_every == 0:
-            _, _, _, gbb = ipl_gr_partials(x.cpu(), s.cpu(), L)
             rec["sweep"].append(k); rec["U_median"].append(float(U.median()))
-            rec["gbb_peak"].append(float(gbb.max()))
+            rec["gbb_peak"].append(obs_fn(x, s))
         if k == n_sweeps:
             break
         x, U, pacc = position_sweep(x, s, U, beta, L, step, energy_fn)

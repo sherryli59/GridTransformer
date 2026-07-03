@@ -141,8 +141,11 @@ def position_sweep(x, s, U, beta, L, step, energy_fn):
     return x, U, n_acc / N
 
 
-def run_chain(x0, s0, n_sweeps, beta, L, energy_fn, weight_fn=None, n_swap=8, step=0.08, record_every=10):
-    """Alternate position sweeps and swap attempts; record batch-ensemble metrics every record_every sweeps."""
+def run_chain(x0, s0, n_sweeps, beta, L, energy_fn, weight_fn=None, n_swap=8, step=0.08, record_every=10,
+              move_fn=None):
+    """Alternate position sweeps and swap attempts; record batch-ensemble metrics every record_every sweeps.
+    move_fn(x, s, U) -> (s, U, acc_mean): custom species mover (e.g. block relabel with per-sweep table
+    caching); takes precedence over weight_fn."""
     from liquid_coupling_flow.ipl44.ipl_energy import ipl_gr_partials
     x, s = x0.clone(), s0.clone(); U = energy_fn(x, s)
     rec = {"sweep": [], "U_median": [], "gbb_peak": [], "swap_acc": [], "pos_acc": []}
@@ -155,7 +158,9 @@ def run_chain(x0, s0, n_sweeps, beta, L, energy_fn, weight_fn=None, n_swap=8, st
             break
         x, U, pacc = position_sweep(x, s, U, beta, L, step, energy_fn)
         sacc = 0.0
-        if weight_fn is not None:
+        if move_fn is not None:
+            s, U, sacc = move_fn(x, s, U)
+        elif weight_fn is not None:
             for _ in range(n_swap):
                 s, U, a = swap_attempt(x, s, U, beta, energy_fn, weight_fn)
                 sacc += a.float().mean().item()

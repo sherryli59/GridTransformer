@@ -481,3 +481,21 @@ REQUIREMENTS: (1) double precision; (2) enough steps for Picard contraction (h*L
 NOT for the stiff rep_prior-on field (Picard diverges: midpoint 21 vs rk4 1.6) -> that needs implicit/Newton.
 USE: exact-log_q proposal for the MH/IS kernel on the prior-OFF model (ka_cluster_egnn_N100.pt), run in double.
 Default integrator stays rk4 (checkpoints/behavior unchanged). Test: test_reversible_midpoint_exact_roundtrip.
+
+## 2026-07-03: USER CHALLENGE -> "structural floor" OVERTURNED (positive control + capacity probe)
+
+User challenged the residual-clash conclusions ("EGNN should learn LJ7; suspect a bug"). Two controls:
+- **E2 LJ7 positive control** (scratchpad lj7_control.py, ckpt artifacts/lj7_control.pt): exact Boltzmann LJ7
+  data (2D, T=0.2, 102k configs via vectorized Metropolis, ka_energy; data min-r 1.105, 0.00%<0.85) trained with
+  the IDENTICAL production core (ConditionalEGNN backend, ot_assign, OT-CFM loop, RK4) at the production size
+  (0.13M): generated min-r 1.084, **P(<0.85) 0.66-0.88%** (flat n_steps 8/32/64). CORE EXONERATED — same
+  machinery learns LJ7 essentially cleanly at the same capacity that fails the glass task (nocage 27%).
+- **E3 capacity probe**: overfit-4-configs with hidden 192 / 6 layers (1.64M params, batch 16, 6k steps):
+  overall clash **17.5% -> 7.1%** (intra 8.7->3.6, cage 11.9->4.5), |sample-true(OT)| 0.399->0.168, loss
+  0.31->0.148 — STILL DESCENDING. The small model's overfit==generalization coincidence was because CAPACITY was
+  the binding constraint in both regimes, NOT a task wall.
+
+CORRECTED DIAGNOSIS: no core bug; the dense-glass conditional velocity field needs far more capacity than 0.13M
+(task-complexity-dependent); the late-t sharpness deficit is what under-capacity looks like. Residual FM tail is
+never exactly 0 (LJ7 shows ~0.7% at 0.13M) but scales down with capacity/task. LEVER = SCALE. Production big run
+(hidden 192 / 6 layers, full data, 20k steps, tag=_big) launched 2026-07-03.

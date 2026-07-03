@@ -209,6 +209,45 @@ def test_block_relabel_stationarity():
     assert tv < 0.05, f"TV(empirical, exact) = {tv:.3f} for block relabel"
 
 
+def test_block_relabel_sharp_table_structured_target():
+    """Regression for the sharp-table/high-structure regime (where the real anomaly appeared): k=4 block moves
+    on a strongly tilted target (TV(uniform,target)~0.66) must still converge to the exact distribution.
+    NOTE k>=6 (full-block) intentionally NOT asserted: independence-proposal freeze makes mixing collapse at
+    sharp tables (state-change rate <1%) — a known mixing pathology, not a bias; use k <= N-2 in practice."""
+    from liquid_coupling_flow.ipl44.ipl_swap_smc import block_relabel_attempt
+    torch.manual_seed(12)
+    N, nB, beta, L = 6, 3, 2.0, 6.0
+    x1 = torch.tensor([[[0., 0.], [1.3, 0.], [2.6, 0.], [0., 1.4], [1.3, 1.4], [2.6, 1.4]]])
+    states = [c for c in itertools.combinations(range(N), nB)]
+    svecs = torch.zeros(len(states), N, dtype=torch.long)
+    for i, c in enumerate(states):
+        svecs[i, list(c)] = 1
+    Uex = toy_energy(x1.expand(len(states), -1, -1), svecs, L)
+    p_exact = torch.softmax(-beta * Uex, 0)
+
+    def semi_sharp(x):
+        return torch.sigmoid(3.0 * (x[..., 0] - 1.3))
+
+    B = 512
+    x = x1.expand(B, -1, -1).contiguous()
+    s = svecs[torch.randint(0, len(states), (B,))].clone()
+    pref = torch.argsort(semi_sharp(x1)[0], descending=True)[:nB]
+    sp = torch.zeros(N, dtype=torch.long); sp[pref] = 1
+    s[:B // 2] = sp                                                       # both-sided start
+    U = toy_energy(x, s, L)
+    key = {tuple(v.tolist()): i for i, v in enumerate(svecs)}
+    counts = torch.zeros(len(states))
+    for t in range(8000):
+        s, U, _ = block_relabel_attempt(x, s, U, beta=beta, energy_fn=lambda a, b: toy_energy(a, b, L),
+                                        table_fn=semi_sharp, k=4)
+        if t >= 3000:
+            for b in range(B):
+                counts[key[tuple(s[b].tolist())]] += 1
+    emp = counts / counts.sum()
+    tv = 0.5 * (emp - p_exact).abs().sum()
+    assert tv < 0.03, f"TV {tv:.4f}"
+
+
 def test_kawasaki_vectorized_matches_reference():
     """Vectorized kawasaki_interpolate must equal the loop reference exactly (same u), incl. count preservation."""
     from liquid_coupling_flow.ipl44.joint_flow import kawasaki_interpolate, _kawasaki_interpolate_ref, random_22_labeling

@@ -25,12 +25,29 @@ class JointSpeciesFlow(nn.Module):
             # vendored EGNN stays untouched. Enables querying (t_pos=1, t_spec=0) = "clean geometry, garbage
             # labels" -> an s-independent geometry table (the coupled-t model is OOD there: t=0 also noises x).
             self.tspec_proj = nn.Linear(1, hidden_nf)
+        # k-NN edge cap (None = full graph). Full-graph SUM aggregation is not size-transferable: node input
+        # mass scales with degree (N=100-trained model collapses to chance at N=256; capping degree at k=32
+        # restores geometry-table acc to 0.99 at ~1pt cost at train size). Eval-time attribute, not a weight.
+        self.knn = None
+
+    def _edges(self, x, B, N, dev):
+        if self.knn is None:
+            e = self.dyn._cast_edges2batch(self.dyn.edges, B, N)
+            return [e[0].to(dev), e[1].to(dev)]
+        k = min(self.knn, N - 1)
+        d = x[:, :, None, :] - x[:, None, :, :]; d = d - self.L * torch.round(d / self.L)
+        r2 = (d ** 2).sum(-1) + torch.eye(N, device=dev) * 1e9
+        idx = r2.topk(k, largest=False).indices                          # [B,N,k] nearest neighbors
+        off = torch.arange(B, device=dev)[:, None, None] * N
+        dst = (torch.arange(N, device=dev)[None, :, None].expand(B, N, k) + off).reshape(-1)
+        src = (idx + off).reshape(-1)
+        return [src, dst]
 
     def forward(self, t, x, s, t_spec=None):
         """t (=t_pos) [B,1,1], x [B,N,2], s [B,N] long, t_spec [B,1,1] (two_time only; default = t)
         -> v [B,N,2], logits [B,N,n_species]."""
         dyn = self.dyn; B = x.shape[0]; N = self.N; dev = x.device
-        edges = dyn._cast_edges2batch(dyn.edges, B, N); edges = [edges[0].to(dev), edges[1].to(dev)]
+        edges = self._edges(x, B, N, dev)
         xf = x.reshape(B * N, 2)
         h_t = t.expand(-1, N, -1).reshape(B * N, 1)                       # time scalar per node
         h = torch.cat([h_t, dyn.species_embedding(s).view(B * N, -1)], dim=-1)

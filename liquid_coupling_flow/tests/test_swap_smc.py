@@ -291,6 +291,23 @@ def test_kawasaki_vectorized_matches_reference():
         assert (sv.sum(1) == nB).all()
 
 
+def test_knn_edges_full_equivalence():
+    """knn = N-1 must reproduce the full-graph forward exactly (edge construction correctness)."""
+    from liquid_coupling_flow.ipl44.joint_flow import JointSpeciesFlow
+    torch.manual_seed(8)
+    m = JointSpeciesFlow(n_particles=20, L=6.0, hidden_nf=16, n_layers=2, two_time=True)
+    x = torch.rand(4, 20, 2) * 6.0
+    s = torch.zeros(4, 20, dtype=torch.long); s[:, 10:] = 1
+    t = torch.full((4, 1, 1), 0.7); ts = torch.full((4, 1, 1), 0.2)
+    v1, l1 = m(t, x, s, t_spec=ts)
+    m.knn = 19
+    v2, l2 = m(t, x, s, t_spec=ts)
+    assert torch.allclose(v1, v2, atol=1e-5) and torch.allclose(l1, l2, atol=1e-5)
+    m.knn = 8                                                             # trimmed path just runs
+    v3, l3 = m(t, x, s, t_spec=ts)
+    assert v3.shape == v1.shape and torch.isfinite(l3).all()
+
+
 def test_denoiser_eval_runs():
     from liquid_coupling_flow.ipl44.joint_flow import JointSpeciesFlow, denoiser_eval
     m = JointSpeciesFlow(n_particles=44, L=9.38, hidden_nf=16, n_layers=2)

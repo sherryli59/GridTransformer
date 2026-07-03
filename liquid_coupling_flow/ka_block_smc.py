@@ -38,6 +38,7 @@ assert cfg.get("two_time") and cfg.get("system") == "ka"
 jf = JointSpeciesFlow(n_particles=N, L=L, hidden_nf=cfg["hidden_nf"], n_layers=cfg["n_layers"],
                       two_time=True).to(dev)                              # rebuilt at TARGET (N, L)
 jf.load_state_dict(ck["state_dict"]); jf.eval()
+jf.knn = 32   # degree cap: REQUIRED for size transfer (full-graph sum-agg collapses at unseen N)
 print(f"loaded jf_{tag}_best (trained N={cfg['N']}) -> eval at N={N}", flush=True)
 S_CANON = torch.zeros(1, N, dtype=torch.long, device=dev); S_CANON[:, :nB] = 1  # fixed s_ref for the table
 

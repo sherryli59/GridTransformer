@@ -2,9 +2,9 @@
 block-species moves off the frozen geometry table. One 'iteration' = 10 MALA steps + 1 species block
 (8 x block-8 relabel attempts). Full trajectory retention (per-iter U[B], s[B,N] int8, x snapshots every 20
 iters, acceptances incl. effective), incremental saves every 200 iterations.
-Usage: python -m liquid_coupling_flow.ka_e2e_mala [n_iter] [B] [dt]"""
+Usage: python -m liquid_coupling_flow.ka_e2e_mala [n_iter] [B] [dt] [kern=block8|random]"""
 import os, sys, time, torch
-from liquid_coupling_flow.ipl44.ipl_swap_smc import position_mala, block_relabel_attempt
+from liquid_coupling_flow.ipl44.ipl_swap_smc import position_mala, block_relabel_attempt, swap_attempt, uniform_weight_fn
 from liquid_coupling_flow.ipl44.joint_flow import JointSpeciesFlow
 from liquid_coupling_flow.ka_energy import ka_energy, ka_forces
 
@@ -12,6 +12,7 @@ dev = "cuda"
 n_iter = int(sys.argv[1]) if len(sys.argv) > 1 else 3000
 B = int(sys.argv[2]) if len(sys.argv) > 2 else 128
 dt = float(sys.argv[3]) if len(sys.argv) > 3 else 0.012
+kern = sys.argv[4] if len(sys.argv) > 4 else "block8"
 beta = 2.0
 ART = os.path.join(os.path.dirname(__file__), "artifacts")
 JFD = os.path.join(os.path.dirname(__file__), "ipl44", "data")
@@ -36,19 +37,25 @@ def geometry_table(xx):
 
 
 U = efn(x, s)
-OUT = f"{ART}/ka_e2e_traj_mala_N{N}.pt"
+OUT = f"{ART}/ka_e2e_traj_mala_{kern}_N{N}.pt"
 Us, Ss, Xsnap, macc_l, sacc_l, seff_l, dis = [], [], [], [], [], [], []
 t0 = time.time()
-print(f"[mala] {B} configs, {n_iter} iters (10 MALA dt={dt} + species block each) | start U/N {float(U.median())/N:.2f}", flush=True)
+print(f"[mala-{kern}] {B} configs, {n_iter} iters (10 MALA dt={dt} + species block each) | start U/N {float(U.median())/N:.2f}", flush=True)
 for k in range(n_iter):
     ma = 0.0
     for _ in range(10):
         x, U, a = position_mala(x, s, U, beta, L, dt, efn, ffn); ma += a
-    W = geometry_table(x); tf = lambda _x: W
     sa = 0.0; ch = 0.0
-    for _ in range(8):
-        s_old = s; s, U, a2 = block_relabel_attempt(x, s, U, beta, efn, tf, 8)
-        sa += a2.float().mean().item(); ch += (s != s_old).any(1).float().mean().item()
+    if kern == "random":
+        for _ in range(8):
+            s_old = s; s, U, a2 = swap_attempt(x, s, U, beta, efn, uniform_weight_fn)
+            sa += a2.float().mean().item(); ch += (s != s_old).any(1).float().mean().item()
+        W = geometry_table(x)                              # oracle still evaluated for the disagreement metric
+    else:
+        W = geometry_table(x); tf = lambda _x: W
+        for _ in range(8):
+            s_old = s; s, U, a2 = block_relabel_attempt(x, s, U, beta, efn, tf, 8)
+            sa += a2.float().mean().item(); ch += (s != s_old).any(1).float().mean().item()
     Us.append((U / N).cpu().clone()); Ss.append(s.cpu().to(torch.int8))
     macc_l.append(ma / 10); sacc_l.append(sa / 8); seff_l.append(ch / 8)
     if k % 20 == 0:
@@ -59,6 +66,6 @@ for k in range(n_iter):
                     "snap_every": 20, "macc": macc_l, "sacc": sacc_l, "seff": seff_l, "disagree": dis,
                     "dt": dt, "B": B, "N": N, "L": L, "beta": beta, "mala_per_iter": 10,
                     "x_final": x.cpu(), "s_final": s.cpu()}, OUT)
-        print(f"[mala] iter {k+1:5d} | U/N med {float(U.median())/N:.4f} | disagree {dis[-1]:.4f} "
+        print(f"[mala-{kern}] iter {k+1:5d} | U/N med {float(U.median())/N:.4f} | disagree {dis[-1]:.4f} "
               f"| mala acc {ma/10:.2f} sw acc {sa/8:.2f} eff {ch/8:.3f} | {time.time()-t0:.0f}s (saved)", flush=True)
-print(f"[mala] DONE -> {OUT}", flush=True)
+print(f"[mala-{kern}] DONE -> {OUT}", flush=True)

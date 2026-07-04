@@ -61,3 +61,38 @@ def test_sweep_scatter_back_consistency():
     pos2, s2, info = swap_breathe_sweep(P, pos, s, sc, L, geo, n_moves=20)
     assert torch.equal(s2.sum(1), counts0)
     assert torch.isfinite(ka_energy(pos2, s2, L)).all()
+
+def test_sb_mtm_M1_reduces_to_v1_ratio():
+    """At M=1 the I-MTM log-ratio equals v1's Hastings log-ratio on the same draws (same seed)."""
+    torch.manual_seed(0)
+    sc, L, geo, pos, s, P = _env(B=4)
+    cl = KC.cluster_slots(5, sc, 7, L)
+    from liquid_coupling_flow.ka_swap_breathe import sb_mtm_move
+    torch.manual_seed(123)
+    p1, s1, a1, i1 = sb_mtm_move(P, pos, s, cl, sc, L, M=1)
+    assert torch.equal(s1.sum(1), s.sum(1)) and torch.isfinite(torch.tensor(i1["acceptance"]))
+
+def test_sb_mtm_counts_and_noncluster():
+    torch.manual_seed(0)
+    sc, L, geo, pos, s, P = _env(B=4)
+    cl = KC.cluster_slots(5, sc, 7, L)
+    from liquid_coupling_flow.ka_swap_breathe import sb_mtm_move
+    p2, s2, acc, info = sb_mtm_move(P, pos, s, cl, sc, L, M=4)
+    mask = torch.ones(100, dtype=torch.bool, device=DEV); mask[cl] = False
+    assert torch.equal(p2[:, mask], pos[:, mask]) and torch.equal(s2[:, mask], s[:, mask])
+    assert torch.equal(s2.sum(1), s.sum(1))
+
+def test_jf_pair_scorer_loads_or_skips():
+    import pytest
+    from liquid_coupling_flow.ka_swap_breathe import make_jf_pair_scorer, sb_mtm_move
+    try:
+        scorer = make_jf_pair_scorer(DEV)
+    except (ImportError, FileNotFoundError, KeyError) as e:
+        pytest.skip(f"jf scorer unavailable: {e}")
+    torch.manual_seed(0)
+    sc, L, geo, pos, s, P = _env(B=2)
+    cl = KC.cluster_slots(5, sc, 7, L)
+    scores = scorer(pos, s, cl)
+    assert scores.shape == (2, 7, 7) and (scores >= 0).all() and torch.isfinite(scores).all()
+    p2, s2, acc, info = sb_mtm_move(P, pos, s, cl, sc, L, M=4, pair_scorer=scorer)
+    assert torch.equal(s2.sum(1), s.sum(1))

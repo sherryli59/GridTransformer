@@ -1,0 +1,10 @@
+model prior-off step 15000 loss 0.534 | integ=rk4 n_steps=64 B=64 beta=2.0
+self-consistency  max|logq_sample - logq_score(x')| = 1.49e+00  (cage fixed by pos) -> log_q trustworthy if small
+
+=== MH cluster-move acceptance (prior-off proposal, 10 seeds x 64 eq configs = 640 moves) ===
+  mean acceptance      : 0.64%   (median 0.00%)
+  acceptance | no-clash : 1.79%   (fraction no-clash 35.9%)
+  acceptance | clash    : 0.000%   (fraction clash 64.1%)
+  mean dU (beta*dU)     : 125512752427293.328  (251025504854586.656)
+  mean logq_rev-logq_fwd: 1.115
+  P(dU<0)               : 0.8%   P(acc>0.5): 0.6%

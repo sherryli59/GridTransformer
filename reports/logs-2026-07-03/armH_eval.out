@@ -1,0 +1,9 @@
+/home/sherryli/xsli/softwares/anaconda3/envs/lightning/lib/python3.11/site-packages/torch/nn/modules/transformer.py:379: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+ARM-H ckpt: head=spline d192 L4 ctx32 step 15000
+  seed 5: P(true bin_a) 0.014 (unif 0.016)  spread 0.82  |mean-true| 0.76 (nn~0.9)
+  seed 20: P(true bin_a) 0.014 (unif 0.016)  spread 0.79  |mean-true| 0.70 (nn~0.9)
+  CLEAN single-cluster: TRUE clash<0.7 0.0% (mean 0.85) | RESAMPLED clash<0.7 53.3% (mean 0.62)
+  g_BB peak: data 2.30  generated(3.3b) 1.26
+ARM-H gate: {'clash_pct': 53.29613095238095, 'gbb_peak': 1.2561694383621216, 'seed_spread': 0.8064157366752625}
+saved /mnt/ssd/GridTransformer/liquid_coupling_flow/artifacts/ka_cluster_armH_gate.png

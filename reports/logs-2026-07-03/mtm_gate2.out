@@ -1,0 +1,27 @@
+/home/sherryli/xsli/softwares/anaconda3/envs/lightning/lib/python3.11/site-packages/torch/nn/modules/transformer.py:379: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+validity assertions PASS
+BASELINE (equilibrium): U/N -3.2194  g_BB peak 2.29
+K1 sweep   5: U/N -3.2322 (drift -0.0128)  g_BB 2.28  move_prob 0.0138
+K1 sweep  10: U/N -3.2426 (drift -0.0232)  g_BB 2.27  move_prob 0.0112
+K1 sweep  15: U/N -3.2471 (drift -0.0277)  g_BB 2.25  move_prob 0.0094
+K1 sweep  20: U/N -3.2465 (drift -0.0271)  g_BB 2.28  move_prob 0.0080
+K1 sweep  25: U/N -3.2483 (drift -0.0289)  g_BB 2.27  move_prob 0.0066
+K1 sweep  30: U/N -3.2536 (drift -0.0342)  g_BB 2.24  move_prob 0.0071
+K1 sweep  35: U/N -3.2518 (drift -0.0324)  g_BB 2.25  move_prob 0.0073
+K1 sweep  40: U/N -3.2521 (drift -0.0327)  g_BB 2.27  move_prob 0.0052
+K1 sweep  45: U/N -3.2547 (drift -0.0353)  g_BB 2.29  move_prob 0.0052
+K1 sweep  50: U/N -3.2531 (drift -0.0337)  g_BB 2.30  move_prob 0.0039
+K1 sweep  55: U/N -3.2588 (drift -0.0394)  g_BB 2.27  move_prob 0.0032
+K1 sweep  60: U/N -3.2578 (drift -0.0385)  g_BB 2.31  move_prob 0.0040
+K1 sweep  65: U/N -3.2559 (drift -0.0365)  g_BB 2.36  move_prob 0.0047
+K1 sweep  70: U/N -3.2567 (drift -0.0373)  g_BB 2.37  move_prob 0.0044
+K1 sweep  75: U/N -3.2563 (drift -0.0369)  g_BB 2.37  move_prob 0.0042
+K1 sweep  80: U/N -3.2614 (drift -0.0420)  g_BB 2.34  move_prob 0.0036
+K3(neg-ctrl M=2) sweep  5: U/N 26444703989.7600 (drift +26444703992.9794)
+K3(neg-ctrl M=2) sweep 10: U/N 99731019661312.0000 (drift +99731019661315.2188)
+K3(neg-ctrl M=2) sweep 15: U/N 85761720320.0000 (drift +85761720323.2194)
+K3(neg-ctrl M=2) sweep 20: U/N 24618757909381.1211 (drift +24618757909384.3398)
+K3(neg-ctrl M=2) sweep 25: U/N 1301269394227.2000 (drift +1301269394230.4194)
+K3(neg-ctrl M=2) sweep 30: U/N 587788672040.9600 (drift +587788672044.1793)
+GATE COMPLETE

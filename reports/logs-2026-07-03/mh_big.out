@@ -1,0 +1,12 @@
+/home/sherryli/xsli/softwares/anaconda3/envs/lightning/lib/python3.11/site-packages/torch/nn/modules/transformer.py:379: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+model prior-off step 20000 loss 0.476 | integ=rk4 n_steps=64 B=64 beta=2.0
+self-consistency  max|logq_sample - logq_score(x')| = 3.64e-01  (cage fixed by pos) -> log_q trustworthy if small
+
+=== MH cluster-move acceptance (prior-off proposal, 10 seeds x 64 eq configs = 640 moves) ===
+  mean acceptance      : 1.02%   (median 0.00%)
+  acceptance | no-clash : 2.03%   (fraction no-clash 50.0%)
+  acceptance | clash    : 0.000%   (fraction clash 50.0%)
+  mean dU (beta*dU)     : 468690990530560.000  (937381981061120.000)
+  mean logq_rev-logq_fwd: 0.202
+  P(dU<0)               : 2.7%   P(acc>0.5): 0.8%

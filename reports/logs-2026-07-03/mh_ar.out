@@ -1,0 +1,7 @@
+/home/sherryli/xsli/softwares/anaconda3/envs/lightning/lib/python3.11/site-packages/torch/nn/modules/transformer.py:379: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+AR model ka_cluster_flow_full_N100.pt head=spline pair_feats=True step 40000 | B=64 beta=2.0
+=== AR MH acceptance (640 moves) ===
+  mean acceptance      : 0.308%   (median 0.000%)
+  acceptance | no-clash : 2.986%   (fraction no-clash 10.3%)
+  mean logq_rev-logq_fwd: 4.257   P(dU<0): 0.6%

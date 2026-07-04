@@ -1,0 +1,10 @@
+/home/sherryli/xsli/softwares/anaconda3/envs/lightning/lib/python3.11/site-packages/torch/nn/modules/transformer.py:379: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+RANDOM-SLICE BASELINE: U/N -3.2643  g_BB 2.23
+K1 sweep  5: U/N -3.2810 (drift -0.0167)  g_BB 2.21  move_prob 0.0151
+K1 sweep 10: U/N -3.2829 (drift -0.0185)  g_BB 2.27  move_prob 0.0110
+K1 sweep 15: U/N -3.2887 (drift -0.0244)  g_BB 2.26  move_prob 0.0098
+K1 sweep 20: U/N -3.2870 (drift -0.0227)  g_BB 2.23  move_prob 0.0089
+K1 sweep 25: U/N -3.2792 (drift -0.0149)  g_BB 2.28  move_prob 0.0076
+K1 sweep 30: U/N -3.2775 (drift -0.0131)  g_BB 2.29  move_prob 0.0077
+CONFIRMATION COMPLETE

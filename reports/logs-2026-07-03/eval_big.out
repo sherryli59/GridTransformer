@@ -1,0 +1,5 @@
+/home/sherryli/xsli/softwares/anaconda3/envs/lightning/lib/python3.11/site-packages/torch/nn/modules/transformer.py:379: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+BIG overfit ckpt: hidden 192 layers 6 step 6000 loss 0.148
+BIG (1.64M): intra clash 3.6%  cage clash 4.5%  overall 7.1%  |sample-true(OT)| 0.168
+SMALL (0.13M) was:      intra 8.7%          cage 11.9%          overall 17.5%           |sample-true| 0.399

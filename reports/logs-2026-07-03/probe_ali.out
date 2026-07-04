@@ -1,0 +1,9 @@
+=== TOY warmed flow (smooth), double, n_steps=32 ===
+  rk4       self-consistency max|dlogq| = 4.081e-03
+  midpoint  self-consistency max|dlogq| = 5.684e-14
+  ali       self-consistency max|dlogq| = 9.428e-03
+=== REAL trained flow (stiff), double ===
+  ali   n_steps=  32: self-consistency mean|dlogq| 1.622e+00  max 5.855e+00
+  ali   n_steps=  64: self-consistency mean|dlogq| 5.310e-01  max 2.784e+00
+  ali   n_steps= 128: self-consistency mean|dlogq| 2.444e-01  max 8.202e-01
+  ali   n_steps= 256: self-consistency mean|dlogq| 2.128e-01  max 1.320e+00

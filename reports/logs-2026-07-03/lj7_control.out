@@ -1,0 +1,21 @@
+DATA: 102400 configs  U/N -1.437  MH-acc 46%  min-r mean 1.105  P(<0.85) 0.00%  P(<0.8) 0.00%  (178s)
+sigma_b = 0.810
+  step     0 fm-loss 0.7583 1s
+  step  1000 fm-loss 0.4911 469s
+  step  2000 fm-loss 0.4878 934s
+  step  3000 fm-loss 0.5121 1400s
+  step  4000 fm-loss 0.4889 2205s
+  step  5000 fm-loss 0.4775 3289s
+  step  6000 fm-loss 0.4802 4176s
+  step  7000 fm-loss 0.4588 4710s
+  step  8000 fm-loss 0.4547 5175s
+  step  9000 fm-loss 0.4672 5638s
+  step 10000 fm-loss 0.4701 6387s
+  step 11000 fm-loss 0.4717 7467s
+  step 12000 fm-loss 0.4557 8547s
+  step 13000 fm-loss 0.4545 9429s
+  step 14000 fm-loss 0.4787 10415s
+GEN n_steps  8: min-r mean 1.086  P(<0.85) 0.66%  P(<0.8) 0.50%   [DATA: mean 1.105, P(<0.85) 0.00%]
+GEN n_steps 32: min-r mean 1.084  P(<0.85) 0.86%  P(<0.8) 0.70%   [DATA: mean 1.105, P(<0.85) 0.00%]
+GEN n_steps 64: min-r mean 1.084  P(<0.85) 0.88%  P(<0.8) 0.65%   [DATA: mean 1.105, P(<0.85) 0.00%]
+saved /mnt/ssd/GridTransformer/liquid_coupling_flow/artifacts/lj7_control.pt

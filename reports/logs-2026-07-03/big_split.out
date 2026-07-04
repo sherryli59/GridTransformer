@@ -1,0 +1,7 @@
+/home/sherryli/xsli/softwares/anaconda3/envs/lightning/lib/python3.11/site-packages/torch/nn/modules/transformer.py:379: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+ckpt ka_cluster_egnn_big_N100.pt step 20000 loss 0.476 n_steps 8
+intra: clash<0.7   6.8%  mean 0.95   (TRUE 0.0% / 1.00)
+cage : clash<0.7   7.8%  mean 0.85   (TRUE 0.0% / 0.88)
+overall: clash 13.3%   [EGNN-15k 52 / A-sharp 44 / B 55 / data 0]
+parity among intra clashes: same 42% (43% by construction)

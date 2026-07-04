@@ -129,7 +129,8 @@ def block_relabel_attempt(x, s, U, beta, energy_fn, table_fn, k):
 
 
 def position_sweep(x, s, U, beta, L, step, energy_fn):
-    """One sweep = N sequential batched single-particle Metropolis moves. Returns (x, U, acc_rate)."""
+    """One sweep = N sequential batched single-particle Metropolis moves. Returns (x, U, acc_rate).
+    Full-energy recompute per move: O(N^2)/move — fine for small N, use position_sweep_local for large N."""
     B, N, _ = x.shape; n_acc = 0.0
     for i in torch.randperm(N).tolist():
         xp = x.clone()
@@ -137,6 +138,70 @@ def position_sweep(x, s, U, beta, L, step, energy_fn):
         Up = energy_fn(xp, s)
         acc = torch.log(torch.rand(B, device=x.device)) < (-beta * (Up - U))
         x = torch.where(acc[:, None, None], xp, x); U = torch.where(acc, Up, U)
+        n_acc += acc.float().mean().item()
+    return x, U, n_acc / N
+
+
+def position_sweep_cells(x, s, U, beta, L, step, pair_row_fn, rc_max, n_sub=None):
+    """Checkerboard cell-parallel Metropolis: partition [0,L)^2 into a cgrid x cgrid grid with cell edge
+    >= rc_max + 2*step, 4-color it (2x2 tiling), and in each of n_sub sub-steps move AT MOST ONE randomly
+    chosen particle per same-colored cell — movers are separated by > rc_max + 2*step, so their pair
+    energies are mutually unaffected and per-mover Metropolis tests factorize EXACTLY.
+    pair_row_fn(x, s, idx[B], xi[B,2]) -> [B]: row energy of particle idx at position xi (batched per-config
+    index). Returns (x, U, acc_rate). n_sub default targets ~N attempted moves per sweep."""
+    B, N, _ = x.shape; dev = x.device
+    cell = rc_max + 2.0 * step
+    cgrid = max(2, int(L // cell))
+    if cgrid % 2 == 1:
+        cgrid -= 1                                             # even grid so 2x2 coloring wraps correctly
+    cgrid = max(cgrid, 2)
+    cw = L / cgrid
+    n_colors = 4
+    ncell = cgrid * cgrid
+    if n_sub is None:
+        n_sub = max(1, int(round(N / (ncell / n_colors))))     # ~N attempts per sweep
+    n_att = 0.0; n_acc = 0.0
+    for _ in range(n_sub):
+        for color in range(n_colors):
+            ci = torch.clamp((x[..., 0] / cw).long(), 0, cgrid - 1)
+            cj = torch.clamp((x[..., 1] / cw).long(), 0, cgrid - 1)
+            col = (ci % 2) + 2 * (cj % 2)                      # [B,N] in {0..3}
+            cid = ci * cgrid + cj                              # [B,N]
+            mask = col == color
+            # pick one random particle per (config, active cell): random scores, argmax within cell id
+            score = torch.rand(B, N, device=dev).masked_fill(~mask, -1.0)
+            best = torch.full((B, ncell), -1.0, device=dev)
+            besti = torch.full((B, ncell), -1, dtype=torch.long, device=dev)
+            best = best.scatter_reduce(1, cid, score, reduce="amax", include_self=True)
+            picked = (score > 0) & (score == best.gather(1, cid))  # winner per cell (ties ~ never)
+            # flatten winners: process per config with a fixed max count via padding
+            idx = torch.nonzero(picked)                        # [K,2] (b, i)
+            if idx.numel() == 0:
+                continue
+            # group by config: process winners in parallel via batched per-(b,i) row energies
+            b_ids, p_ids = idx[:, 0], idx[:, 1]
+            xi_old = x[b_ids, p_ids]                           # [K,2]
+            xi_new = torch.remainder(xi_old + step * torch.randn_like(xi_old), L)
+            dU = pair_row_fn(x, s, (b_ids, p_ids), xi_new) - pair_row_fn(x, s, (b_ids, p_ids), xi_old)
+            acc = torch.log(torch.rand(dU.shape[0], device=dev)) < (-beta * dU)
+            x[b_ids[acc], p_ids[acc]] = xi_new[acc]
+            U = U.index_add(0, b_ids[acc], dU[acc])
+            n_att += float(dU.shape[0]); n_acc += float(acc.sum())
+    return x, U, (n_acc / max(n_att, 1.0))
+
+
+def position_sweep_local(x, s, U, beta, L, step, pair_row_fn):
+    """Identical Metropolis chain law, incremental energy: for a single-particle move only row i changes, so
+    dU = row_i(new) - row_i(old). pair_row_fn(x, s, i, xi) -> [B] = sum_j!=i u(|xi - x_j|; s_i, s_j).
+    O(N) per move instead of O(N^2). U stays exactly synchronized (assert-tested)."""
+    B, N, _ = x.shape; n_acc = 0.0
+    for i in torch.randperm(N).tolist():
+        xi_old = x[:, i]
+        xi_new = torch.remainder(xi_old + step * torch.randn(B, 2, device=x.device), L)
+        dU = pair_row_fn(x, s, i, xi_new) - pair_row_fn(x, s, i, xi_old)
+        acc = torch.log(torch.rand(B, device=x.device)) < (-beta * dU)
+        x[:, i] = torch.where(acc[:, None], xi_new, xi_old)
+        U = U + torch.where(acc, dU, torch.zeros_like(dU))
         n_acc += acc.float().mean().item()
     return x, U, n_acc / N
 

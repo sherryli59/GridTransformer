@@ -9,10 +9,14 @@ RCUT_FACTOR = 2.5
 
 
 def _matrix(s, table, device, dtype):
-    # s: [N] int8 -> [N,N] pair-parameter matrix
+    # s: [N] -> [N,N], or per-config [B,N] -> [B,N,N] pair-parameter matrix
     t = torch.tensor(table, device=device, dtype=dtype)      # [2,2]
     si = s.long()
-    return t[si][:, si]                                       # [N,N]
+    if si.dim() == 1:
+        return t[si][:, si]                                  # [N,N]
+    a = si[:, :, None].expand(-1, -1, si.shape[1])           # [B,N,N]
+    b = si[:, None, :].expand(-1, si.shape[1], -1)
+    return t[a, b]                                            # [B,N,N]
 
 
 def ka_energy(x, s, L, per_particle: bool = False):
@@ -36,3 +40,55 @@ def ka_energy(x, s, L, per_particle: bool = False):
     if per_particle:
         return e.sum(-1)                                      # [B,N]
     return 0.5 * e.sum(dim=(1, 2))                            # [B]
+
+
+def ka_pair_row(x, s, i, xi, L):
+    """Sum of pair energies between a CANDIDATE position xi [B,2] for particle i and all j != i, with the
+    exact same shifted/cutoff/min-image convention as ka_energy. s: [B,N] or [N]. Returns [B].
+    Enables O(N)-per-move incremental Metropolis (dU = row_new - row_old)."""
+    B, N, _ = x.shape
+    dtype = x.dtype
+    si = s.long()
+    if si.dim() == 1:
+        si = si[None].expand(B, -1)
+    t_sig = torch.tensor(SIGMA, device=x.device, dtype=dtype)
+    t_eps = torch.tensor(EPS, device=x.device, dtype=dtype)
+    sig = t_sig[si[:, i:i + 1].expand(-1, N), si]             # [B,N] pair sigma_i,j
+    eps = t_eps[si[:, i:i + 1].expand(-1, N), si]
+    rc = RCUT_FACTOR * sig
+    diff = xi[:, None, :] - x                                  # [B,N,2]
+    diff = diff - L * torch.round(diff / L)
+    r2 = (diff ** 2).sum(-1)                                   # [B,N]
+    r2[:, i] = 1e12                                            # exclude self
+    inv6 = (sig ** 2 / r2) ** 3
+    e = 4 * eps * (inv6 ** 2 - inv6)
+    src6 = (sig / rc) ** 6
+    e = torch.where(r2 < rc ** 2, e - 4 * eps * (src6 ** 2 - src6), torch.zeros_like(e))
+    return e.sum(-1)                                           # [B]
+
+
+def ka_pair_row_scatter(x, s, idx, xi, L):
+    """Row energies for K scattered movers: idx=(b_ids[K], p_ids[K]), xi [K,2] candidate positions.
+    Same shifted/cutoff/min-image convention as ka_energy. Returns [K]. One batched kernel for all movers."""
+    b_ids, p_ids = idx
+    B, N, _ = x.shape
+    dtype = x.dtype
+    si = s.long()
+    if si.dim() == 1:
+        si = si[None].expand(B, -1)
+    t_sig = torch.tensor(SIGMA, device=x.device, dtype=dtype)
+    t_eps = torch.tensor(EPS, device=x.device, dtype=dtype)
+    s_row = si[b_ids]                                          # [K,N]
+    s_i = si[b_ids, p_ids]                                     # [K]
+    sig = t_sig[s_i[:, None].expand(-1, N), s_row]             # [K,N]
+    eps = t_eps[s_i[:, None].expand(-1, N), s_row]
+    rc = RCUT_FACTOR * sig
+    diff = xi[:, None, :] - x[b_ids]                           # [K,N,2]
+    diff = diff - L * torch.round(diff / L)
+    r2 = (diff ** 2).sum(-1)                                   # [K,N]
+    r2[torch.arange(r2.shape[0], device=x.device), p_ids] = 1e12
+    inv6 = (sig ** 2 / r2) ** 3
+    e = 4 * eps * (inv6 ** 2 - inv6)
+    src6 = (sig / rc) ** 6
+    e = torch.where(r2 < rc ** 2, e - 4 * eps * (src6 ** 2 - src6), torch.zeros_like(e))
+    return e.sum(-1)

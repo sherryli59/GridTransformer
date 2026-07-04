@@ -148,6 +148,30 @@ def test_ka_wiring_smoke():
     assert torch.allclose(U, efn(x, s), atol=1e-3)
 
 
+def test_local_position_sweep_exact():
+    """ka_pair_row must match ka_energy row-wise, and position_sweep_local must keep U exactly synchronized
+    with the full energy (the incremental-dU bookkeeping is where silent drift would live)."""
+    from liquid_coupling_flow.ipl44.ipl_swap_smc import position_sweep_local
+    from liquid_coupling_flow.ka_energy import ka_energy, ka_pair_row
+    import os
+    torch.manual_seed(2)
+    ART = os.path.join(os.path.dirname(__file__), "..", "artifacts")
+    ref = torch.load(os.path.join(ART, "ka_reference_N100.pt"), map_location="cpu", weights_only=False)
+    L = float(ref["L"]); N = 100
+    x = torch.remainder(ref["x"][:8].float(), L).contiguous()
+    s = ref["s"].long()[None].expand(8, -1).contiguous()
+    # row identity: U = 0.5 * sum_i row_i
+    rows = torch.stack([ka_pair_row(x, s, i, x[:, i], L) for i in range(N)], dim=1)
+    assert torch.allclose(0.5 * rows.sum(1), ka_energy(x, s, L), rtol=1e-4, atol=1e-3)
+    # incremental sweep keeps U synced with the true energy
+    U = ka_energy(x, s, L)
+    prf = lambda xa, sa, i, xi: ka_pair_row(xa, sa, i, xi, L)
+    for _ in range(3):
+        x, U, acc = position_sweep_local(x, s, U, beta=2.0, L=L, step=0.12, pair_row_fn=prf)
+    assert torch.allclose(U, ka_energy(x, s, L), rtol=1e-4, atol=1e-2)
+    assert 0.02 < acc < 0.98
+
+
 def test_per_species_ot_blocks():
     from liquid_coupling_flow.ipl44.joint_flow import per_species_ot
     B, N, nA, L = 8, 44, 22, 9.38

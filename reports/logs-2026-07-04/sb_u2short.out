@@ -1,0 +1,12 @@
+/home/sherryli/xsli/softwares/anaconda3/envs/lightning/lib/python3.11/site-packages/torch/nn/modules/transformer.py:379: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+U2s BASELINE: U/N -3.2616  BB 17.84
+U2s round 1: U/N -3.2745 (d -0.0129)  BB 17.83  71s
+U2s round 2: U/N -3.2799 (d -0.0182)  BB 17.71  143s
+U2s round 3: U/N -3.2689 (d -0.0072)  BB 17.98  214s
+U2s round 4: U/N -3.2714 (d -0.0098)  BB 17.92  285s
+U2s round 5: U/N -3.2754 (d -0.0138)  BB 18.32  356s
+U2s round 6: U/N -3.2689 (d -0.0073)  BB 17.98  427s
+U2s round 7: U/N -3.2777 (d -0.0160)  BB 17.79  498s
+U2s round 8: U/N -3.2746 (d -0.0130)  BB 17.94  569s
+U2S COMPLETE

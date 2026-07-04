@@ -215,3 +215,11 @@ def test_smoke_two_rungs_gpu():
 - [ ] **P2**: `smc_run("arm1", N=100, B=256, transport_seeds=50)` at matched wall-clock (tune transport_seeds/n_mut); compare rungs, per-rung ESS, end quality; per-rung variance breakdown (energy vs q terms) from history.
 - [ ] **P3**: both arms (or arm0 + winner) at N=256, B=128, max_rungs=64 (√N scaling); directional gate vs soft reference.
 - [ ] Records: report + new memory `local-smc-pilot` + ledger; commit logs/artifacts refs.
+
+---
+## LEDGER CLOSE 2026-07-04
+- [x] Tasks 1+2 module+tests committed (2539283 + fixes); guards green.
+- [x] P0/P1: machinery PASS (ESS alive, 23 rungs/17 min, final −3.137±0.053, g_BB 2.21); strict depth bar (−3.26±0.02) NOT met — mutation-limited, knob = cold-β mutation budget. A1's ESS=1 fixed by warm-init (exact generator-IS init weights REFUTED as seed mechanism).
+- [x] P2: ARM-1 IS-transport CATASTROPHIC NEGATIVE (chains poisoned rung 0, U/N +5.6e9; ESS blind to uniformly-dead populations). Mechanistic: MH filters per-move, IS pays ×p diversity per forced move — unaffordable at ~10% survival. ARM-1 path = per-rung-trained proposals (AFT/CRAFT) only.
+- [x] P3: N=256 zero-shot TRANSFER PASS — 33 rungs/74 min, ESS alive, final −3.089±0.040, g_BB 2.24; gap to true eq SIZE-INVARIANT (0.12/N both sizes). Strict ≤−3.211 bar unmet (same mutation limit). Sharp claims blocked on N=256 reference rebuild.
+- [x] Records: report §2026-07-04 in reports/2026-07-02-ka-cluster-bottleneck.md; memory local-smc-pilot; logs reports/logs-2026-07-04/smc_p*.out; artifacts smc_pilot_{arm0,arm1}_N100.pt, smc_pilot_arm0_N256.pt (+v1exactinit negative kept).

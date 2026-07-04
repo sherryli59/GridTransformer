@@ -176,3 +176,11 @@ Steps: tests first (fail: function missing) → implement → all green (old 4 +
 - **U1 (rate)**: G1-protocol reruns, 1000+ moves each at B=128: v2 M=16 uniform; v2+v3 M=16 scored. Compare exchange rate vs v1's 0.153%; report cost per accepted exchange vs v1.
 - **U2 (spot stationarity)**: 15 rounds of [50 disp + 1 sb_mtm sweep] — U/N + BB-contacts hold (short form of G2; the kernel changed, the check must rerun).
 - Records: report + memory update (`cluster-move-gate-nogo` SB block or new `swap-and-breathe` memory), commit logs.
+
+---
+## LEDGER CLOSE 2026-07-04
+- [x] Task 1: v2 I-MTM + v3 scorer committed (026d952), tests 7/7.
+- [x] U1: v2 M=16 uniform **1.897% = 12.4× v1** AND cheaper per exchange (~70 vs ~98 s·chain) — PASS. v3 scored 1.369% — NEGATIVE (equilibrium geometry table 0.999-confident; concentration costs diversity).
+- [x] U2-short: stationarity + BB-contacts HOLD (band 0.016) — PASS.
+- [x] Init dependence (user follow-up): equilibrium 1.90% ≫ flow-init 0.40% ≈ rand-init 0.45% (post-relax) — prediction (higher off-eq) REFUTED; proposal-OOD dominates ⇒ SB = equilibrium specialist.
+- [x] Records: report §2026-07-04; memory swap-breathe-kernel (new); logs sb_u1u2/sb_u2short/sb_u1_inits .py+.out in reports/logs-2026-07-04/.

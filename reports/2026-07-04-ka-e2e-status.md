@@ -6,19 +6,51 @@ Backing detail: `reports/2026-07-03-ka-block-transfer-results.md` (Addenda 2–3
 
 ## 1. Key conceptual questions (blocking first)
 
-1. **[BLOCKING] Is the slow grind at unseen N fatal or just slow?** At N=256 the corrector sits ~0.07 *above* the
-   estimated equilibrium (−3.19 vs ≈−3.26) after 6000 iters, still creeping (~0.008/1000 iters, log-slowing). Does it
-   reach the floor with more iterations, or is there a floor local correction cannot cross? Every equilibration/speedup
-   claim depends on this.
-2. **[BLOCKING] What is the true N=256 equilibrium energy?** The PT reference is under-converged (energy fn verified
-   correct 3 ways; but finite-size check: N=100 −3.26 vs N=256 −3.21 for an *intensive* quantity ⇒ N=256 relaxed less).
-   Without a converged reference, every "gap to PT" number is against a moving target.
-3. **What is the flow's real value proposition at unseen N?** The head-start amortizes burn-in but *shrinks with size*
-   (1.7×@N100 → 1.17×@N256); the block mover fixes only the species-disorder floor (0.006@N100 → 0.026@N256, small
-   because KA species are geometry-slaved). Neither accelerates the slow glassy *position* relaxation — is there a lever
-   that does, or is it intrinsically local-move-limited at T*=0.5?
-4. **Does "train-small→sample-big" beat the honest baseline?** The decisive control is wall-time-to-equilibrium at N=256:
-   pipeline vs swap-MC-from-scratch. Not yet measured; without it the amortization claim is unproven.
+**Framing.** The program is a three-part loop: a **generator emits an imperfect proposal** (approximate positions
+*and* approximate species) → a **"smart" local MC relaxation** corrects it toward equilibrium → and we want that whole
+loop, **trained small, to work at larger sizes (transfer)**. "Smart" is the load-bearing word: an imperfect proposal
+introduces *frustration* — a particle can sit in a good local cage yet carry the wrong species — and pure position
+moves cannot undo that, so the corrector must also do *informed species relabeling* (flip labels toward what the local
+geometry implies). The conceptual questions are about where the value and the limits of this decomposition actually
+live.
+
+1. **[BLOCKING] Division of labor — what must the proposal get right, and what is the corrector's job?**
+   A proposal only pays off if repairing it costs less than sampling from scratch. Conceptually the generator's job is a
+   *warm start* — deliver a configuration already in the right structural basin — and the corrector pays down the
+   residual. The unresolved boundary: does the generator only need to nail **structure** (basin, g(r) shells) and cede
+   the **energy floor** to MC, or must it also land near the floor? This is blocking because the two halves scale
+   differently. Getting into the basin is a *size-independent burn-in*; grinding to the energy floor of a glass is a
+   *size-dependent, collective* relaxation. If the proposal only removes the burn-in, the paradigm amortizes the cheap
+   half and leaves the expensive half untouched — which is exactly the pattern we see (head-start real but shrinking
+   with N; the tail slow and unaccelerated).
+
+2. **[BLOCKING] Is proposal-induced *frustration* actually the rate-limiting defect — i.e., is "informed relabeling"
+   load-bearing or decorative here?** The smart-relabeling move exists to repair species defects a local displacement
+   cannot. But its value depends entirely on whether species carry *independent* frustration. On KA the species are
+   **geometry-slaved**: given the cage, the correct label is essentially determined, so informed relabeling is *correct
+   but rarely changes anything* — it contributes a little depth (removing a small quenched species-disorder floor), not
+   speed. The conceptual point that generalizes: informed relabeling is only *essential* where the proposal's species
+   errors are both common and not fixable by reading geometry — i.e., systems with genuine species/size frustration
+   (additive or polydisperse mixtures), not KA. So a live question is whether KA is even the right substrate to
+   *demonstrate* the smart-relabeling idea, versus merely to validate that it's exact and safe.
+
+3. **[BLOCKING for the transfer claim] What must be invariant for the loop to transfer, and which costs are intrinsic?**
+   Transfer requires every learned piece to depend only on *local, size-invariant* features. We have one clean success
+   (the geometry→species readout transfers once its aggregation is made local — the degree cap) and two size-dependent
+   costs (the proposal's position quality degrades with N; the relaxation time to the floor grows with N). The
+   conceptual crux: the head-start amortizes a size-*independent* quantity, but the glassy tail is a size-*dependent*
+   collective relaxation that no locality trick removes — so the amortized value **necessarily** shrinks with N. Is that
+   shrinkage fundamental to "local proposal + local corrector," or is it an artifact of a still-weak proposal that a
+   stronger generator would push back?
+
+4. **Does "proposal + corrector" cede exactly the glassy part?** The decomposition splits the problem into a fast
+   learnable proposal and an exact local corrector — but glassiness *is* slow collective relaxation, which sits in the
+   crack between them. A one-shot proposal cannot emit a fully-relaxed glass (re-proposing whole configs hit an overlap
+   wall), and local corrector moves grind through the tail slowly; the hard part falls precisely where the split is
+   weakest. So the honest question is whether the achievable claim is only *"amortize structure + burn-in, not the
+   tail,"* or whether a proposal/corrector **co-design** — the generator proposing *collective/cluster moves* the
+   corrector accepts, rather than just an initial config — could reach into the tail. This is where "generator as
+   proposal" would graduate from *warm start* to *transition kernel*.
 
 ## 2. Done — with reflection
 

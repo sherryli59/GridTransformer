@@ -587,3 +587,19 @@ VERDICT: as a REPLACEMENT kernel MTM is uneconomical; as a SUPPLEMENT inside swa
 transport channel at no energy cost at matched wall-clock. Worth carrying into the SMC/equilibration stack
 wherever positional decorrelation (not just energy) is the bottleneck. Caveats: single run/arm; N=100; energy
 and Q edges within noise — the MSD factor is the robust finding.
+
+## 2026-07-04: EQUILIBRIUM DECORRELATION from the full trajectories — verdict REFINED
+
+Time-origin-averaged self-overlap Q(dt) + MSD(dt), origins t>300s, vs WALL-CLOCK lag (figure
+artifacts/mtm_decorrelation.png; analysis reports/logs-2026-07-03/decorr_time.py):
+- tau_alpha > 560s for ALL arms (no 1/e crossing in-window; T*=0.5 glass).
+- Q at 560s: swap 0.50 < hybrid 0.66 < mtm 0.80 — AT EQUILIBRIUM plain swap decorrelates the typical particle
+  FASTEST per wall-clock (hybrid's MTM moves, acceptance ~3%, do not repay their ~50% budget on this metric).
+- MSD at 560s INVERTS: mtm 0.50 (3x swap) > hybrid 0.27 > swap 0.16 (visible caging plateau) — MTM adds a
+  heavy-tailed displacement channel (rare 7-particle hops), i.e., strongly heterogeneous dynamics: Q counts the
+  majority, MSD the tail.
+REFINED VERDICT: hybrid's edge lives in the RELAXATION regime (matched energy + 2x transport + elevated 8%
+acceptance); at EQUILIBRIUM, swap wins standard Q-decorrelation while MTM/hybrid win long-range transport 3x/1.7x
+(basin-hopping channel; matches the deep-energy-tail hint in the final distributions). Use the hybrid for
+equilibration + basin exploration; plain swap for equilibrium Q-throughput. Caveats: mtm window not fully
+equilibrated (-3.24 vs -3.26); absolute tau needs multi-hour runs.

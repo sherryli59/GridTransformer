@@ -22,9 +22,10 @@ def ess(logw):
 
 
 def next_beta(logw, U, beta, beta1, ess_target):
-    """Largest beta' in (beta, beta1] such that ESS(logw - (beta'-beta)*U) >= ess_target * ESS(logw). Bisection."""
+    """Largest beta' in (beta, beta1] such that ESS(logw - (beta'-beta)*U) >= ess_target * B (ABSOLUTE target;
+    a relative target lets an already-degenerate population jump to beta1 in one rung — observed P1 failure)."""
     B = logw.shape[0]
-    target = ess_target * ess(logw)
+    target = ess_target * B
     if ess(logw - (beta1 - beta) * U) >= target:
         return beta1
     lo, hi = 0.0, beta1 - beta
@@ -82,7 +83,7 @@ def _resample(pos, s, logw, gen=None):
 
 @torch.no_grad()
 def smc_run(arm, N=100, B=256, beta0=0.8, beta1=2.0, ess_target=0.6, max_rungs=40, n_mut=2, n_disp=40,
-            transport_seeds=None, seed=0, device="cuda"):
+            transport_seeds=None, seed=0, device="cuda", init="warm", n_init=400):
     """arm in {'arm0','arm1'}. Returns dict(history, final pos/s/logw); saves artifacts/smc_pilot_{arm}_N{N}.pt."""
     assert arm in ("arm0", "arm1")
     torch.manual_seed(seed)
@@ -98,8 +99,22 @@ def smc_run(arm, N=100, B=256, beta0=0.8, beta1=2.0, ess_target=0.6, max_rungs=4
     n_B = round(0.35 * N)
     pos, sp, logq_gen = gen_m.sample(B, N, n_B=n_B, device=device, return_logq=True)
     pos, s = _canonicalize(pos, sp.long())
-    U = ka_energy(pos, s, L)
-    logw = -beta0 * U - logq_gen                                    # exact up to a constant
+    if init == "exact":
+        # exact importance weights vs the generator. MEASURED FAILURE MODE (P1 v1): raw generator samples carry
+        # hard clashes (U ~ 1e14) -> -beta0*U spans astronomically -> ESS=1 at init (A1's overlap wall at the
+        # seed stage). Kept only for experiments.
+        U = ka_energy(pos, s, L)
+        logw = -beta0 * U - logq_gen
+    else:
+        # "warm" (default): flow seeds are WARM STARTS for a beta0-equilibration phase (T=1.25 = easy liquid);
+        # SMC starts with UNIFORM weights from the ~pi_{beta0} population. Generators are seeds, not proposals
+        # (the campaign's standing lesson). Init bias decays with n_init; U/N should plateau before annealing.
+        pos = _disp_sweeps(pos, s[0], L, kT=1.0 / beta0, n=n_init)
+        pos, s, _ = swap_breathe_sweep(P, pos, s, sc, L, geo, beta=beta0)
+        pos, s = _canonicalize(pos, s)
+        U = ka_energy(pos, s, L)
+        print(f"init(warm): {n_init} disp sweeps @ beta0 -> U/N {float(U.mean())/N:.4f} (T=1.25 liquid)", flush=True)
+        logw = torch.zeros(B, device=device)
     beta = beta0; hist = []; t0 = time.time()
     for rung in range(max_rungs):
         s_can = s[0]
@@ -112,7 +127,9 @@ def smc_run(arm, N=100, B=256, beta0=0.8, beta1=2.0, ess_target=0.6, max_rungs=4
         # --- ARM-1: stochastic transport toward the next target (positions only) ---
         if arm == "arm1":
             pos, logw = transport_sweep(P, pos, s, logw, sc, L, geo, beta, n_seeds=transport_seeds)
-        # --- anneal ---
+        # --- anneal (resample FIRST if already degenerate) ---
+        if ess(logw) < 0.5 * B:
+            pos, s, logw = _resample(pos, s, logw)
         U = ka_energy(pos, s, L)
         new_beta = next_beta(logw, U, beta, beta1, ess_target)
         logw = logw - (new_beta - beta) * U

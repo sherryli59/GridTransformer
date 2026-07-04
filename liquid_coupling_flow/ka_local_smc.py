@@ -127,8 +127,10 @@ def smc_run(arm, N=100, B=256, beta0=0.8, beta1=2.0, ess_target=0.6, max_rungs=4
         # --- ARM-1: stochastic transport toward the next target (positions only) ---
         if arm == "arm1":
             pos, logw = transport_sweep(P, pos, s, logw, sc, L, geo, beta, n_seeds=transport_seeds)
-        # --- anneal (resample FIRST if already degenerate) ---
-        if ess(logw) < 0.5 * B:
+        # --- anneal; resample at the SAME threshold the annealer targets (classic adaptive SMC:
+        # anneal to target -> resample -> mutate). A lower resample threshold deadlocks the scheduler:
+        # ESS sits just below target, next_beta can only advance by its 1e-4 floor (measured P1 v2 crawl).
+        if ess(logw) < ess_target * B:
             pos, s, logw = _resample(pos, s, logw)
         U = ka_energy(pos, s, L)
         new_beta = next_beta(logw, U, beta, beta1, ess_target)
@@ -139,10 +141,10 @@ def smc_run(arm, N=100, B=256, beta0=0.8, beta1=2.0, ess_target=0.6, max_rungs=4
                      "U_std": float(U.std()) / N, "sb_acc": sb_info["acceptance"], "t": time.time() - t0})
         print(f"rung {rung:3d}: beta {beta:.4f}  ESS {e:7.1f}/{B}  U/N {float(U.mean())/N:.4f}"
               f"  sb {sb_info['acceptance']*100:.2f}%  {time.time()-t0:.0f}s", flush=True)
-        if e < 0.5 * B:
-            pos, s, logw = _resample(pos, s, logw)
         if beta >= beta1 - 1e-9:
             break
+    if beta < beta1 - 1e-9:
+        print(f"WARNING: max_rungs reached at beta={beta:.4f} < beta1={beta1} — ladder incomplete", flush=True)
     # final mutation at beta1 (decorrelate the resampled population)
     for _ in range(2 * n_mut):
         pos = _disp_sweeps(pos, s[0], L, kT=1.0 / beta1, n=n_disp)

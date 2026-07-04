@@ -249,16 +249,23 @@ def sweeps_to_band(curves, U_ref_med, gbb_ref_peak, u_tol=0.05, g_tol=0.15):
     return None
 
 
-def position_mala(x, s, U, beta, L, dt, energy_fn, force_fn):
-    """One MALA step: ALL particles move together with drift (dt^2/2)*beta*F + dt*xi; exact MH accept per
-    config with the asymmetric-proposal correction. Batched: 2 force + 2 energy kernels total (no per-particle
-    loop). Returns (x, U, acc_rate)."""
+def _tame(F, fmax):
+    """Per-particle force cap (tamed/truncated MALA): bounded drift near singular cores. Applied identically
+    in forward and reverse proposal means -> MH ratio remains exact (it is just a different proposal)."""
+    n = F.norm(dim=-1, keepdim=True)
+    return F * (fmax / n).clamp(max=1.0)
+
+
+def position_mala(x, s, U, beta, L, dt, energy_fn, force_fn, fmax=60.0):
+    """One tamed-MALA step: ALL particles move together with drift (dt^2/2)*beta*tame(F) + dt*xi; exact MH
+    accept per config. Batched: 2 force + 2 energy kernels total. fmax bounds the drift near LJ cores (raw
+    untamed MALA freezes at overlap-heavy initial configs). Returns (x, U, acc_rate)."""
     B = x.shape[0]
-    F = force_fn(x, s)
+    F = _tame(force_fn(x, s), fmax)
     mu = x + 0.5 * dt * dt * beta * F
     xp = torch.remainder(mu + dt * torch.randn_like(x), L)
     Up = energy_fn(xp, s)
-    Fp = force_fn(xp, s)
+    Fp = _tame(force_fn(xp, s), fmax)
     mup = xp + 0.5 * dt * dt * beta * Fp
     d_f = xp - mu; d_f = d_f - L * torch.round(d_f / L)        # forward residual (torus)
     d_r = x - mup; d_r = d_r - L * torch.round(d_r / L)        # reverse residual

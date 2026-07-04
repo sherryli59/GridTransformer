@@ -603,3 +603,19 @@ acceptance); at EQUILIBRIUM, swap wins standard Q-decorrelation while MTM/hybrid
 (basin-hopping channel; matches the deep-energy-tail hint in the final distributions). Use the hybrid for
 equilibration + basin exploration; plain swap for equilibrium Q-throughput. Caveats: mtm window not fully
 equilibrated (-3.24 vs -3.26); absolute tau needs multi-hour runs.
+
+## 2026-07-04: AR-SEEDED RELAXATION + TWO-TIME AGING ANALYSIS (figures aging_two_time.png)
+
+Arms (900s matched wall-clock, B=64): rand+swap, rand+hybrid, ar+{swap,mtm,hybrid} (AR = flowhead full-config
+samples, start clash 30.2%, U/N ~1e14; rand: 84.6%, ~1e22). Full trajectories artifacts/arstart_traj_*.pt.
+- CLASH REPAIR IS FREE: swap alone removes ALL clashes in seconds (astronomical dE => near-certain accepts) —
+  the cluster-move defect-repair niche does not exist. Hybrid slightly BEHIND swap on energy from BOTH starts
+  (rand -2.89 vs -2.93; ar -2.99 vs -3.02) => the earlier "hybrid = relaxation tool" holds only NEAR equilibrium
+  (shallow-slice regime), not for deep quenches. MTM niche narrows to: near-eq relaxation + heavy-tailed transport.
+- AR SEEDING: REAL head start in BOTH energy (-3.016 vs -2.931 at 900s, ~0.09/N durable) and DYNAMICAL AGE
+  (tau_0.7 at t_w=30s: ar+swap 143s vs rand+swap 71s ~ 2x older at matched wall-clock age).
+- AGING QUANTIFIED: tau_0.7(t_w) seconds -> >300s within ~100s of age for all quenched starts; equilibrium
+  anchor tau > 560s. ar+hybrid ages fastest (298s @ t_w=30) while LESS deep => freezing-without-settling.
+- None of the arms reaches equilibrium (-3.26) within 900s from any quench (deep glassy tail is the wall; the
+  PT reference needed 12k swap-sweeps + tempering).
+Caveats: single run/arm; one origin per (arm,t_w); eq+swap tau@600s=223s is single-origin noise.

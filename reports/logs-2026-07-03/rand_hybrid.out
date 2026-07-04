@@ -1,0 +1,15 @@
+/home/sherryli/xsli/softwares/anaconda3/envs/lightning/lib/python3.11/site-packages/torch/nn/modules/transformer.py:379: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+rand+hyb t=    84s  U/N -1.5800  clash  0.00%  mtm_p 0.017
+rand+hyb t=   168s  U/N -2.4128  clash  0.00%  mtm_p 0.011
+rand+hyb t=   251s  U/N -2.6094  clash  0.00%  mtm_p 0.009
+rand+hyb t=   335s  U/N -2.7116  clash  0.00%  mtm_p 0.008
+rand+hyb t=   419s  U/N -2.7583  clash  0.00%  mtm_p 0.009
+rand+hyb t=   503s  U/N -2.7888  clash  0.00%  mtm_p 0.011
+rand+hyb t=   586s  U/N -2.8170  clash  0.00%  mtm_p 0.012
+rand+hyb t=   670s  U/N -2.8463  clash  0.00%  mtm_p 0.013
+rand+hyb t=   754s  U/N -2.8403  clash  0.00%  mtm_p 0.014
+rand+hyb t=   837s  U/N -2.8650  clash  0.00%  mtm_p 0.014
+rand+hyb t=   921s  U/N -2.8908  clash  0.00%  mtm_p 0.016
+saved FULL trajectory /mnt/ssd/GridTransformer/liquid_coupling_flow/artifacts/arstart_traj_rand_hybrid.pt states 1145
+ARM COMPLETE

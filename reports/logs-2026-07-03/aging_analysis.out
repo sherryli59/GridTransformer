@@ -1,0 +1,10 @@
+rand+swap    tau_0.7(t_w): 0s:5s  30s:71s  100s:inf  300s:inf  600s:inf
+rand+hybrid  tau_0.7(t_w): 0s:5s  30s:64s  100s:inf  300s:inf  600s:inf
+ar+swap      tau_0.7(t_w): 0s:8s  30s:143s  100s:inf  300s:inf  600s:inf
+ar+mtm       tau_0.7(t_w): 0s:25s  30s:41s  100s:98s  300s:inf  600s:inf
+ar+hybrid    tau_0.7(t_w): 0s:14s  30s:298s  100s:inf  300s:inf  600s:inf
+eq+swap      tau_0.7(t_w): 0s:inf  30s:inf  100s:inf  300s:inf  600s:223s
+eq+hybrid    tau_0.7(t_w): 0s:inf  30s:inf  100s:inf  300s:inf  600s:inf
+/tmp/claude-1002/-mnt-ssd-GridTransformer/2f102e4c-a99a-4c8d-9094-d110ef077179/scratchpad/aging_analysis.py:62: UserWarning: linestyle is redundantly defined by the 'linestyle' keyword argument and the fmt string "-o" (-> linestyle='-'). The keyword argument will take precedence.
+  axes[1].plot(np.array(tws)+1,ts,"-o",color=col,ls=ls,ms=4,lw=1.6,label=name)
+saved /mnt/ssd/GridTransformer/liquid_coupling_flow/artifacts/aging_two_time.png

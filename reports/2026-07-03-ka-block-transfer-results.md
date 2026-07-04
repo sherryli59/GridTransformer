@@ -141,3 +141,43 @@ forces/energy rows; excluded from stats. MH+random arm capped at 1250 sweeps (cr
 glass from scratch generation to PT-reference-level equilibrium (energy distribution and g(r)) in ~40 min,
 with clean component attribution: MALA = biggest speed lever, flow seeds = 2× time-to-plateau, learned block
 mover = final depth (removes quenched species disorder).
+
+## Addendum 2 (2026-07-04): corrected convergence + decorrelation analysis
+
+Re-analysis at the full 6000 MALA iterations (each = 10 MALA steps + species block), MH arms dropped.
+Plots: `ka_e2e_pt_convergence.png`, `ka_e2e_decorrelation.png`, `ka_e2e_gr_overlay.png`; arrays
+`reports/logs-2026-07-04/e2e_analysis_data.pt`. Analysis script `scratchpad/e2e_analysis.py` (copied to
+`reports/logs-2026-07-04/`).
+
+**The PT N=256 reference is NOT converged (supersedes "PT −3.198" and "energy dist ≈ ref" above).**
+Recomputed with `ka_energy`: PT mean U/N = **−3.2112** (std 0.038, skew 0.15, kurt ≈0 — near-Gaussian
+*marginal*). But block-means in save-order drift **monotonically −3.202 → −3.219** (−0.016/particle) and are
+still trending down in the last blocks. The stored `plateau_drift=0.0011` measured the wrong window and hid
+this. Consequences: (i) the true equilibrium is *below* −3.219; (ii) the 14400 configs are autocorrelated PT
+snapshots, so effective-N ≪ 14400 (thin data, jagged when compared against). The corrector's residual gap
+(MALA plateau ≈ −3.186 vs PT −3.211) is therefore partly a *moving-target* artifact: PT keeps deepening AND the
+MALA arms are themselves still creeping (block8 −3.177→−3.185 over iters 5000–6000). **Neither ensemble is
+fully converged; both approach a common deeper equilibrium.** A converged PT N=256 reference (longer run /
+decorrelated saving) is the prerequisite for any sharp gap claim.
+
+**Decorrelation (detrended per chain, window it>4000):**
+
+| arm | τ_U (energy) | τ_s (species) |
+|---|---|---|
+| flow → MALA+block8 | 21 | 166 |
+| uniform → MALA+block8 | 19 | 187 |
+| flow → MALA+random | 20 | 103 |
+
+- **τ_U ≈ 20 iters, arm-INDEPENDENT** (the three energy-ACF curves lie exactly on top of each other) → energy
+  and structural decorrelation are governed entirely by the MALA *position* dynamics; the species mover and the
+  seed do not change the decorrelation rate. (Detrending removes the residual downward drift that had inflated
+  the earlier "27–35" figure — the detrended ~20 is the cleaner fluctuation autocorrelation time.)
+- **Species is the slow mode** (τ_s 5–9× longer) and IS mover-dependent: random shows a fast initial drop
+  (the ~0.8% accepted swaps flip labels ~uncorrelated) then a frozen tail; block8 decays gradually. The 2000-it
+  window only marginally resolves this slow glassy mode, so τ_s are rough / lower-bound.
+
+**g(r) overlay** (`ka_e2e_gr_overlay.png`; full pipeline, uniform→block8, raw egnn flow, **PT dashed**): g_AA and
+g_AB from both correctors sit exactly on the PT dashed line; raw egnn flow is badly smeared (broad first peak,
+spurious B–B contact). g_BB main shells match; the pipeline slightly under-fills PT's intermediate r≈1.4 feature
+— but PT is itself under-converged there, so that residual is partly PT noise. Full-pipeline and uniform→block8
+are **structurally indistinguishable**, reinforcing flow-seed = speed-not-depth.

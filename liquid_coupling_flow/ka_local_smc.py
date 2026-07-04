@@ -130,8 +130,8 @@ def smc_run(arm, N=100, B=256, beta0=0.8, beta1=2.0, ess_target=0.6, max_rungs=4
         # --- anneal; resample at the SAME threshold the annealer targets (classic adaptive SMC:
         # anneal to target -> resample -> mutate). A lower resample threshold deadlocks the scheduler:
         # ESS sits just below target, next_beta can only advance by its 1e-4 floor (measured P1 v2 crawl).
-        if ess(logw) < ess_target * B:
-            pos, s, logw = _resample(pos, s, logw)
+        if ess(logw) <= ess_target * B + 1e-6:      # <=: the annealer lands ESS EXACTLY on target;
+            pos, s, logw = _resample(pos, s, logw)   # strict < burned an alternating floor-step rung (measured)
         U = ka_energy(pos, s, L)
         new_beta = next_beta(logw, U, beta, beta1, ess_target)
         logw = logw - (new_beta - beta) * U

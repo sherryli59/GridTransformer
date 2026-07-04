@@ -648,3 +648,22 @@ to beta1], resample-on-<=target [strict < deadlocked at a 1e-4 crawl]).
   demands proposal quality far beyond MH-grade (MH filters the clash tax; IS weights must absorb it). Learned
   components belong behind accept/reject or as seeds; per-rung-trained transport (AFT/CRAFT) is the only path
   for ARM-1 and is out of pilot scope. Artifacts smc_pilot_arm{0,1}_N100.pt (+ _v1exactinit failure record).
+
+## 2026-07-04: FINAL CONSOLIDATION — SMC P3 + SB upgrades U1/U2 + init dependence
+
+**SMC P3 (ARM-0, N=256 ZERO-SHOT, B=128, all learned parts N=100-trained): TRANSFER PASS.** 33 rungs / 74 min,
+ESS at target throughout, no cliff in any component. Final U/N -3.089±0.040, g_BB 2.24. The gap to true
+equilibrium is SIZE-INVARIANT (0.12/N at both N=100 and N=256) — "the sampler transfers," including its
+mutation-limited depth. Strict depth bar (soft ref -3.211) not met; same mutation-budget knob as P1.
+Artifact smc_pilot_arm0_N256.pt.
+
+**SB upgrades (v2 I-MTM + v3 denoiser-guidance, 026d952):**
+- U1 @ equilibrium, M=16 uniform: **1.897% = 12.4x v1's 0.153%**, AND cheaper per exchange (~70s vs ~98s
+  per exchange/chain) -> the multi-try upgrade converts SB from correctness-tool to cheap.
+- U1 M=16 denoiser-scored: 1.369% — v3 NEGATIVE (28% below uniform): at equilibrium the geometry table is
+  0.999-confident, "ambiguous pairs" too rare; concentration costs more diversity than it buys.
+- U2-short (upgraded kernel): stationarity + BB-contacts HOLD (band 0.016).
+- INIT DEPENDENCE (prediction refuted on record): exchange rate equilibrium 1.90% >> flow-init 0.40% ~
+  rand-init 0.45% — proposal-OOD dominates off-equilibrium (cold-shaped candidates vs self-consistent
+  disordered incumbents). SB = EQUILIBRIUM SPECIALIST: peaks exactly where the channel is uniquely needed.
+Logs: reports/logs-2026-07-04/ (sb_u1u2, sb_u2short, sb_u1_inits, smc_p1c/p2/p3).

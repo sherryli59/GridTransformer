@@ -1,0 +1,37 @@
+/home/sherryli/xsli/softwares/anaconda3/envs/lightning/lib/python3.11/site-packages/torch/nn/modules/transformer.py:379: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+init(warm): 800 disp sweeps @ beta0 -> U/N -2.1404 (T=1.25 liquid)
+rung   0: beta 0.8438  ESS    64.0/128  U/N -2.1501  sb 0.02%  76s
+rung   1: beta 0.8439  ESS    63.9/128  U/N -2.2057  sb 0.02%  153s
+rung   2: beta 0.8875  ESS    64.0/128  U/N -2.2473  sb 0.03%  229s
+rung   3: beta 0.8876  ESS    64.0/128  U/N -2.3091  sb 0.01%  305s
+rung   4: beta 0.9217  ESS    64.0/128  U/N -2.3166  sb 0.03%  381s
+rung   5: beta 0.9218  ESS    64.0/128  U/N -2.3704  sb 0.02%  457s
+rung   6: beta 0.9956  ESS    64.0/128  U/N -2.3819  sb 0.01%  534s
+rung   7: beta 1.0464  ESS    64.0/128  U/N -2.4735  sb 0.02%  610s
+rung   8: beta 1.0465  ESS    64.0/128  U/N -2.5184  sb 0.02%  687s
+rung   9: beta 1.0915  ESS    64.0/128  U/N -2.5311  sb 0.02%  763s
+rung  10: beta 1.1454  ESS    64.0/128  U/N -2.5865  sb 0.03%  977s
+rung  11: beta 1.1455  ESS    63.9/128  U/N -2.6152  sb 0.03%  1212s
+rung  12: beta 1.2068  ESS    64.0/128  U/N -2.6332  sb 0.02%  1448s
+rung  13: beta 1.2069  ESS    64.0/128  U/N -2.6742  sb 0.02%  1683s
+rung  14: beta 1.2844  ESS    64.0/128  U/N -2.6932  sb 0.06%  1918s
+rung  15: beta 1.2845  ESS    64.0/128  U/N -2.7320  sb 0.04%  2155s
+rung  16: beta 1.3603  ESS    64.0/128  U/N -2.7673  sb 0.03%  2397s
+rung  17: beta 1.3604  ESS    64.0/128  U/N -2.7973  sb 0.05%  2639s
+rung  18: beta 1.4298  ESS    64.0/128  U/N -2.8217  sb 0.05%  2871s
+rung  19: beta 1.4299  ESS    64.0/128  U/N -2.8488  sb 0.04%  3113s
+rung  20: beta 1.4948  ESS    64.0/128  U/N -2.8630  sb 0.04%  3354s
+rung  21: beta 1.4949  ESS    63.9/128  U/N -2.8794  sb 0.02%  3475s
+rung  22: beta 1.5873  ESS    64.0/128  U/N -2.8991  sb 0.03%  3551s
+rung  23: beta 1.5874  ESS    64.0/128  U/N -2.9350  sb 0.02%  3628s
+rung  24: beta 1.6609  ESS    64.0/128  U/N -2.9431  sb 0.04%  3704s
+rung  25: beta 1.6610  ESS    63.9/128  U/N -2.9780  sb 0.04%  3781s
+rung  26: beta 1.7861  ESS    64.0/128  U/N -2.9771  sb 0.02%  3857s
+rung  27: beta 1.7862  ESS    64.0/128  U/N -3.0140  sb 0.01%  3933s
+rung  28: beta 1.8624  ESS    64.0/128  U/N -3.0261  sb 0.02%  4010s
+rung  29: beta 1.8625  ESS    64.0/128  U/N -3.0447  sb 0.04%  4086s
+rung  30: beta 1.9854  ESS    64.0/128  U/N -3.0415  sb 0.02%  4163s
+rung  31: beta 1.9855  ESS    63.9/128  U/N -3.0760  sb 0.03%  4239s
+rung  32: beta 2.0000  ESS   126.0/128  U/N -3.0795  sb 0.02%  4316s
+saved smc_pilot_arm0_N256.pt  wall 4468s

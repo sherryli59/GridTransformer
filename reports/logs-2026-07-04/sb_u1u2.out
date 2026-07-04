@@ -1,0 +1,18 @@
+/home/sherryli/xsli/softwares/anaconda3/envs/lightning/lib/python3.11/site-packages/torch/nn/modules/transformer.py:379: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+U1 M16-uniform: sweep  1  cum exchange 2.5156%  (322/12800)  133s
+U1 M16-uniform: sweep  2  cum exchange 2.2539%  (577/25600)  266s
+U1 M16-uniform: sweep  3  cum exchange 2.2240%  (854/38400)  400s
+U1 M16-uniform: sweep  4  cum exchange 2.2070%  (1130/51200)  533s
+U1 M16-uniform: sweep  5  cum exchange 2.1422%  (1371/64000)  666s
+U1 M16-uniform: sweep  6  cum exchange 2.1198%  (1628/76800)  800s
+U1 M16-uniform: sweep  7  cum exchange 2.0681%  (1853/89600)  933s
+U1 M16-uniform: sweep  8  cum exchange 1.9854%  (2033/102400)  1067s
+U1 M16-uniform: sweep  9  cum exchange 1.9219%  (2214/115200)  1201s
+U1 M16-uniform: sweep 10  cum exchange 1.8969%  (2428/128000)  1335s
+U1 M16-uniform RESULT: 1.8969%  (2428/128000)  1335s  ~70.4s per exchange/chain  [v1: 0.153%]
+U1 M16-scored: sweep  1  cum exchange 1.5469%  (198/12800)  142s
+U1 M16-scored: sweep  2  cum exchange 1.4727%  (377/25600)  284s
+U1 M16-scored: sweep  3  cum exchange 1.4453%  (555/38400)  426s
+U1 M16-scored: sweep  4  cum exchange 1.4023%  (718/51200)  568s
+U1 M16-scored: sweep  5  cum exchange 1.3687%  (876/64000)  710s

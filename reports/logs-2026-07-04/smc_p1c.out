@@ -1,0 +1,27 @@
+/home/sherryli/xsli/softwares/anaconda3/envs/lightning/lib/python3.11/site-packages/torch/nn/modules/transformer.py:379: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+init(warm): 800 disp sweeps @ beta0 -> U/N -2.1895 (T=1.25 liquid)
+rung   0: beta 0.8556  ESS   128.0/256  U/N -2.1908  sb 0.06%  41s
+rung   1: beta 0.8557  ESS   127.9/256  U/N -2.2662  sb 0.09%  81s
+rung   2: beta 0.9294  ESS   128.0/256  U/N -2.3313  sb 0.06%  122s
+rung   3: beta 0.9295  ESS   127.9/256  U/N -2.3928  sb 0.08%  162s
+rung   4: beta 1.0142  ESS   128.0/256  U/N -2.4579  sb 0.11%  203s
+rung   5: beta 1.0143  ESS   128.0/256  U/N -2.5262  sb 0.12%  244s
+rung   6: beta 1.0936  ESS   128.0/256  U/N -2.5592  sb 0.10%  285s
+rung   7: beta 1.0937  ESS   127.9/256  U/N -2.6287  sb 0.11%  325s
+rung   8: beta 1.1944  ESS   128.0/256  U/N -2.6334  sb 0.11%  366s
+rung   9: beta 1.1945  ESS   127.9/256  U/N -2.7189  sb 0.11%  407s
+rung  10: beta 1.2856  ESS   128.0/256  U/N -2.7402  sb 0.14%  448s
+rung  11: beta 1.2857  ESS   128.0/256  U/N -2.7943  sb 0.16%  488s
+rung  12: beta 1.3818  ESS   128.0/256  U/N -2.8215  sb 0.13%  529s
+rung  13: beta 1.3819  ESS   128.0/256  U/N -2.8600  sb 0.13%  570s
+rung  14: beta 1.4841  ESS   128.0/256  U/N -2.8731  sb 0.12%  610s
+rung  15: beta 1.4842  ESS   127.9/256  U/N -2.9121  sb 0.12%  651s
+rung  16: beta 1.6097  ESS   128.0/256  U/N -2.9306  sb 0.17%  692s
+rung  17: beta 1.6098  ESS   128.0/256  U/N -2.9801  sb 0.17%  733s
+rung  18: beta 1.7672  ESS   128.0/256  U/N -3.0135  sb 0.13%  774s
+rung  19: beta 1.7673  ESS   128.0/256  U/N -3.0538  sb 0.18%  814s
+rung  20: beta 1.9369  ESS   128.0/256  U/N -3.0629  sb 0.15%  855s
+rung  21: beta 1.9370  ESS   128.0/256  U/N -3.1213  sb 0.19%  897s
+rung  22: beta 2.0000  ESS   224.3/256  U/N -3.1176  sb 0.17%  939s
+saved smc_pilot_arm0_N100.pt  wall 1022s

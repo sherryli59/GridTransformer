@@ -1,0 +1,13 @@
+/home/sherryli/xsli/softwares/anaconda3/envs/lightning/lib/python3.11/site-packages/torch/nn/modules/transformer.py:379: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+round  25: species-overlap q_s 0.9078  U/N -3.2833  SB-acc 0.188%  324s
+round  50: species-overlap q_s 0.8459  U/N -3.2752  SB-acc 0.281%  646s
+round  75: species-overlap q_s 0.7897  U/N -3.2674  SB-acc 0.297%  966s
+round 100: species-overlap q_s 0.7369  U/N -3.2702  SB-acc 0.156%  1287s
+round 125: species-overlap q_s 0.7100  U/N -3.2730  SB-acc 0.203%  1607s
+round 150: species-overlap q_s 0.6866  U/N -3.2791  SB-acc 0.297%  1928s
+round 175: species-overlap q_s 0.6628  U/N -3.2815  SB-acc 0.281%  2249s
+round 200: species-overlap q_s 0.6366  U/N -3.2802  SB-acc 0.172%  2569s
+round 225: species-overlap q_s 0.6219  U/N -3.2802  SB-acc 0.281%  2890s
+round 250: species-overlap q_s 0.6050  U/N -3.2819  SB-acc 0.234%  3210s
+G3 COMPLETE

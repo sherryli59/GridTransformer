@@ -1,0 +1,7 @@
+/home/sherryli/xsli/softwares/anaconda3/envs/lightning/lib/python3.11/site-packages/torch/nn/modules/transformer.py:379: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+flow-init after 200 relax sweeps: U/N -2.6135
+flow-init   : exchange 0.401% (154/38400)  U/N(end) -2.6284  304s
+rand-init after 200 relax sweeps: U/N -2.1864
+rand-init   : exchange 0.453% (174/38400)  U/N(end) -2.2429  305s
+U1-INITS COMPLETE  [equilibrium reference: 1.897%]

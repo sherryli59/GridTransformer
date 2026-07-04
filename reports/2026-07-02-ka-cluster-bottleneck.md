@@ -566,3 +566,24 @@ equilibrium move_prob is lower (M=8: ~0.8-1.5% settled) — deeper minima are ha
 OPEN (the decisive follow-up): mixing-vs-swap-MC benchmark — does a ~26s accepted 7-particle coordinated move buy
 more cage-escape/decorrelation than the same wall-clock of single-site swap-MC. Lesson logged: stationarity gates
 need REPRESENTATIVE initial slices (first-frames of a PT reference are shallow).
+
+## 2026-07-03: MTM-vs-swap MIXING BENCHMARK (the decisive economics gate) — QUALIFIED POSITIVE
+
+3 arms, matched 900s wall-clock, B=64 chains from the identical shallow slice (U/N -3.2194 -> eq -3.2600),
+positions-only metrics (fair to species swaps). v1 was INVALID (slot_order gives per-row slot->species maps;
+vectorized swap displacement used row-0's -> U/N went POSITIVE) — v2 keeps all state in ORIGINAL ordering
+(single exact species vector) and slot-orders per MTM move on the fly, scattering the cluster back.
+
+RESULTS (final): swap U/N -3.2696 / Q 0.277 / MSD 0.507 | pure-MTM -3.2452 / 0.623 / 1.135 |
+HYBRID -3.2764 / 0.262 / **0.927**.
+- Pure MTM alone: loses energy+overlap (too few moves/second) but its MSD is 2.2x swap's — accepted cluster
+  moves are genuine coordinated hops, not rattle.
+- HYBRID: matches-or-edges swap on U/N and Q (differences ~ noise) while carrying **1.8x swap's MSD** — the
+  cluster channel relocates small subsets FAR (Q barely changes, MSD doubles = rare large coordinated
+  displacements, exactly the transport mode swap lacks positionally).
+- SYNERGY: MTM move_prob in the hybrid holds ~8% vs ~3% in pure MTM at the same M=32 — interleaved swap sweeps
+  keep refreshing local environments so cluster candidates land better.
+VERDICT: as a REPLACEMENT kernel MTM is uneconomical; as a SUPPLEMENT inside swap-MC it adds a real mobility/
+transport channel at no energy cost at matched wall-clock. Worth carrying into the SMC/equilibration stack
+wherever positional decorrelation (not just energy) is the bottleneck. Caveats: single run/arm; N=100; energy
+and Q edges within noise — the MSD factor is the robust finding.

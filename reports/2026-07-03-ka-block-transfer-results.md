@@ -99,3 +99,45 @@ Block4 from PT-reference seeds, 2000 sweeps: U/N trace flat at −3.27…−3.30
 - The N=256 flow seeds used the knn-capped sampler end-to-end; its position-channel quality at unseen N was
   validated only through the downstream benchmark (it helps: 1335→1065), not by a dedicated structural audit.
 - Block acceptance counts include null redraws; the mover's true "work rate" is lower than 0.7–0.9 suggests.
+
+---
+
+## Addendum (2026-07-04): the entire pipeline, end-to-end at unseen N=256
+
+User reframing: the deliverable is the FULL pipeline — flow generates imperfect (x,s) → species-flow-corrected
+relaxation → equilibrium — with size transfer of the whole thing. Executed with full trajectory retention
+(`ka_e2e_generate.py`, `ka_e2e_correct.py` (MH), `ka_e2e_mala.py` (tamed MALA); trajectories
+`artifacts/ka_e2e_traj_*.pt`, raw gen `ka_e2e_gen_N256.pt`).
+
+**Raw generation (N=100-trained model @ N=256, B=1024 in 101 s):** g(r) peak positions correct, amplitudes ~2×
+smeared, spurious B–B contact peak; 3.1%/particle core overlaps → U/N median +105; species 28.9% wrong
+(`ka_e2e_gen_N256.png`).
+
+**Position kernel upgrade — tamed MALA:** naive MALA froze at the raw configs (acceptance ~0: LJ-core forces
+propose absurd jumps); per-particle force cap in the proposal (exact) fixes it. All-particle batched moves:
+13 ms/step vs 2.3 s/sweep for sequential MH (whose bottleneck is measured to be launch latency, not energy
+math — local-ΔU O(N)/move gave only 1.3×; checkerboard cells pay only at N≥576).
+
+**Final plateaus at N=256 (all learned parts trained at N=100, knn=32):** `ka_e2e_final_energy_dist.png`
+
+| arm | plateau U/N | note |
+|---|---|---|
+| PT reference | −3.198 | |
+| flow → MALA+block8 | **−3.189** | energy distribution ≈ ref in shape+width; ~40 min from raw gen |
+| uniform → MALA+block8 | −3.188 | same depth, ~2× slower → **flow seeds = speed, not depth** |
+| flow → MALA+random | −3.162 | plateaued shallower → **mover = depth: quenched species-disorder penalty ~0.03/particle that random swaps (0.8% effective) cannot relax** |
+| flow → MH+block8 | −3.115 @ 3000 sweeps | position kernel is the largest lever |
+
+**Structure endpoint** (`ka_e2e_final_gr.png`): gAA, gAB indistinguishable from PT ref; gBB main shells match,
+residual B–B contact shoulder (1.4 vs 0.95) — the known slowest mode. Species-oracle disagreement 28.9% → 1.7%.
+τ_U ≈ 27–35 iterations, kernel-independent at stationarity; block-move effective rate →0 at equilibrium
+(corrector, not mixer — its work happens during relaxation, 4.4% effective early).
+
+**Caveats:** 1–2 of 128 chains stuck at nan (raw configs with exactly coincident particles: r²=0 →
+tamed force nan; full-recompute MH also cannot recover inf configs — inf−inf=nan). Fix = r² clamp in
+forces/energy rows; excluded from stats. MH+random arm capped at 1250 sweeps (crossed −3.0; purpose served).
+
+**Bottom line:** the entire pipeline transfers: N=100-trained generator + geometry table drive a 256-particle
+glass from scratch generation to PT-reference-level equilibrium (energy distribution and g(r)) in ~40 min,
+with clean component attribution: MALA = biggest speed lever, flow seeds = 2× time-to-plateau, learned block
+mover = final depth (removes quenched species disorder).

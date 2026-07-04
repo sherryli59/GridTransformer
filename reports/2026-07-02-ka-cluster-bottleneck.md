@@ -632,3 +632,19 @@ transposition-symmetry + abort-multiset argument; "every accepted move is an exc
   slice): U/N non-monotone band 0.021; g_BB 2.22-2.41 ~ data 2.30; g_AB 6.13-6.32; BB-contacts 17.3-18.2 flat
   => no species-composition bias. SB acceptance steady 0.09-0.28%.
 Logs: reports/logs-2026-07-04/sb_g1.out, sb_g2.out. G3 (tau_s) next.
+
+## 2026-07-04: LOCAL-SMC PILOT — P1/P2 verdicts
+
+Module ka_local_smc.py (2539283 + 3 measured scheduler fixes: warm-init [exact generator-IS weights gave ESS=1
+at init — A1's wall at the seed stage], absolute ESS target [relative target let a degenerate population jump
+to beta1], resample-on-<=target [strict < deadlocked at a 1e-4 crawl]).
+- **P1 (ARM-0, mutation-only annealed SMC, N=100 B=256): MACHINERY PASS, depth partial.** beta 0.8->2.0 in
+  23 rungs / 17 min, ESS held at target throughout (A1 fixed). Final: U/N -3.137±0.053, g_BB 2.21 (ref -3.260 /
+  2.30). Strict depth bar NOT met (mutation-limited glassy tail) BUT deepest non-tempering result in the
+  campaign at this wall-clock (direct AR-seeded: -3.016 @ 15 min).
+- **P2 (ARM-1, always-apply IS transport, 50 AR-cluster moves/rung): CATASTROPHIC NEGATIVE, mechanistic.**
+  Forced application of a ~90%-clash-per-move proposal poisons all chains (U/N +5.6e9 at rung 0); resampler
+  recovers ESS among garbage; ladder completes meaninglessly (final -2.48). VERDICT: IS-style learned transport
+  demands proposal quality far beyond MH-grade (MH filters the clash tax; IS weights must absorb it). Learned
+  components belong behind accept/reject or as seeds; per-rung-trained transport (AFT/CRAFT) is the only path
+  for ARM-1 and is out of pilot scope. Artifacts smc_pilot_arm{0,1}_N100.pt (+ _v1exactinit failure record).

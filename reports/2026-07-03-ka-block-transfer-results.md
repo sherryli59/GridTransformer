@@ -181,3 +181,36 @@ g_AB from both correctors sit exactly on the PT dashed line; raw egnn flow is ba
 spurious B–B contact). g_BB main shells match; the pipeline slightly under-fills PT's intermediate r≈1.4 feature
 — but PT is itself under-converged there, so that residual is partly PT noise. Full-pipeline and uniform→block8
 are **structurally indistinguishable**, reinforcing flow-seed = speed-not-depth.
+
+## Addendum 3 (2026-07-04): the PT reference is under-equilibrated — energy verified, target is soft
+
+User challenge ("PT has not equilibrated — are the energy distributions correct? look up literature"). Full
+diagnosis in memory `ka-reference-underconverged`. Reference generator: `liquid_coupling_flow/ka_reference.py`.
+
+**Energy function is CORRECT (three independent implementations, machine-precision).** `ka_energy` == the MC
+sampler's own `_u_matrix` (ka_mcmc_fast) == an independent brute-force double-loop, all = −3.153122 on cfg 0,
+max diff 0.00e+00. So the configs were equilibrated to *exactly* the Hamiltonian we measure (no sampler/observable
+mismatch), and the distribution *width* (std 0.038/0.061 at N=256/100) matches σ_U/N = T·√(c_v/N). Not a bug.
+
+**But the reference IS under-equilibrated — four independent evidences:**
+1. **Finite-size inconsistency (decisive):** U/N is intensive (2D-LJ finite-size corrections ~1/N, <0.01 between
+   N=100 and 256), yet the references give **N=100 −3.260 vs N=256 −3.211** — a 0.05 split in the wrong
+   size-direction to be physical ⇒ the larger system relaxed *less* under the same protocol ⇒ **N=256 is the
+   under-converged one**.
+2. Monotonic drift in save(=MC-time) order, both seed-halves (−0.008, −0.005; −0.016 total).
+3. Both references' relaxed tails are deeper than their means (still descending: N=256 −3.211→−3.217).
+4. Convergence gate blind spots (code-visible): `plateau_drift` uses the cold *mean* sampled every 400 sweeps
+   (too coarse for a 0.016 drift); seed-agreement passes when both seeds share the same systematic bias.
+
+**Literature** (WebSearch; Flenner–Szamel PMC4490572; Jung–Ozawa–Biroli–Berthier arXiv 2507.03590): model is a
+standard, legitimate 2D KA (65:35, our exact ε/σ, shifted 2.5σ — confirmed). **Flenner–Szamel equilibrated this
+same model to T=0.45**, so T=0.5 is supercooled but reachable — the drift is a *protocol shortfall, not an
+intractable state point*. Dynamics papers don't tabulate U/N (no clean number to match); −3.2 scale is physically
+reasonable. **Best estimate of the true N=256 equilibrium ≈ −3.26 to −3.27** (the size-independent value the N=100
+tail reaches; corroborated live by the N=100 flow→MALA+block8 corrector hitting −3.267, = the N=100 ref's own best).
+
+**Consequence:** qualitative results stand, but **every "gap to PT reference" number in this report was measured
+against a soft target ~0.05 too shallow at N=256**. The −3.186 corrector plateau and the −3.211 reference are
+*both* short of the real ≈−3.26. **Prerequisite for any sharp gap claim: re-run the N=256 reference** with a
+stronger protocol (more equil sweeps + higher swap rate / swap-MC-augmented) and a drift-aware convergence gate
+(block-average the *full* collection and test for trend, not a coarse mean + seed-agreement).

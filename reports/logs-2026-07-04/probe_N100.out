@@ -1,0 +1,3 @@
+[mala-block8-gen] 128 configs, 60 iters (10 MALA dt=0.012 + species block each) | start U/N 9.43
+[mala-block8] iter    60 | U/N med -2.8957 | disagree 0.0785 | mala acc 0.64 sw acc 0.75 eff 0.000 | 8s (saved)
+[mala-block8] DONE -> /mnt/ssd/GridTransformer/liquid_coupling_flow/artifacts/ka_e2e_traj_mala_block8_N100.pt

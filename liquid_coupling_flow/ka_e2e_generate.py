@@ -1,17 +1,19 @@
-"""E2E pipeline stage A+B: generate from the N=100-trained joint flow AT N=256 (largest batch that fits,
-OOM-halving), SAVE the raw generation, analyze U/N + species-oracle disagreement + full partial g(r) vs the
-PT reference. Output: artifacts/ka_e2e_gen_N256.pt {x, s, U, disagree, meta} + ka_e2e_gen_N256.png"""
-import os, time, torch, matplotlib
+"""E2E pipeline stage A+B: generate from the N=100-trained joint flow at target N (default 256; pass N as
+argv[1], e.g. `python -m liquid_coupling_flow.ka_e2e_generate 100`), SAVE the raw generation, analyze U/N +
+species-oracle disagreement + full partial g(r) vs the PT reference.
+Output: artifacts/ka_e2e_gen_N{N}.pt {x, s, U, disagree, meta} + ka_e2e_gen_N{N}.png"""
+import os, sys, time, torch, matplotlib
 matplotlib.use("Agg"); import matplotlib.pyplot as plt
 from liquid_coupling_flow.ipl44.joint_flow import JointSpeciesFlow, random_22_labeling
 from liquid_coupling_flow.ka_energy import ka_energy
 from liquid_coupling_flow.ka_observables import partial_gr
 
 dev = "cuda"
+N = int(sys.argv[1]) if len(sys.argv) > 1 else 256
 ART = os.path.join(os.path.dirname(__file__), "artifacts")
 JFD = os.path.join(os.path.dirname(__file__), "ipl44", "data")
-ref = torch.load(f"{ART}/ka_reference_N256_thin.pt", map_location="cpu", weights_only=False)
-N = 256; L = float(ref["L"])
+ref = torch.load(f"{ART}/ka_reference_N{N}_thin.pt", map_location="cpu", weights_only=False)
+L = float(ref["L"])
 xr = torch.remainder(ref["x"].float(), L); sr = ref["s"].long()
 nB = int(sr.sum())
 ck = torch.load(f"{JFD}/jf_ka100tt_best.pt", map_location=dev, weights_only=False); cfg = ck["cfg"]
@@ -49,21 +51,21 @@ with torch.no_grad():
 disagree = ((W > 0.5).long() != sg).float().mean()
 torch.save({"x": xg.cpu(), "s": sg.cpu(), "U": U.cpu(), "disagree_per_cfg": ((W > 0.5).long() != sg).float().mean(1).cpu(),
             "meta": {"model": "jf_ka100tt_best", "knn": 32, "n_steps": 250, "N": N, "L": L, "gen_s": time.time() - t0}},
-           f"{ART}/ka_e2e_gen_N256.pt")
+           f"{ART}/ka_e2e_gen_N{N}.pt")
 Ur = ka_energy(xr[-1024:].to(dev), sr[None].expand(1024, -1).to(dev), L)
-print(f"generated {xg.shape[0]} configs at N=256 in {time.time()-t0:.0f}s (batch {B})", flush=True)
+print(f"generated {xg.shape[0]} configs at N={N} in {time.time()-t0:.0f}s (batch {B})", flush=True)
 print(f"gen  U/N: median {float(U.median())/N:.4f} mean {float(U.mean())/N:.4f} | ref median {float(Ur.median())/N:.4f}", flush=True)
 print(f"gen  species-oracle disagreement: {float(disagree):.4f}", flush=True)
 
 fig, ax = plt.subplots(1, 4, figsize=(19, 4.2))
 ax[0].hist((Ur / N).cpu().numpy(), bins=45, density=True, alpha=0.6, color="k", label="PT ref")
 ax[0].hist((U / N).cpu().numpy(), bins=45, density=True, alpha=0.6, color="tab:red", label="flow gen (raw)")
-ax[0].set_title("U/N distribution: raw generation vs PT ref"); ax[0].legend(fontsize=8)
+ax[0].set_title(f"U/N distribution: raw generation vs PT ref (N={N})"); ax[0].legend(fontsize=8)
 for j, (pair, nm) in enumerate([((0, 0), "gAA"), ((0, 1), "gAB"), ((1, 1), "gBB")]):
     r, g = partial_gr(xr[-1024:], sr[None].expand(1024, -1).contiguous(), L, rmax=3.5, nbins=100, pair=pair)
     ax[j + 1].plot(r, g, "k-", lw=2, label="PT ref")
     r2, g2 = partial_gr(xg.cpu(), sg.cpu(), L, rmax=3.5, nbins=100, pair=pair)
     ax[j + 1].plot(r2, g2, "r--", label="flow gen (raw)")
     ax[j + 1].set_title(f"{nm}(r)"); ax[j + 1].legend(fontsize=8); ax[j + 1].set_xlabel("r")
-plt.tight_layout(); plt.savefig(f"{ART}/ka_e2e_gen_N256.png", dpi=110)
-print(f"saved {ART}/ka_e2e_gen_N256.pt + .png", flush=True)
+plt.tight_layout(); plt.savefig(f"{ART}/ka_e2e_gen_N{N}.png", dpi=110)
+print(f"saved {ART}/ka_e2e_gen_N{N}.pt + .png", flush=True)

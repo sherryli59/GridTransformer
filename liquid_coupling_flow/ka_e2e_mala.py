@@ -2,7 +2,7 @@
 block-species moves off the frozen geometry table. One 'iteration' = 10 MALA steps + 1 species block
 (8 x block-8 relabel attempts). Full trajectory retention (per-iter U[B], s[B,N] int8, x snapshots every 20
 iters, acceptances incl. effective), incremental saves every 200 iterations.
-Usage: python -m liquid_coupling_flow.ka_e2e_mala [n_iter] [B] [dt] [kern=block8|random] [seed=gen|uniform]"""
+Usage: python -m liquid_coupling_flow.ka_e2e_mala [n_iter] [B] [dt] [kern=block8|random] [seed=gen|uniform] [N=256]"""
 import os, sys, time, torch
 from liquid_coupling_flow.ipl44.ipl_swap_smc import position_mala, block_relabel_attempt, swap_attempt, uniform_weight_fn
 from liquid_coupling_flow.ipl44.joint_flow import JointSpeciesFlow
@@ -14,11 +14,12 @@ B = int(sys.argv[2]) if len(sys.argv) > 2 else 128
 dt = float(sys.argv[3]) if len(sys.argv) > 3 else 0.012
 kern = sys.argv[4] if len(sys.argv) > 4 else "block8"
 seed_kind = sys.argv[5] if len(sys.argv) > 5 else "gen"
+Ntgt = int(sys.argv[6]) if len(sys.argv) > 6 else 256
 beta = 2.0
 ART = os.path.join(os.path.dirname(__file__), "artifacts")
 JFD = os.path.join(os.path.dirname(__file__), "ipl44", "data")
 
-gen = torch.load(f"{ART}/ka_e2e_gen_N256.pt", map_location="cpu", weights_only=False)
+gen = torch.load(f"{ART}/ka_e2e_gen_N{Ntgt}.pt", map_location="cpu", weights_only=False)
 N = gen["meta"]["N"]; L = gen["meta"]["L"]
 if seed_kind == "uniform":
     torch.manual_seed(123)

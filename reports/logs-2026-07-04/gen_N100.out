@@ -1,0 +1,23 @@
+generated 1024 configs at N=100 in 68s (batch 1024)
+gen  U/N: median 10.7222 mean inf | ref median -3.2565
+gen  species-oracle disagreement: 0.2059
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/mnt/ssd/GridTransformer/liquid_coupling_flow/ka_e2e_generate.py", line 62, in <module>
+    ax[0].hist((U / N).cpu().numpy(), bins=45, density=True, alpha=0.6, color="tab:red", label="flow gen (raw)")
+  File "/home/sherryli/xsli/softwares/anaconda3/envs/lightning/lib/python3.11/site-packages/matplotlib/__init__.py", line 1465, in inner
+    return func(ax, *map(sanitize_sequence, args), **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/sherryli/xsli/softwares/anaconda3/envs/lightning/lib/python3.11/site-packages/matplotlib/axes/_axes.py", line 6862, in hist
+    m, bins = np.histogram(x[i], bins, weights=w[i], **hist_kwargs)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/sherryli/xsli/softwares/anaconda3/envs/lightning/lib/python3.11/site-packages/numpy/lib/histograms.py", line 780, in histogram
+    bin_edges, uniform_bins = _get_bin_edges(a, bins, range, weights)
+                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/sherryli/xsli/softwares/anaconda3/envs/lightning/lib/python3.11/site-packages/numpy/lib/histograms.py", line 426, in _get_bin_edges
+    first_edge, last_edge = _get_outer_edges(a, range)
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/sherryli/xsli/softwares/anaconda3/envs/lightning/lib/python3.11/site-packages/numpy/lib/histograms.py", line 315, in _get_outer_edges
+    raise ValueError(
+ValueError: supplied range of [-0.8908756971359253, inf] is not finite

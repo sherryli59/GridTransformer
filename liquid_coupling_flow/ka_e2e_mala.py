@@ -2,7 +2,7 @@
 block-species moves off the frozen geometry table. One 'iteration' = 10 MALA steps + 1 species block
 (8 x block-8 relabel attempts). Full trajectory retention (per-iter U[B], s[B,N] int8, x snapshots every 20
 iters, acceptances incl. effective), incremental saves every 200 iterations.
-Usage: python -m liquid_coupling_flow.ka_e2e_mala [n_iter] [B] [dt] [kern=block8|random]"""
+Usage: python -m liquid_coupling_flow.ka_e2e_mala [n_iter] [B] [dt] [kern=block8|random] [seed=gen|uniform]"""
 import os, sys, time, torch
 from liquid_coupling_flow.ipl44.ipl_swap_smc import position_mala, block_relabel_attempt, swap_attempt, uniform_weight_fn
 from liquid_coupling_flow.ipl44.joint_flow import JointSpeciesFlow
@@ -13,14 +13,22 @@ n_iter = int(sys.argv[1]) if len(sys.argv) > 1 else 3000
 B = int(sys.argv[2]) if len(sys.argv) > 2 else 128
 dt = float(sys.argv[3]) if len(sys.argv) > 3 else 0.012
 kern = sys.argv[4] if len(sys.argv) > 4 else "block8"
+seed_kind = sys.argv[5] if len(sys.argv) > 5 else "gen"
 beta = 2.0
 ART = os.path.join(os.path.dirname(__file__), "artifacts")
 JFD = os.path.join(os.path.dirname(__file__), "ipl44", "data")
 
 gen = torch.load(f"{ART}/ka_e2e_gen_N256.pt", map_location="cpu", weights_only=False)
 N = gen["meta"]["N"]; L = gen["meta"]["L"]
-x = gen["x"][:B].to(dev).contiguous(); s = gen["s"][:B].to(dev).contiguous()
-nB = int(s[0].sum())
+if seed_kind == "uniform":
+    torch.manual_seed(123)
+    nB = int(gen["s"][0].sum())
+    x = torch.rand(B, N, 2, device=dev) * L
+    from liquid_coupling_flow.ipl44.joint_flow import random_22_labeling
+    s = random_22_labeling(B, N, nB, dev)
+else:
+    x = gen["x"][:B].to(dev).contiguous(); s = gen["s"][:B].to(dev).contiguous()
+    nB = int(s[0].sum())
 efn = lambda a, b: ka_energy(a, b, L); ffn = lambda a, b: ka_forces(a, b, L)
 ck = torch.load(f"{JFD}/jf_ka100tt_best.pt", map_location=dev, weights_only=False); cfg = ck["cfg"]
 jf = JointSpeciesFlow(n_particles=N, L=L, hidden_nf=cfg["hidden_nf"], n_layers=cfg["n_layers"], two_time=True).to(dev)
@@ -37,10 +45,10 @@ def geometry_table(xx):
 
 
 U = efn(x, s)
-OUT = f"{ART}/ka_e2e_traj_mala_{kern}_N{N}.pt"
+OUT = f"{ART}/ka_e2e_traj_mala_{kern}_{seed_kind}_N{N}.pt" if seed_kind != "gen" else f"{ART}/ka_e2e_traj_mala_{kern}_N{N}.pt"
 Us, Ss, Xsnap, macc_l, sacc_l, seff_l, dis = [], [], [], [], [], [], []
 t0 = time.time()
-print(f"[mala-{kern}] {B} configs, {n_iter} iters (10 MALA dt={dt} + species block each) | start U/N {float(U.median())/N:.2f}", flush=True)
+print(f"[mala-{kern}-{seed_kind}] {B} configs, {n_iter} iters (10 MALA dt={dt} + species block each) | start U/N {float(U.median())/N:.2f}", flush=True)
 for k in range(n_iter):
     ma = 0.0
     for _ in range(10):

@@ -247,3 +247,24 @@ def sweeps_to_band(curves, U_ref_med, gbb_ref_peak, u_tol=0.05, g_tol=0.15):
         if abs(u - U_ref_med) / abs(U_ref_med) < u_tol and abs(g - gbb_ref_peak) / gbb_ref_peak < g_tol:
             return k
     return None
+
+
+def position_mala(x, s, U, beta, L, dt, energy_fn, force_fn):
+    """One MALA step: ALL particles move together with drift (dt^2/2)*beta*F + dt*xi; exact MH accept per
+    config with the asymmetric-proposal correction. Batched: 2 force + 2 energy kernels total (no per-particle
+    loop). Returns (x, U, acc_rate)."""
+    B = x.shape[0]
+    F = force_fn(x, s)
+    mu = x + 0.5 * dt * dt * beta * F
+    xp = torch.remainder(mu + dt * torch.randn_like(x), L)
+    Up = energy_fn(xp, s)
+    Fp = force_fn(xp, s)
+    mup = xp + 0.5 * dt * dt * beta * Fp
+    d_f = xp - mu; d_f = d_f - L * torch.round(d_f / L)        # forward residual (torus)
+    d_r = x - mup; d_r = d_r - L * torch.round(d_r / L)        # reverse residual
+    logq = (-(d_r ** 2).sum((1, 2)) + (d_f ** 2).sum((1, 2))) / (2 * dt * dt)
+    log_ratio = -beta * (Up - U) + logq
+    acc = torch.log(torch.rand(B, device=x.device)) < log_ratio
+    x = torch.where(acc[:, None, None], xp, x)
+    U = torch.where(acc, Up, U)
+    return x, U, float(acc.float().mean())

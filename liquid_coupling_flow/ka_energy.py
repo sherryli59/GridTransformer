@@ -92,3 +92,27 @@ def ka_pair_row_scatter(x, s, idx, xi, L):
     src6 = (sig / rc) ** 6
     e = torch.where(r2 < rc ** 2, e - 4 * eps * (src6 ** 2 - src6), torch.zeros_like(e))
     return e.sum(-1)
+
+
+def ka_forces(x, s, L):
+    """Analytic forces for the shifted KA LJ (shift constant -> force unchanged; sharp cutoff standard).
+    x [B,N,2], s [N] or [B,N] -> F [B,N,2] with F_i = -dU/dx_i. Fully batched (one kernel chain)."""
+    B, N, _ = x.shape
+    dtype = x.dtype
+    sig = _matrix(s, SIGMA, x.device, dtype)
+    eps = _matrix(s, EPS, x.device, dtype)
+    if sig.dim() == 2:
+        sig = sig[None]; eps = eps[None]
+    rc = RCUT_FACTOR * sig
+    diff = x[:, :, None, :] - x[:, None, :, :]                # [B,N,N,2] r_i - r_j
+    diff = diff - L * torch.round(diff / L)
+    r2 = (diff ** 2).sum(-1)
+    eye = torch.eye(N, device=x.device, dtype=torch.bool)
+    r2 = r2.masked_fill(eye, 1e12)
+    s2 = sig ** 2 / r2
+    s6 = s2 ** 3
+    # dU/dr2 = 4 eps (12 s12 - 6 s6) * (-1/r2) /2 ... use pair force magnitude / r2 form:
+    # F_ij = 24 eps (2 s12 - s6) / r2 * diff   (repulsive positive along diff)
+    fmag = 24 * eps * (2 * s6 ** 2 - s6) / r2                 # [B,N,N]
+    fmag = torch.where(r2 < rc ** 2, fmag, torch.zeros_like(fmag))
+    return (fmag[..., None] * diff).sum(2)                    # [B,N,2]

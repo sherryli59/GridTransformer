@@ -52,6 +52,59 @@ live.
    corrector accepts, rather than just an initial config — could reach into the tail. This is where "generator as
    proposal" would graduate from *warm start* to *transition kernel*.
 
+## 1b. Positions on the conceptual questions (grounded in the campaign's dead-ends)
+
+**(a) The generator only speeds burn-in — would a stronger generator push *deeper*?** Mostly no. The floor is a
+*corrector* property: uniform and flow seeds reach the *same* depth (they differ only in time-to-basin). A stronger
+generator lowers the *starting* energy → shorter burn-in, but does not change the corrector's floor. To make the
+generator itself reach the floor, it would have to emit near-equilibrium glass configs one-shot — and that is exactly
+the wall the campaign hit repeatedly: coupling-flow can't build hard-core exclusion from a uniform base, whole-config
+re-proposal gives ESS=1 (overlap wall), AR sees only half the cage. Smooth one-shot generators provably struggle to
+represent the sharp many-body correlations of a glass. **So: stronger generator ⇒ faster to the same floor, not a
+deeper floor. "Deeper" is bought by a better corrector, not a better proposal.**
+
+**(b) How to do position + species moves *jointly* for faster equilibration?** Today they're *sequential* (10 MALA
+steps, then a species block) — which zig-zags across the correlated defect (wrong species ⇔ slightly-wrong local
+geometry). The conceptual fix: a single MH move that resamples a particle's/cluster's **(x, s) jointly** from the flow's
+*local joint conditional* P(x_i,s_i | neighbourhood), energy-guarded for exactness. The joint flow already models this
+(shared trunk + position-velocity + species-denoiser heads, two-time). It must be MH not Gibbs — iterating the learned
+conditional alone collapses (overlap→1, g_BB explodes); the exact energy is the guard. This moves *along* the
+frustration direction instead of across it. Corollary: a flow-*informed local position proposal* (bigger, cage-aware
+steps than MALA) is the untested lever that could grind the tail faster — the same object, used as a transition kernel
+rather than a seed.
+
+**(c) Must sampling efficiency degrade with size under zero-shot transfer?** Split efficiency into *local* mixing time
+τ (per region) and *global* equilibration. For a genuinely local sampler at fixed (ρ,T) the *local* relaxation time is
+size-**invariant** — and we saw it: τ_U 14 (N=100) → 20 (N=256), a mild bump, not a blow-up. What grows with N is (i)
+the one-time **burn-in** and (ii) the slowest **collective/long-wavelength** mode (~L² hydrodynamics; for a glass, the
+slow structural tail). **So zero-shot transfer preserves local efficiency (this is the payoff of locality) but cannot
+buy size-invariant *global* equilibration.** The generator's head-start (a burn-in accelerator) therefore *necessarily*
+shrinks in relative value with N; the corrector's local mixing does not degrade. Efficiency degradation is not
+inevitable for the corrector — it is inevitable for the *proposal-as-seed* framing.
+
+**(d) EGNN flow vs AR transformer?** For *transfer*, EGNN flow, decisively. The AR transformer needs a canonical order
+(space-filling curve), and the campaign's firm result is that curve-conditioning is *curve-specific* → a cliff at
+unseen N; AR also sees only half the cage (residual floor). EGNN is equivariant (no order ⇒ no curve ⇒ size-invariant
+once aggregation is made local via the degree cap), sees the full cage, and *still* has exact likelihood (traceable
+divergence). AR's only edges are generation speed and one-shot log-q — the first is irrelevant for *local* corrector
+moves, the second is matched by EGNN's exact divergence. **The ordering requirement is disqualifying for zero-shot size
+transfer; EGNN is the transferable architecture.**
+
+**(e) Local cluster moves instead of global proposals?** This is the unifying answer to (a)–(d). Global proposals die
+at large N because ΔE is *extensive* → acceptance → 0 (the overlap wall). A **local cluster move** (resample a small
+spatial cluster's (x,s) from the flow's local conditional, accept on a *bounded* local ΔE) simultaneously fixes:
+acceptance (ΔE size-independent ⇒ O(1) acceptance at any N), transfer (local features only), and frustration (a cluster
+is exactly the correlated position+species defect). It graduates the generator from *warm-start seed* to *local
+transition kernel* — the object that can actually reach into the tail. Caveat from the campaign: on KA the cluster/swap
+lever is *marginal* (species geometry-slaved; equilibrium swap already wins), so KA validates exactness/safety but is a
+poor *showcase* — the mechanism's value needs a genuinely frustrated substrate (additive/polydisperse mixtures).
+
+**Unifying thread.** All five collapse to one move: **replace "global proposal + local corrector" with a learned
+*local cluster transition kernel*.** It is the single change that fixes acceptance (bounded ΔE), transfer (locality),
+and frustration (joint cluster (x,s)) at once — and it reframes the generator's job from seeding burn-in to *proposing
+moves*. The recurring caveat is substrate: KA's geometry-slaved species keep hiding the species/frustration levers, so
+the demonstration system may matter as much as the algorithm.
+
 ## 2. Done — with reflection
 
 - **Corrected N=256 analysis** (PT-convergence, decorrelation, g(r); MH arms dropped). → τ_U≈20 arm-independent,

@@ -123,6 +123,44 @@ the demonstration system may matter as much as the algorithm.
   (`5503d7d`,`a1b9731`,`70874d8`,`d701a05`,`12f1cc7`). *Reflection:* reproducible; the N=256 slow-grind and soft target
   mean the numbers are trustworthy but the verdict is not yet in.
 
+## 2c. Project arc — done + reflection (what the program has established)
+
+- **Built the Hilbert / space-filling-curve AR transformer for size-transferable Boltzmann sampling** (turn-tokens,
+  curve-rail, arc-repr). → *Reflection:* curve-conditioning is **curve-specific** → a hard cliff at unseen N. Clean
+  NEGATIVE that redirected the whole program away from curve-anchored AR.
+- **Built the geometry-invariant local-frame conditional.** → *Reflection:* removed the transfer cliff (the conditional
+  transfers, no cliff) — but exposed the next wall: teacher-forcing ≠ free-running, a residual per-step gap.
+- **Ran the exhaustive generation-gap diagnosis** (TF-vs-FR, per-index; variants deltas/dsperp/arcnorm/pair-aware/cell).
+  → *Reflection:* proved the gap is **residual** (the 50%-future-neighbour / half-cage wall), universal across
+  representations — so *no representation change can cross it*. Saved a long tail of chasing the wrong lever.
+- **Built + gated the exact coupling flow (uniform base)**, the principled invertible arm. → *Reflection:* FAILED the
+  in-dist gate — a smooth flow can't build hard-core exclusion from a uniform base (transport wall). Another clean
+  negative.
+- **Built the non-causal full-cage conditional as a diagnostic.** → *Reflection:* proved the floor *is* the half-cage
+  wall (g_BB 1.25→2.00 with the full cage), but iterating the learned conditional alone (Gibbs) collapses → full-cage
+  needs an **energy guard**. Pinpointed the mechanism and the constraint.
+- **Pivoted to the SMC + swap-augmented corrector; tested easy LJ vs hard KA glass.** → *Reflection:* on easy LJ the
+  flow adds ~nothing (SMC equilibrates in a few sweeps); on the hard glass the head-start is **durable** (~270–510
+  sweeps). Justified the glass pivot *and* set the honest value bar (head-start, not exactness-for-free).
+- **Built the KA glass substrate** (energy, scalable swap-MC, observables, PT reference). → *Reflection:* validated
+  foundation — but the PT reference is **under-converged** (found today), which quietly made every absolute-energy gap a
+  soft number.
+- **Built the joint species-position flow** (two-time conditioning, swap-CTMC + torus ODE, traceable-EGNN exact
+  divergence). → *Reflection:* exact, learns species-position correlation, denoiser-as-MH gave ~40× — but on KA species
+  are **geometry-slaved**, so the species lever is marginal. Right tool, wrong substrate to showcase it.
+- **Explored the cluster-move / MTM line** (AR proposal-A, MTM kernel, EGNN cluster flow). → *Reflection:* AR cluster
+  proposal NO-GO — the load-bearing ingredient is **EGNN equivariant message passing**; MTM validated only for near-eq
+  relaxation + heavy-tailed transport. Correctly narrowed the mover's true domain.
+- **IPL44 / eRSI reproduction + lever push.** → *Reflection:* AR strictly dominated by eRSI on the stiff r⁻¹² target;
+  IPL44 is *additive* → demixing (swap-unsafe), which proved the block mover's home is the **KA glass**, not IPL. A
+  negative that relocated the lever.
+- **KA train-small→sample-big** (degree cap, flow seeds, e2e pipeline). → *Reflection:* the **degree cap (knn=32) is THE
+  size-transfer fix** (geometry table 0.50→0.99 at N=256, no retrain) — the genuine locality crux resolved; the e2e loop
+  reaches PT-level *structure* at unseen N (1.83×). The clearest positive of the program.
+- **Pressure-tested the PT reference (this session).** → *Reflection:* energy verified correct three ways; reference
+  under-converged (true eq ≈−3.26). So the *transfer + structure* claims stand, but the *absolute-energy speedup* claims
+  rest on a soft target until a converged reference exists.
+
 ## 3. Resources needed to move forward
 
 - **Compute for a converged N=256 reference**: stronger swap-MC/PT (higher swap rate + longer equilibration) + a

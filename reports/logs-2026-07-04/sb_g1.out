@@ -1,0 +1,13 @@
+/home/sherryli/xsli/softwares/anaconda3/envs/lightning/lib/python3.11/site-packages/torch/nn/modules/transformer.py:379: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+sweep  10: cum acceptance 0.2109%  (270/128000)  abort 0.6%  mean_dU 811066732284130767218310687752192.00  mean_dlogq 5.63  147s
+sweep  20: cum acceptance 0.1914%  (490/256000)  abort 0.6%  mean_dU 430451159752433311226149451333632.00  mean_dlogq 5.61  294s
+sweep  30: cum acceptance 0.1833%  (704/384000)  abort 0.6%  mean_dU 694233497427287824380553062252544.00  mean_dlogq 5.57  441s
+sweep  40: cum acceptance 0.1705%  (873/512000)  abort 0.6%  mean_dU 520952932747867915626831786541056.00  mean_dlogq 5.58  587s
+sweep  50: cum acceptance 0.1675%  (1072/640000)  abort 0.6%  mean_dU 676084990557500603834288018817024.00  mean_dlogq 5.57  733s
+sweep  60: cum acceptance 0.1604%  (1232/768000)  abort 0.6%  mean_dU 611533502243205858235282129682432.00  mean_dlogq 5.56  879s
+sweep  70: cum acceptance 0.1576%  (1412/896000)  abort 0.6%  mean_dU 527052559004326148429284840046592.00  mean_dlogq 5.55  1026s
+sweep  80: cum acceptance 0.1526%  (1563/1024000)  abort 0.6%  mean_dU 513481509075258662817107697205248.00  mean_dlogq 5.54  1172s
+
+G1 RESULT: exchanges 1563/1024000 = 0.1526%  (baseline 0/102400 = 0.0000%)
+per-sweep exchange counts (last 20): [14, 18, 22, 19, 24, 19, 10, 17, 17, 20, 18, 17, 16, 19, 16, 16, 14, 11, 13, 11]

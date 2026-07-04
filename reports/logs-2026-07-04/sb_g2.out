@@ -1,0 +1,14 @@
+/home/sherryli/xsli/softwares/anaconda3/envs/lightning/lib/python3.11/site-packages/torch/nn/modules/transformer.py:379: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+BASELINE: U/N -3.2532  g_BB 2.31  g_AB 6.14  BB-contacts 17.86
+round  5: U/N -3.2765 (d -0.0233)  g_BB 2.35  g_AB 6.31  BB-contacts 17.45  SB-acc 0.156%  63s
+round 10: U/N -3.2753 (d -0.0221)  g_BB 2.33  g_AB 6.13  BB-contacts 18.22  SB-acc 0.172%  125s
+round 15: U/N -3.2762 (d -0.0230)  g_BB 2.36  g_AB 6.31  BB-contacts 17.39  SB-acc 0.094%  187s
+round 20: U/N -3.2714 (d -0.0182)  g_BB 2.37  g_AB 6.13  BB-contacts 17.33  SB-acc 0.234%  250s
+round 25: U/N -3.2591 (d -0.0059)  g_BB 2.41  g_AB 6.16  BB-contacts 17.55  SB-acc 0.234%  312s
+round 30: U/N -3.2735 (d -0.0203)  g_BB 2.32  g_AB 6.27  BB-contacts 17.45  SB-acc 0.281%  375s
+round 35: U/N -3.2797 (d -0.0265)  g_BB 2.28  g_AB 6.30  BB-contacts 17.42  SB-acc 0.156%  437s
+round 40: U/N -3.2705 (d -0.0173)  g_BB 2.22  g_AB 6.32  BB-contacts 17.70  SB-acc 0.250%  499s
+round 45: U/N -3.2705 (d -0.0173)  g_BB 2.27  g_AB 6.13  BB-contacts 17.61  SB-acc 0.234%  561s
+round 50: U/N -3.2730 (d -0.0198)  g_BB 2.33  g_AB 6.14  BB-contacts 17.48  SB-acc 0.234%  624s
+G2 COMPLETE

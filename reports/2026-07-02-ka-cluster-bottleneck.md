@@ -619,3 +619,16 @@ samples, start clash 30.2%, U/N ~1e14; rand: 84.6%, ~1e22). Full trajectories ar
 - None of the arms reaches equilibrium (-3.26) within 900s from any quench (deep glassy tail is the wall; the
   PT reference needed 12k swap-sweeps + tempering).
 Caveats: single run/arm; one origin per (arm,t_w); eq+swap tau@600s=223s is single-origin noise.
+
+## 2026-07-04: SWAP-AND-BREATHE — the equilibrium species channel is OPEN (G1+G2 PASS)
+
+Kernel ka_swap_breathe.py (241e422; spec 2026-07-04-swap-and-breathe-design.md; review: DB math verified incl.
+transposition-symmetry + abort-multiset argument; "every accepted move is an exchange" proven a theorem).
+- **G1: 1563/1,024,000 = 0.153% equilibrium species EXCHANGES vs measured baseline EXACTLY 0/102,400** for
+  position-preserving swaps. Steady per-sweep counts (11-24/12,800). mean_dlogq +5.5 (diffuse-but-calibrated);
+  huge mean_dU from clash-rejected candidates (the proposal's 32.7% clash tax). v1 single-try, uniform seeds —
+  I-MTM (M-candidates) and denoiser-guided seeding are staged multipliers.
+- **G2: stationarity + species observables HOLD** (50 rounds x [100 disp sweeps + 1 SB sweep], B=64 random
+  slice): U/N non-monotone band 0.021; g_BB 2.22-2.41 ~ data 2.30; g_AB 6.13-6.32; BB-contacts 17.3-18.2 flat
+  => no species-composition bias. SB acceptance steady 0.09-0.28%.
+Logs: reports/logs-2026-07-04/sb_g1.out, sb_g2.out. G3 (tau_s) next.

@@ -83,7 +83,13 @@ def single_site_mh(model, pos, s, site, sc, L, beta, gen=None):
 @torch.no_grad()
 def single_site_mh_sweep(model, pos, s, sc, L, geo, beta=2.0, n_moves=None, gen=None):
     """A pi_beta-invariant single-site heat-bath sweep (valid SMC mutation kernel). Re-slot-order per move so
-    slot `site` is the particle near scaffold slot `site` (its cage = scaffold neighbours). Species untouched."""
+    slot `site` is the particle near scaffold slot `site` (its cage = scaffold neighbours). Species untouched.
+
+    QUASI-ERGODICITY CAVEAT (measured): each move is pi-invariant (single-site DB exact; verified vs exact
+    Gaussian-displacement on a frozen cage to 3e-3), BUT the beta-conditioned proposal is SHARPER than the true
+    pi(x_i|cage) (negative training -logq), so as an INDEPENDENCE proposal it rarely suggests uphill moves ->
+    STANDALONE it over-cools (~-3.30 vs true -3.276 at N=100 beta=2). MIX with an ergodic kernel (displacement)
+    and it converges to the correct -3.276 AND fast. Never use standalone; always co-mutate (the SMC stack does)."""
     B, N, _ = pos.shape; dev = pos.device
     n_moves = N if n_moves is None else n_moves
     acc = []

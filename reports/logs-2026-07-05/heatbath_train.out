@@ -1,0 +1,24 @@
+/home/sherryli/xsli/softwares/anaconda3/envs/lightning/lib/python3.11/site-packages/torch/nn/modules/transformer.py:379: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+HEATBATH train @N=100, 20000 steps, 10 rungs, {'n_bins': 24, 'box': 3.0, 'n_ctx': 24, 'd_model': 192, 'n_head': 6, 'n_layer': 4, 'head': 'spline', 'num_flow_bins': 16, 'tail_bound': 3.5, 'pair_feats': True}, params 1.94M
+  step     0 -logq 2.499 (rung 6 beta 1.09) lr 1.5e-06 1s
+  step  1000 -logq 1.784 (rung 4 beta 1.33) lr 3.0e-04 75s
+  step  2000 -logq 1.521 (rung 1 beta 1.81) lr 3.0e-04 149s
+  step  3000 -logq 0.770 (rung 0 beta 2.00) lr 2.9e-04 223s
+  step  4000 -logq 0.582 (rung 8 beta 0.89) lr 2.8e-04 297s
+  step  5000 -logq -0.971 (rung 6 beta 1.09) lr 2.6e-04 371s
+  step  6000 -logq -0.255 (rung 6 beta 1.09) lr 2.4e-04 430s
+  step  7000 -logq -0.788 (rung 4 beta 1.33) lr 2.2e-04 467s
+  step  8000 -logq 1.468 (rung 2 beta 1.63) lr 2.0e-04 503s
+  step  9000 -logq -0.521 (rung 9 beta 0.80) lr 1.8e-04 539s
+  step 10000 -logq -0.964 (rung 1 beta 1.81) lr 1.5e-04 575s
+  step 11000 -logq -1.344 (rung 0 beta 2.00) lr 1.3e-04 612s
+  step 12000 -logq -1.658 (rung 4 beta 1.33) lr 1.1e-04 649s
+  step 13000 -logq -0.878 (rung 6 beta 1.09) lr 8.5e-05 687s
+  step 14000 -logq -1.695 (rung 3 beta 1.47) lr 6.4e-05 724s
+  step 15000 -logq -2.493 (rung 6 beta 1.09) lr 4.6e-05 760s
+  step 16000 -logq -1.712 (rung 6 beta 1.09) lr 3.0e-05 796s
+  step 17000 -logq -2.021 (rung 1 beta 1.81) lr 1.7e-05 833s
+  step 18000 -logq -0.783 (rung 9 beta 0.80) lr 7.6e-06 870s
+  step 19000 -logq -1.709 (rung 5 beta 1.20) lr 1.9e-06 906s
+saved ka_heatbath_N100.pt

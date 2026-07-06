@@ -1,0 +1,11 @@
+/home/sherryli/xsli/softwares/anaconda3/envs/lightning/lib/python3.11/site-packages/torch/nn/modules/transformer.py:379: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+[heatbath stationarity] start: <U>/N -3.2600  g_BB 2.359
+  sweep   1: <U>/N -3.2849  g_BB 2.370  accept 0.342  (2.1s/sweep)
+  sweep  10: <U>/N -3.3008  g_BB 2.532  accept 0.307  (2.0s/sweep)
+  sweep  20: <U>/N -3.3037  g_BB 2.396  accept 0.309  (2.0s/sweep)
+  sweep  30: <U>/N -3.3023  g_BB 2.399  accept 0.289  (2.0s/sweep)
+  sweep  40: <U>/N -3.3059  g_BB 2.479  accept 0.283  (2.0s/sweep)
+  sweep  50: <U>/N -3.3041  g_BB 2.378  accept 0.290  (2.0s/sweep)
+  sweep  60: <U>/N -3.3065  g_BB 2.369  accept 0.276  (2.0s/sweep)
+[heatbath stationarity] band 0.0216 drift -0.0465 -> DRIFTS

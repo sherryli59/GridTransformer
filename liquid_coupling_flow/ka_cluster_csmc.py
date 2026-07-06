@@ -135,6 +135,29 @@ def csmc_cluster_move(P, pos, s, cl, sc, L, beta=2.0, M=8, resample=False, ances
     return pos_new, s, info
 
 
+@torch.no_grad()
+def csmc_sweep(P, pos, s, sc, L, geo, k=7, beta=2.0, M=16, n_moves=None, resample=False, ancestor=False, gen=None):
+    """A pi_beta-invariant positional cSMC cluster sweep (valid SMC mutation kernel). Mirrors swap_breathe_sweep:
+    re-slot-order per move (positions change), apply csmc_cluster_move, scatter cluster positions back. Species
+    untouched. Returns (pos, s, info) with info['accept'] = mean fraction of moves that changed the cluster."""
+    B, N, _ = pos.shape; dev = pos.device
+    n_moves = N if n_moves is None else n_moves
+    moved = []
+    for _ in range(n_moves):
+        seed = int(torch.randint(0, N, (1,), device=dev, generator=gen).item())
+        order = geo._curve_order(pos, N)
+        pos_o = torch.gather(pos, 1, order[..., None].expand(-1, -1, 2))
+        s_o = torch.gather(s, 1, order)
+        cl = KC.cluster_slots(seed, sc, k, L)
+        pos_n, _, info = csmc_cluster_move(P, pos_o, s_o, cl, sc, L, beta=beta, M=M,
+                                           resample=resample, ancestor=ancestor, gen=gen)
+        idx = order[:, cl]
+        pos = pos.clone()
+        pos[torch.arange(B, device=dev)[:, None], idx] = pos_n[:, cl]
+        moved.append(1.0 - info["ref_survival"])
+    return pos, s, {"accept": sum(moved) / len(moved)}
+
+
 def _resample_step(placed_u, placed_lab, placed_sp, logW, B, M, is_ref, ancestor, gen):
     """Per-step multinomial resampling within each row's M particles, preserving the reference lineage
     (offspring slot 0 = reference). ancestor=True: PGAS draws the reference's ancestor from the weights too

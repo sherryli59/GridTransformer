@@ -15,7 +15,7 @@ from __future__ import annotations
 import os, sys, time, torch
 from liquid_coupling_flow import ka_cluster as KC
 from liquid_coupling_flow.ka_cluster_flow import slot_order, _scaffold, _load, ART
-from liquid_coupling_flow.ka_cluster_csmc import csmc_cluster_move
+from liquid_coupling_flow.ka_cluster_csmc import csmc_cluster_move, csmc_sweep
 from liquid_coupling_flow.ka_energy import ka_energy
 from liquid_coupling_flow.ka_observables import partial_gr
 
@@ -30,27 +30,6 @@ def _env(B=128, N=100):
     P = _load(torch.load(os.path.join(ART, "ka_cluster_flow_full_N100.pt"), map_location=DEV,
                          weights_only=False), DEV)
     return sc, L, geo, pos, s, P, N
-
-
-def csmc_sweep(P, pos, s, sc, L, geo, k=7, beta=2.0, M=16, n_moves=None, resample=False, ancestor=False, gen=None):
-    """Positional cSMC cluster sweep (mirrors swap_breathe_sweep): re-slot-order per move (positions change),
-    apply the move, scatter cluster positions back. Species untouched. Returns pos, s, mean-info."""
-    B, N, _ = pos.shape; dev = pos.device
-    n_moves = N if n_moves is None else n_moves
-    survs, moved = [], []
-    for _ in range(n_moves):
-        seed = int(torch.randint(0, N, (1,), device=dev, generator=gen).item())
-        order = geo._curve_order(pos, N)
-        pos_o = torch.gather(pos, 1, order[..., None].expand(-1, -1, 2))
-        s_o = torch.gather(s, 1, order)
-        cl = KC.cluster_slots(seed, sc, k, L)
-        pos_n, _, info = csmc_cluster_move(P, pos_o, s_o, cl, sc, L, beta=beta, M=M,
-                                           resample=resample, ancestor=ancestor, gen=gen)
-        idx = order[:, cl]
-        pos = pos.clone()
-        pos[torch.arange(B, device=dev)[:, None], idx] = pos_n[:, cl]
-        survs.append(info["ref_survival"]); moved.append(1.0 - info["ref_survival"])
-    return pos, s, {"ref_survival": sum(survs) / len(survs), "accept": sum(moved) / len(moved)}
 
 
 def _gbb_peak(pos, s, L):

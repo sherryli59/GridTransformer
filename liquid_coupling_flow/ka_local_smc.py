@@ -10,6 +10,7 @@ from liquid_coupling_flow import ka_cluster as KC
 from liquid_coupling_flow.ka_cluster_flow import _scaffold, _load, ART
 from liquid_coupling_flow.ka_cluster_mtm import cluster_energy
 from liquid_coupling_flow.ka_swap_breathe import swap_breathe_sweep
+from liquid_coupling_flow.ka_cluster_csmc import csmc_sweep
 from liquid_coupling_flow.ka_energy import ka_energy
 from liquid_coupling_flow.ka_mcmc_fast import _u_matrix
 
@@ -83,7 +84,8 @@ def _resample(pos, s, logw, gen=None):
 
 @torch.no_grad()
 def smc_run(arm, N=100, B=256, beta0=0.8, beta1=2.0, ess_target=0.6, max_rungs=40, n_mut=2, n_disp=40,
-            transport_seeds=None, seed=0, device="cuda", init="warm", n_init=400):
+            transport_seeds=None, seed=0, device="cuda", init="warm", n_init=400,
+            n_csmc=0, csmc_M=16, csmc_moves=None):
     """arm in {'arm0','arm1'}. Returns dict(history, final pos/s/logw); saves artifacts/smc_pilot_{arm}_N{N}.pt."""
     assert arm in ("arm0", "arm1")
     torch.manual_seed(seed)
@@ -124,6 +126,10 @@ def smc_run(arm, N=100, B=256, beta0=0.8, beta1=2.0, ess_target=0.6, max_rungs=4
             pos = _disp_sweeps(pos, s_can, L, kT=1.0 / beta, n=n_disp)
             pos, s, sb_info = swap_breathe_sweep(P, pos, s, sc, L, geo, beta=beta)
             pos, s = _canonicalize(pos, s); s_can = s[0]
+            # optional cSMC cluster mutation (pi_beta-invariant positional move; the Stage-A1 depth lever)
+            for _ in range(n_csmc):
+                pos, s, cs_info = csmc_sweep(P, pos, s, sc, L, geo, beta=beta, M=csmc_M, n_moves=csmc_moves)
+                pos, s = _canonicalize(pos, s); s_can = s[0]
         # --- ARM-1: stochastic transport toward the next target (positions only) ---
         if arm == "arm1":
             pos, logw = transport_sweep(P, pos, s, logw, sc, L, geo, beta, n_seeds=transport_seeds)

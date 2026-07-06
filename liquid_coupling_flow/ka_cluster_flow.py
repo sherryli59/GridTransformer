@@ -92,6 +92,43 @@ class ClusterProposal(nn.Module):
             return None
         return self._featpos(placed_u) + self.sp_emb(placed_sp) + self.role_emb.weight[1]
 
+    # ---- shared per-step API (sample / log_q / cSMC kernel all route through these) ----
+    def _ctx_at(self, i, placed_u, placed_sp, ctx_tok, q_scaf, ctx_u, ctx_sp, sp):
+        """Per-step context vector [B,d] for cluster slot i given already-placed cluster particles."""
+        placed_tok = self._placed_tok(placed_u, placed_sp)
+        ctx_tok_i = ctx_tok
+        if self.pair_feats:
+            ctx_tok_i = ctx_tok + self._pair_feat(ctx_u, ctx_sp, q_scaf[:, i], sp[:, i])
+            if placed_tok is not None:
+                placed_tok = placed_tok + self._pair_feat(placed_u, placed_sp, q_scaf[:, i], sp[:, i])
+        return self._step_ctx(q_scaf[:, i], i, ctx_tok_i, placed_tok)
+
+    def _head_sample(self, ctx):
+        """Draw one in-frame particle from the per-step head -> (u_i [B,2], logq_step [B])."""
+        B, dev = ctx.shape[0], ctx.device
+        if self.head_mode == "spline":
+            return self.flow.sample(ctx)                             # [B,2],[B] continuous exact
+        la = F.log_softmax(self.head_a(ctx), -1); ba = torch.multinomial(la.exp(), 1).squeeze(1)
+        lb = F.log_softmax(self.head_b(ctx + self.bin_a_emb(ba)), -1); bb = torch.multinomial(lb.exp(), 1).squeeze(1)
+        a = self._bin_center(ba) + (torch.rand(B, device=dev) - 0.5) * self.bin_w
+        b = self._bin_center(bb) + (torch.rand(B, device=dev) - 0.5) * self.bin_w
+        u_i = torch.stack([a, b], -1)
+        lstep = (la.gather(1, ba[:, None]).squeeze(1) + lb.gather(1, bb[:, None]).squeeze(1)
+                 - 2 * math.log(self.bin_w))
+        return u_i, lstep
+
+    def _head_logq(self, ctx, u_i):
+        """Score one in-frame particle u_i [B,2] under the per-step head -> logq_step [B]."""
+        if self.head_mode == "spline":
+            return self.flow.log_prob(ctx, u_i)
+        ba = self._bin(u_i[..., 0]); bb = self._bin(u_i[..., 1])                # [B] (-1 if out of box)
+        la = F.log_softmax(self.head_a(ctx), -1)
+        lb = F.log_softmax(self.head_b(ctx + self.bin_a_emb(ba.clamp(0))), -1)
+        ok = (ba >= 0) & (bb >= 0)
+        step = (la.gather(1, ba.clamp(0)[:, None]).squeeze(1) + lb.gather(1, bb.clamp(0)[:, None]).squeeze(1)
+                - 2 * math.log(self.bin_w))
+        return torch.where(ok, step, torch.full_like(step, -69.0))              # genuine zero outside box
+
     @torch.no_grad()
     def sample(self, pos, s, cluster_idx, sc, L):
         B = pos.shape[0]; k = cluster_idx.shape[0]; dev = pos.device
@@ -100,22 +137,9 @@ class ClusterProposal(nn.Module):
         placed_u = torch.zeros(B, 0, 2, device=dev); placed_sp = torch.zeros(B, 0, dtype=torch.long, device=dev)
         logq = torch.zeros(B, device=dev)
         for i in range(k):
-            ctx_tok_i, placed_tok = ctx_tok, self._placed_tok(placed_u, placed_sp)
-            if self.pair_feats:
-                ctx_tok_i = ctx_tok + self._pair_feat(ctx_u, ctx_sp, q_scaf[:, i], sp[:, i])
-                if placed_tok is not None:
-                    placed_tok = placed_tok + self._pair_feat(placed_u, placed_sp, q_scaf[:, i], sp[:, i])
-            ctx = self._step_ctx(q_scaf[:, i], i, ctx_tok_i, placed_tok)
-            if self.head_mode == "spline":
-                u_i, lstep = self.flow.sample(ctx)               # [B,2], [B] continuous exact
-                logq = logq + lstep
-            else:
-                la = F.log_softmax(self.head_a(ctx), -1); ba = torch.multinomial(la.exp(), 1).squeeze(1)
-                lb = F.log_softmax(self.head_b(ctx + self.bin_a_emb(ba)), -1); bb = torch.multinomial(lb.exp(), 1).squeeze(1)
-                a = self._bin_center(ba) + (torch.rand(B, device=dev) - 0.5) * self.bin_w
-                b = self._bin_center(bb) + (torch.rand(B, device=dev) - 0.5) * self.bin_w
-                u_i = torch.stack([a, b], -1)
-                logq = logq + la.gather(1, ba[:, None]).squeeze(1) + lb.gather(1, bb[:, None]).squeeze(1) - 2 * math.log(self.bin_w)
+            ctx = self._ctx_at(i, placed_u, placed_sp, ctx_tok, q_scaf, ctx_u, ctx_sp, sp)
+            u_i, lstep = self._head_sample(ctx)
+            logq = logq + lstep
             placed_u = torch.cat([placed_u, u_i[:, None]], 1)
             placed_sp = torch.cat([placed_sp, sp[:, i:i + 1]], 1)
         xC_lab = KC.from_frame(placed_u, origin, R, L)                               # [B,k,2]
@@ -126,26 +150,11 @@ class ClusterProposal(nn.Module):
         origin, R, ctx_tok, q_scaf, ctx_u, ctx_sp = self._ctx_tokens(pos, s, cluster_idx, sc, L)
         sp = s[:, cluster_idx]
         u = KC.to_frame(xC_query, origin, R, L)                                      # [B,k,2] query in-frame
-        if self.head_mode != "spline":
-            ba_all = self._bin(u[..., 0]); bb_all = self._bin(u[..., 1])             # [B,k] (-1 if out of box)
         placed_u = torch.zeros(B, 0, 2, device=dev); placed_sp = torch.zeros(B, 0, dtype=torch.long, device=dev)
         logq = torch.zeros(B, device=dev)
         for i in range(k):
-            ctx_tok_i, placed_tok = ctx_tok, self._placed_tok(placed_u, placed_sp)
-            if self.pair_feats:
-                ctx_tok_i = ctx_tok + self._pair_feat(ctx_u, ctx_sp, q_scaf[:, i], sp[:, i])
-                if placed_tok is not None:
-                    placed_tok = placed_tok + self._pair_feat(placed_u, placed_sp, q_scaf[:, i], sp[:, i])
-            ctx = self._step_ctx(q_scaf[:, i], i, ctx_tok_i, placed_tok)
-            if self.head_mode == "spline":
-                logq = logq + self.flow.log_prob(ctx, u[:, i])
-            else:
-                la = F.log_softmax(self.head_a(ctx), -1); ba = ba_all[:, i]
-                lb = F.log_softmax(self.head_b(ctx + self.bin_a_emb(ba.clamp(0))), -1); bb = bb_all[:, i]
-                ok = (ba >= 0) & (bb >= 0)
-                step = (la.gather(1, ba.clamp(0)[:, None]).squeeze(1) + lb.gather(1, bb.clamp(0)[:, None]).squeeze(1)
-                        - 2 * math.log(self.bin_w))
-                logq = logq + torch.where(ok, step, torch.full_like(step, -69.0))    # genuine zero outside box
+            ctx = self._ctx_at(i, placed_u, placed_sp, ctx_tok, q_scaf, ctx_u, ctx_sp, sp)
+            logq = logq + self._head_logq(ctx, u[:, i])
             placed_u = torch.cat([placed_u, u[:, i][:, None]], 1)
             placed_sp = torch.cat([placed_sp, sp[:, i:i + 1]], 1)
         return logq

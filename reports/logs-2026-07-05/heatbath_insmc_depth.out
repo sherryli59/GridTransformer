@@ -1,0 +1,64 @@
+=== in-SMC depth: baseline vs +heatbath (n_heatbath=1), B=256 ===
+/home/sherryli/xsli/softwares/anaconda3/envs/lightning/lib/python3.11/site-packages/torch/nn/modules/transformer.py:379: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+init(warm): 400 disp sweeps @ beta0 -> U/N -2.0685 (T=1.25 liquid)
+rung   0: beta 0.8512  ESS   153.6/256  U/N -2.1063  sb 0.07%  41s
+rung   1: beta 0.8513  ESS   153.4/256  U/N -2.1950  sb 0.04%  82s
+rung   2: beta 0.9137  ESS   153.6/256  U/N -2.2488  sb 0.06%  124s
+rung   3: beta 0.9138  ESS   153.5/256  U/N -2.3216  sb 0.08%  165s
+rung   4: beta 0.9861  ESS   153.6/256  U/N -2.3863  sb 0.08%  206s
+rung   5: beta 0.9862  ESS   153.5/256  U/N -2.4553  sb 0.11%  248s
+rung   6: beta 1.0590  ESS   153.6/256  U/N -2.5046  sb 0.12%  289s
+rung   7: beta 1.0591  ESS   153.5/256  U/N -2.5594  sb 0.11%  330s
+rung   8: beta 1.1260  ESS   153.6/256  U/N -2.5850  sb 0.12%  372s
+rung   9: beta 1.1261  ESS   153.5/256  U/N -2.6322  sb 0.12%  413s
+rung  10: beta 1.2014  ESS   153.6/256  U/N -2.6688  sb 0.16%  454s
+rung  11: beta 1.2015  ESS   153.5/256  U/N -2.7151  sb 0.17%  495s
+rung  12: beta 1.2857  ESS   153.6/256  U/N -2.7484  sb 0.17%  536s
+rung  13: beta 1.2858  ESS   153.5/256  U/N -2.7904  sb 0.14%  578s
+rung  14: beta 1.3770  ESS   153.6/256  U/N -2.8291  sb 0.16%  619s
+rung  15: beta 1.3771  ESS   153.6/256  U/N -2.8673  sb 0.20%  661s
+rung  16: beta 1.4677  ESS   153.6/256  U/N -2.9001  sb 0.22%  702s
+rung  17: beta 1.4678  ESS   153.6/256  U/N -2.9338  sb 0.12%  743s
+rung  18: beta 1.5649  ESS   153.6/256  U/N -2.9491  sb 0.15%  784s
+rung  19: beta 1.6090  ESS   153.6/256  U/N -2.9896  sb 0.17%  825s
+rung  20: beta 1.6091  ESS   153.6/256  U/N -3.0071  sb 0.17%  867s
+rung  21: beta 1.7221  ESS   153.6/256  U/N -3.0206  sb 0.19%  908s
+rung  22: beta 1.7222  ESS   153.6/256  U/N -3.0559  sb 0.12%  949s
+rung  23: beta 1.8571  ESS   153.6/256  U/N -3.0643  sb 0.16%  991s
+rung  24: beta 1.8773  ESS   153.6/256  U/N -3.1053  sb 0.15%  1032s
+rung  25: beta 1.8774  ESS   153.6/256  U/N -3.1059  sb 0.12%  1073s
+rung  26: beta 2.0000  ESS   188.3/256  U/N -3.1007  sb 0.16%  1114s
+saved smc_pilot_arm0_N100.pt  wall 1197s
+BASELINE   final U/N -3.1007  1197s
+init(warm): 400 disp sweeps @ beta0 -> U/N -2.0680 (T=1.25 liquid)
+rung   0: beta 0.8457  ESS   153.6/256  U/N -2.1356  sb 0.06%  46s
+rung   1: beta 0.8458  ESS   153.4/256  U/N -2.2272  sb 0.07%  92s
+rung   2: beta 0.9039  ESS   153.6/256  U/N -2.2474  sb 0.09%  138s
+rung   3: beta 0.9040  ESS   153.5/256  U/N -2.3359  sb 0.11%  184s
+rung   4: beta 0.9519  ESS   153.6/256  U/N -2.4035  sb 0.09%  230s
+rung   5: beta 0.9520  ESS   153.5/256  U/N -2.4551  sb 0.09%  276s
+rung   6: beta 1.0130  ESS   153.6/256  U/N -2.4901  sb 0.13%  322s
+rung   7: beta 1.0131  ESS   153.5/256  U/N -2.5453  sb 0.07%  368s
+rung   8: beta 1.0854  ESS   153.6/256  U/N -2.5846  sb 0.14%  414s
+rung   9: beta 1.0855  ESS   153.5/256  U/N -2.6492  sb 0.11%  460s
+rung  10: beta 1.1586  ESS   153.6/256  U/N -2.6983  sb 0.14%  506s
+rung  11: beta 1.1587  ESS   153.5/256  U/N -2.7394  sb 0.11%  552s
+rung  12: beta 1.2353  ESS   153.6/256  U/N -2.7777  sb 0.22%  598s
+rung  13: beta 1.2354  ESS   153.6/256  U/N -2.8223  sb 0.19%  644s
+rung  14: beta 1.3336  ESS   153.6/256  U/N -2.8398  sb 0.24%  690s
+rung  15: beta 1.3337  ESS   153.6/256  U/N -2.8948  sb 0.21%  736s
+rung  16: beta 1.4326  ESS   153.6/256  U/N -2.8998  sb 0.18%  782s
+rung  17: beta 1.4327  ESS   153.6/256  U/N -2.9571  sb 0.28%  828s
+rung  18: beta 1.5377  ESS   153.6/256  U/N -2.9772  sb 0.21%  874s
+rung  19: beta 1.5378  ESS   153.6/256  U/N -3.0041  sb 0.24%  920s
+rung  20: beta 1.6790  ESS   153.6/256  U/N -3.0253  sb 0.20%  966s
+rung  21: beta 1.6791  ESS   153.6/256  U/N -3.0651  sb 0.17%  1012s
+rung  22: beta 1.8097  ESS   153.6/256  U/N -3.0708  sb 0.18%  1058s
+rung  23: beta 1.8098  ESS   153.6/256  U/N -3.1195  sb 0.20%  1104s
+rung  24: beta 1.9526  ESS   153.6/256  U/N -3.1217  sb 0.24%  1150s
+rung  25: beta 1.9527  ESS   153.6/256  U/N -3.1529  sb 0.21%  1196s
+rung  26: beta 2.0000  ESS   240.2/256  U/N -3.1690  sb 0.19%  1242s
+saved smc_pilot_arm0_N100.pt  wall 1324s
++heatbath  final U/N -3.1690  1324s
+VERDICT: depth delta -0.0683 (neg=deeper) at 1.11x wall

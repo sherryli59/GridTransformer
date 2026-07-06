@@ -62,3 +62,38 @@ Configs (`pt_ladder_N256.pt`, 80k) still usable as A2 N=256 conditioning data. C
 
 ### RUNNING
 - GA1 (utility vs MTM at β=2) — rerun after two generator/arity fixes.
+
+## Stage A2 — beta-conditioned FULL-CAGE single-site heat-bath — THE DEPTH LEVER
+
+Kernel `ka_heatbath.HeatBathModel` = `ClusterProposal` at k=1 + beta-FiLM. Single site => sees the FULL frozen
+cage (non-causal, the sharp regime). Frozen-cage exactness INHERITED from `frame_ctx_slots([site])` config-
+independence (same property that makes the cluster move exact). 5/5 TDD incl the frozen-cage DB invariant.
+Trained beta-conditioned MLE on all Stage-0 rungs -> SHARP conditional (35% acceptance, NEGATIVE -logq = peaked,
+the full-cage sharpness that [[full-cage-lever-needs-energy]] predicted).
+
+### Exactness — subtle, resolved by 5 concrete tests (never-refute discipline)
+Standalone stationarity DRIFTED BELOW eq (-3.30). Investigated rather than trusted/dismissed:
+- single-site move vs exact grid Boltzmann: -0.015 (~grid noise)
+- single-site move vs exact Gaussian-MH, frozen cage: **-0.003 => move is EXACT**
+- exact displacement seeded from heat-bath -3.30 config: RELAXES UP to -3.276 (=> -3.30 over-cooled)
+- **heat-bath MIXED with displacement: converges to -3.276** (the true eq; a biased move would settle between)
+- ka_pair_row == ka_energy to 3e-5 (energy convention clean)
+VERDICT: the move is pi-invariant (DB-exact), but the beta-conditioned proposal is SHARPER than pi(x_i|cage)
+(neg -logq), so as an INDEPENDENCE proposal it rarely proposes uphill -> STANDALONE it over-cools (quasi-non-
+ergodic). MIX with an ergodic kernel (displacement) => correct AND fast. Never standalone; the SMC stack always
+co-mutates (documented in single_site_mh_sweep). Bonus: pins the TRUE N=100 beta=2 eq = **-3.276** (exact disp
+converges from both -3.264 above and -3.30 below); PT ref -3.264 mildly under-converged.
+
+### GATE: in-SMC depth (primary criterion) — **POSITIVE. The depth lever A1 wasn't.**
+- baseline (disp+SB): -3.1007 / 1197s
+- **+heat-bath (disp+SB+heat-bath): -3.1690 / 1324s**
+- **delta -0.068 DEEPER at 1.11x wall** (near matched).
+- vs A1 cSMC: -0.007 deeper at 4.6x wall (neutral). A2 is 10x the depth gain at 1/4 the cost premium.
+- Closes ~39% of the remaining gap ((-3.169+3.101)/(-3.276+3.101)); single-site heat-bath is CHEAP (10x < cSMC)
+  because no M-ensemble, so 1 sweep/mutation-round barely adds wall. STILL 0.107 above true -3.276: the deep
+  glassy tail remains (Stage-B collective moves / more heat-bath budget = the next knob), but this is the FIRST
+  real, cost-effective depth improvement in the campaign.
+
+MECHANISM (why A2 works where A1 failed): the barrier is local-relaxation-limited, and the full cage (all
+neighbours at once) is what a single-site conditional needs to place precisely; the AR cluster move saw only a
+half-built cage. A1's clean negative localized the barrier; A2 supplies the missing cage.

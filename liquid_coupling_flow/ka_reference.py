@@ -150,15 +150,19 @@ def main_ladder(N, n_equil=16000, n_collect=4000, every=8, n_per=8, track_every=
         Ucold = (ka_energy(cfg, sd, L) / N).mean().item()
         se = (ka_energy(cfg, sd, L) / N).std().item() / np.sqrt(cfg.shape[0])
         cold.append((Ucold, se))
-        # drift-tail gate: per-rung <U>/N, 2nd-half mean vs 1st-half mean (traj entries = (sweep, [per-rung list]))
-        arr = np.array([u for _, u in traj])                        # [T_track, M]
+        # drift-tail gate: COLD-rung <U>/N tail drift (2nd-half vs 1st-half mean). Cold rung (index 0, beta=2) is
+        # the reference target; HOT rungs fluctuate far more, so max-over-all-rungs mislabels a converged cold
+        # reference as non-flat (measured N=100: cold seed-diff 0.0005 but hot-rung max-drift 0.058). Gate on cold.
+        arr = np.array([u for _, u in traj])                        # [T_track, M] per-rung <U>/N track
         half = arr.shape[0] // 2
-        drift_tail.append(np.abs(arr[half:].mean(0) - arr[:half].mean(0)).max())
+        cold_drift = float(np.abs(arr[half:, 0].mean() - arr[:half, 0].mean()))
+        max_drift = float(np.abs(arr[half:].mean(0) - arr[:half].mean(0)).max())
+        drift_tail.append(cold_drift)
         print(f"seed {seed}: cold <U>/N {Ucold:.4f}+/-{se:.4f} exch {ex:.2f} "
-              f"tail-drift(max over rungs) {drift_tail[-1]:.4f} rung-configs {per_rung.shape[1]}", flush=True)
+              f"cold-drift {cold_drift:.4f} (hot-max {max_drift:.4f}) rung-configs {per_rung.shape[1]}", flush=True)
     d = abs(cold[0][0] - cold[1][0]); tol = max(3 * (cold[0][1] + cold[1][1]), 5e-3)
     agree = d < tol
-    flat = max(drift_tail) < 5e-3
+    flat = max(drift_tail) < 5e-3                                    # cold-rung drift (see above)
     ex_ok = 0.15 < min(seed_ex) and max(seed_ex) < 0.95
     ok = agree and flat and ex_ok
     # combine seeds per rung

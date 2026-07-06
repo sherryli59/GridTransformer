@@ -97,3 +97,19 @@ converges from both -3.264 above and -3.30 below); PT ref -3.264 mildly under-co
 MECHANISM (why A2 works where A1 failed): the barrier is local-relaxation-limited, and the full cage (all
 neighbours at once) is what a single-site conditional needs to place precisely; the AR cluster move saw only a
 half-built cage. A1's clean negative localized the barrier; A2 supplies the missing cage.
+
+### GA2 supporting gates
+- Acceptance 33% @ beta=2 (2.7s/sweep) — 110x the single-shot cluster proposal (0.3%), 10x cSMC (3.5%).
+- **Amortization: accept 0.318-0.366 FLAT across all 10 beta-rungs (2.0->0.8), range 0.048 << 0.15** — one
+  beta-conditioned model serves ALL temperatures. The anti-init-dependence property swap-breathe LACKED
+  ([[swap-breathe-kernel]] dropped 4-5x off-equilibrium). A2 is temperature-robust.
+- (accept gate's displacement side-metric was invalid — per-row species not canonicalized before _disp_sweeps,
+  melted to -1.46; fixed in ka_heatbath_gate.accept. Heat-bath number unaffected.)
+
+## Campaign verdict (kernels-two-laws)
+A1 (cluster cSMC): EXACT + 10x acceptance, but NOT a depth lever (glassy barrier is not cluster-acceptance-
+limited) — a clean negative that LOCALIZED the barrier to "half-cage". A2 (full-cage single-site heat-bath):
+supplies the full cage, and is the FIRST learned kernel to give a real cost-effective depth gain in SMC
+(-0.068 @ 1.11x wall, ~39% of the remaining gap), exact (mixed), and amortized across temperatures. The learned
+generator finally earns its keep. Open: the deep glassy tail (0.107 remaining) -> Stage B collective moves /
+heat-bath budget; N=256 transfer -> needs the longer PT reference.

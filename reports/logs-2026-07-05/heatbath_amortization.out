@@ -1,0 +1,13 @@
+/home/sherryli/xsli/softwares/anaconda3/envs/lightning/lib/python3.11/site-packages/torch/nn/modules/transformer.py:379: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+  beta 2.00: accept 0.318
+  beta 1.81: accept 0.342
+  beta 1.63: accept 0.333
+  beta 1.47: accept 0.340
+  beta 1.33: accept 0.354
+  beta 1.20: accept 0.362
+  beta 1.09: accept 0.366
+  beta 0.98: accept 0.352
+  beta 0.89: accept 0.356
+  beta 0.80: accept 0.360
+GA2 amortization: accept range 0.318-0.366 over rungs -> FLAT (amortizes)

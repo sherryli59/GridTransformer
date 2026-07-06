@@ -62,8 +62,9 @@ def stationarity(T=60, B=128, beta=2.0):
 
 def accept(T=10, B=128, beta=2.0):
     """Acceptance x mean-jump vs plain displacement (matched sweeps). Jump = mean |x_new - x_old| of the site."""
-    from liquid_coupling_flow.ka_local_smc import _disp_sweeps
+    from liquid_coupling_flow.ka_local_smc import _disp_sweeps, _canonicalize
     sc, L, geo, pos, s, HB, N = _env(B=B)
+    pos, s = _canonicalize(pos, s)                              # shared species ordering so _disp_sweeps is valid
     gen = torch.Generator(device=DEV).manual_seed(0)
     p0 = pos.clone(); t0 = time.time(); accs = []
     for _ in range(T):

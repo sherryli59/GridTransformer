@@ -74,17 +74,17 @@ def ga1(M=16, T=10, B=128, beta=2.0):
         pc, _, ic = csmc_sweep(P, pc, s, sc, L, geo, M=M, beta=beta, gen=gen)
     tc = (time.time() - t0) / T
     uc = (ka_energy(pc, s, L) / N).mean().item()
-    # MTM (mtm_sweep uses torch.randperm on CPU -> pass gen=None; utility comparison needs no fixed MTM seed)
-    pm = pos.clone(); t0 = time.time()
+    # MTM (mtm_sweep uses torch.randperm on CPU -> pass gen=None; returns (pos, mean move_prob))
+    pm = pos.clone(); t0 = time.time(); mprob = float("nan")
     for _ in range(T):
-        pm, sm, im = mtm_sweep(P, pm, s, sc, L, M=M, beta=beta, k=7, gen=None)
+        pm, mprob = mtm_sweep(P, pm, s, sc, L, M=M, beta=beta, k=7, gen=None)
     tm = (time.time() - t0) / T
     um = (ka_energy(pm, s, L) / N).mean().item()
     print(f"GA1 (M={M}, {T} sweeps from reference, beta={beta}):", flush=True)
     print(f"  cSMC : accept {ic['accept']:.3f}  <U>/N {uc:.4f}  {tc:.1f}s/sweep", flush=True)
-    print(f"  MTM  : accept {im.get('acceptance', float('nan')):.3f}  <U>/N {um:.4f}  {tm:.1f}s/sweep", flush=True)
+    print(f"  MTM  : move_prob {mprob:.3f}  <U>/N {um:.4f}  {tm:.1f}s/sweep", flush=True)
     torch.save({"csmc": {"accept": ic["accept"], "U": uc, "t": tc},
-                "mtm": {"accept": im.get("acceptance"), "U": um, "t": tm}, "M": M},
+                "mtm": {"move_prob": mprob, "U": um, "t": tm}, "M": M},
                os.path.join(ART, f"csmc_ga1_M{M}.pt"))
 
 

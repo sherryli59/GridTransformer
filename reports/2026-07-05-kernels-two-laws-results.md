@@ -36,7 +36,29 @@ cSMC accept **3.5% (M=16)** vs ARM-FULL single-shot MH **0.3%** — ~10× from t
 weighting, same frozen checkpoint. Converts "diffuse-but-calibrated" into accepted moves (LAW 1: filter, never
 force; the reference always anchors selection ⇒ cannot poison like P2's forced IS-transport).
 
+### GATE: in-SMC depth (primary criterion) — **cSMC is NOT a depth lever (clean negative, well-attributed)**
+- +cSMC (n_csmc=1): −3.136 / 7899s. Baseline (n_disp=40): −3.101 / 1812s. cSMC deeper per-rung BUT 4.36× wall.
+- Crucially, −3.136 = the SAME −3.137 floor P1 hit with plain displacement+SB. cSMC does NOT push past it.
+- **Matched-wall control (the decider):** displacement is CHEAP — scaling n_disp 40→176 (4.4×) barely moved
+  wall (1725s vs 1812s; the +cSMC 4.36× cost was ALL the 60s cSMC sweeps). That cheap 4.4×-displacement
+  baseline reaches **−3.129 in 1725s** — within 0.007 of +cSMC's −3.136 at **4.6× less wall.** So cheap
+  displacement captures ~all the accessible depth; cSMC's exactness + 10× acceptance buy 0.007/particle for
+  4.6× the time. **The −3.13 → −3.264 gap is the glassy-tail barrier (PT-class), NOT mutation-acceptance
+  limited** — a better local cluster move cannot close it. Redirects the depth lever to A2 (full-cage
+  single-site, sees more of the cage) / Stage B (collective moves).
+
+### A1 net verdict
+EXACT by construction (stationarity PASS, PT cross-validated) + breaks the single-shot acceptance wall 10×
+(0.3→3.5%) — the scoped deliverables. But NOT a depth lever: dominated by cheap displacement in the SMC stack.
+Value: a validated exact high-acceptance cluster kernel (useful wherever cluster-scale exact moves are wanted);
+the depth question is answered negative and points to A2.
+
+## Stage 0 — N=256: DONE but UNDER-CONVERGED
+Cold −3.2099 (seed0) / −3.2090 (seed1), seed-diff 0.0008, exch 0.28. BUT vs N=100 −3.264 the intensive energy
+is 0.055/particle too SHALLOW — finite-size direction WRONG ⇒ still under-equilibrated at 16k sweeps (bigger
+system, slower); the tight seed agreement is false confidence (both under-equilibrate identically). `finite_size_check`
+(N=100 vs N=256) is the honest flag. N=256 sharp transfer gaps stay directional until a much longer run.
+Configs (`pt_ladder_N256.pt`, 80k) still usable as A2 N=256 conditioning data. Consistent with [[ka-reference-underconverged]].
+
 ### RUNNING
-- GA1 (utility vs MTM at β=2).
-- in-SMC depth (primary criterion): local-SMC baseline vs +cSMC mutation, matched schedule.
-- Stage-0 N=256 ladder.
+- GA1 (utility vs MTM at β=2) — rerun after two generator/arity fixes.

@@ -1,0 +1,35 @@
+=== matched-wall baseline: n_csmc=0, n_disp=176 (~4.4x mutation budget), B=256 ===
+/home/sherryli/xsli/softwares/anaconda3/envs/lightning/lib/python3.11/site-packages/torch/nn/modules/transformer.py:379: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+init(warm): 400 disp sweeps @ beta0 -> U/N -2.0685 (T=1.25 liquid)
+rung   0: beta 0.8499  ESS   153.6/256  U/N -2.1695  sb 0.06%  104s
+rung   1: beta 0.8500  ESS   153.5/256  U/N -2.2742  sb 0.09%  208s
+rung   2: beta 0.9084  ESS   153.6/256  U/N -2.3211  sb 0.06%  312s
+rung   3: beta 0.9085  ESS   153.6/256  U/N -2.4173  sb 0.12%  417s
+rung   4: beta 0.9751  ESS   153.6/256  U/N -2.4466  sb 0.10%  521s
+rung   5: beta 0.9752  ESS   153.5/256  U/N -2.5378  sb 0.11%  626s
+rung   6: beta 1.0442  ESS   153.6/256  U/N -2.5421  sb 0.14%  730s
+rung   7: beta 1.0443  ESS   153.6/256  U/N -2.6098  sb 0.15%  819s
+rung   8: beta 1.1152  ESS   153.6/256  U/N -2.6248  sb 0.13%  860s
+rung   9: beta 1.1153  ESS   153.6/256  U/N -2.6827  sb 0.12%  901s
+rung  10: beta 1.1769  ESS   153.6/256  U/N -2.7015  sb 0.15%  943s
+rung  11: beta 1.1770  ESS   153.5/256  U/N -2.7391  sb 0.11%  984s
+rung  12: beta 1.2748  ESS   153.6/256  U/N -2.7733  sb 0.17%  1025s
+rung  13: beta 1.2749  ESS   153.6/256  U/N -2.8199  sb 0.15%  1066s
+rung  14: beta 1.3595  ESS   153.6/256  U/N -2.8457  sb 0.12%  1107s
+rung  15: beta 1.3596  ESS   153.6/256  U/N -2.8761  sb 0.17%  1149s
+rung  16: beta 1.4575  ESS   153.6/256  U/N -2.8905  sb 0.16%  1190s
+rung  17: beta 1.4576  ESS   153.6/256  U/N -2.9392  sb 0.13%  1231s
+rung  18: beta 1.5524  ESS   153.6/256  U/N -2.9380  sb 0.15%  1272s
+rung  19: beta 1.5757  ESS   153.6/256  U/N -2.9932  sb 0.14%  1313s
+rung  20: beta 1.5758  ESS   153.6/256  U/N -2.9920  sb 0.18%  1354s
+rung  21: beta 1.6844  ESS   153.6/256  U/N -2.9963  sb 0.14%  1395s
+rung  22: beta 1.6845  ESS   153.6/256  U/N -3.0429  sb 0.12%  1437s
+rung  23: beta 1.8012  ESS   153.6/256  U/N -3.0327  sb 0.18%  1478s
+rung  24: beta 1.8013  ESS   153.6/256  U/N -3.0852  sb 0.12%  1519s
+rung  25: beta 1.9255  ESS   153.6/256  U/N -3.0893  sb 0.17%  1560s
+rung  26: beta 1.9256  ESS   153.6/256  U/N -3.1229  sb 0.14%  1601s
+rung  27: beta 2.0000  ESS   210.7/256  U/N -3.1290  sb 0.12%  1643s
+saved smc_pilot_arm0_N100.pt  wall 1725s
+MATCHED-WALL baseline final U/N -3.1290  1725s  rungs 28
+  vs +cSMC (prior) -3.1362  ->  delta -0.0072 (neg = cSMC deeper at matched wall = real lever)

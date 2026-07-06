@@ -1,0 +1,4 @@
+seed 0: cold <U>/N -3.2099+/-0.0006 exch 0.28 tail-drift(max over rungs) 0.0740 rung-configs 4000
+seed 1: cold <U>/N -3.2090+/-0.0006 exch 0.28 tail-drift(max over rungs) 0.0727 rung-configs 4000
+LADDER N=256: agree=True(|d|=0.0008/tol0.0050) flat=False(drift0.0740) exch_in_band=True(0.28-0.28) -> NOT CONVERGED
+saved ladder (80000 configs over 10 rungs, ~8000/rung) -> /mnt/ssd/GridTransformer/liquid_coupling_flow/artifacts/pt_ladder_N256.pt

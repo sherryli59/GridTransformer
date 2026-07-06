@@ -85,13 +85,17 @@ def _resample(pos, s, logw, gen=None):
 @torch.no_grad()
 def smc_run(arm, N=100, B=256, beta0=0.8, beta1=2.0, ess_target=0.6, max_rungs=40, n_mut=2, n_disp=40,
             transport_seeds=None, seed=0, device="cuda", init="warm", n_init=400,
-            n_csmc=0, csmc_M=16, csmc_moves=None):
+            n_csmc=0, csmc_M=16, csmc_moves=None, n_heatbath=0, hb_ckpt="ka_heatbath_N100.pt", hb_moves=None):
     """arm in {'arm0','arm1'}. Returns dict(history, final pos/s/logw); saves artifacts/smc_pilot_{arm}_N{N}.pt."""
     assert arm in ("arm0", "arm1")
     torch.manual_seed(seed)
     sc, L, geo = _scaffold(N, device)
     P = _load(torch.load(os.path.join(ART, "ka_cluster_flow_full_N100.pt"), map_location=device,
                          weights_only=False), device)
+    HB = None
+    if n_heatbath:
+        from liquid_coupling_flow.ka_heatbath import _load as _hb_load, single_site_mh_sweep
+        HB = _hb_load(torch.load(os.path.join(ART, hb_ckpt), map_location=device, weights_only=False), device)
     # --- flow seeds with EXACT initial weights ---
     from liquid_coupling_flow.ka_flowhead import KAFlowHeadModel
     ck = torch.load(os.path.join(ART, "ka_flowhead_N100_k8_scratch.pt"), map_location=device, weights_only=False)
@@ -129,6 +133,10 @@ def smc_run(arm, N=100, B=256, beta0=0.8, beta1=2.0, ess_target=0.6, max_rungs=4
             # optional cSMC cluster mutation (pi_beta-invariant positional move; the Stage-A1 depth lever)
             for _ in range(n_csmc):
                 pos, s, cs_info = csmc_sweep(P, pos, s, sc, L, geo, beta=beta, M=csmc_M, n_moves=csmc_moves)
+                pos, s = _canonicalize(pos, s); s_can = s[0]
+            # optional Stage-A2 full-cage single-site heat-bath mutation (pi_beta-invariant; the depth candidate)
+            for _ in range(n_heatbath):
+                pos, hb_info = single_site_mh_sweep(HB, pos, s, sc, L, geo, beta=beta, n_moves=hb_moves)
                 pos, s = _canonicalize(pos, s); s_can = s[0]
         # --- ARM-1: stochastic transport toward the next target (positions only) ---
         if arm == "arm1":

@@ -74,10 +74,10 @@ def ga1(M=16, T=10, B=128, beta=2.0):
         pc, _, ic = csmc_sweep(P, pc, s, sc, L, geo, M=M, beta=beta, gen=gen)
     tc = (time.time() - t0) / T
     uc = (ka_energy(pc, s, L) / N).mean().item()
-    # MTM
-    pm = pos.clone(); gen2 = torch.Generator(device=DEV).manual_seed(0); t0 = time.time()
+    # MTM (mtm_sweep uses torch.randperm on CPU -> pass gen=None; utility comparison needs no fixed MTM seed)
+    pm = pos.clone(); t0 = time.time()
     for _ in range(T):
-        pm, sm, im = mtm_sweep(P, pm, s, sc, L, M=M, beta=beta, k=7, gen=gen2)
+        pm, sm, im = mtm_sweep(P, pm, s, sc, L, M=M, beta=beta, k=7, gen=None)
     tm = (time.time() - t0) / T
     um = (ka_energy(pm, s, L) / N).mean().item()
     print(f"GA1 (M={M}, {T} sweeps from reference, beta={beta}):", flush=True)
@@ -107,6 +107,24 @@ def insmc_depth(n_csmc=1, csmc_M=16, B=256, max_rungs=40, n_mut=2, n_disp=40, se
                os.path.join(ART, f"csmc_insmc_depth_M{csmc_M}.pt"))
 
 
+def matched_wall(n_disp=176, B=256, max_rungs=40, n_mut=2, seed=0):
+    """Matched-WALL control for the in-SMC depth gate: the +cSMC run cost 4.36x the baseline's wall. Give the
+    pure-displacement baseline the SAME wall (scale n_disp ~4.36x) and ask whether it reaches the same depth.
+    If yes -> cSMC's extra depth was just bought with time (no real lever). If baseline stays shallower ->
+    cSMC's depth is a genuine mixing win."""
+    from liquid_coupling_flow.ka_local_smc import smc_run
+    print(f"=== matched-wall baseline: n_csmc=0, n_disp={n_disp} (~4.4x mutation budget), B={B} ===", flush=True)
+    base = smc_run("arm0", N=100, B=B, max_rungs=max_rungs, n_mut=n_mut, n_disp=n_disp, seed=seed, n_csmc=0)
+    ub = base["history"][-1]["U_mean"]; wb = base["wall"]
+    prev = os.path.join(ART, "csmc_insmc_depth_M16.pt")
+    uc = torch.load(prev, weights_only=False)["U_csmc"] if os.path.exists(prev) else float("nan")
+    print(f"MATCHED-WALL baseline final U/N {ub:.4f}  {wb:.0f}s  rungs {len(base['history'])}", flush=True)
+    print(f"  vs +cSMC (prior) {uc:.4f}  ->  delta {uc-ub:+.4f} (neg = cSMC deeper at matched wall = real lever)",
+          flush=True)
+    torch.save({"history": base["history"], "U": ub, "wall": wb, "n_disp": n_disp, "U_csmc": uc},
+               os.path.join(ART, f"csmc_matched_wall_nd{n_disp}.pt"))
+
+
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "stationarity"
     if cmd == "stationarity":
@@ -119,3 +137,5 @@ if __name__ == "__main__":
     elif cmd == "insmc":
         insmc_depth(n_csmc=int(sys.argv[2]) if len(sys.argv) > 2 else 1,
                     csmc_M=int(sys.argv[3]) if len(sys.argv) > 3 else 16)
+    elif cmd == "matched":
+        matched_wall(n_disp=int(sys.argv[2]) if len(sys.argv) > 2 else 176)

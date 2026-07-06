@@ -112,6 +112,37 @@ def insmc(n_heatbath=1, B=256, max_rungs=40, n_mut=2, n_disp=40, seed=0):
                 "wall_base": wb, "wall_hb": wa}, os.path.join(ART, "heatbath_insmc_depth.pt"))
 
 
+def insmc_sweep(n_list=(0, 1, 2, 4, 8), B=256, max_rungs=40, n_mut=2, n_disp=40, seed=0):
+    """BUDGET-vs-COLLECTIVE diagnostic: vary n_heatbath (heat-bath sweeps per mutation round) and read final
+    SMC depth. Same seed/schedule; displacement is already saturated (A1 matched-wall), so if depth keeps
+    deepening toward the true -3.276 with more heat-bath, the tail is BUDGET-limited; if it PLATEAUS above
+    -3.276, the residual gap is genuinely COLLECTIVE (Stage B). Reports depth + wall for each."""
+    from liquid_coupling_flow.ka_local_smc import smc_run
+    import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
+    TRUE_EQ = -3.276
+    rows = []
+    for n in n_list:
+        out = smc_run("arm0", N=100, B=B, max_rungs=max_rungs, n_mut=n_mut, n_disp=n_disp, seed=seed, n_heatbath=n)
+        u = out["history"][-1]["U_mean"]; w = out["wall"]
+        rows.append((n, u, w))
+        print(f"n_heatbath={n}: final U/N {u:.4f}  gap-to-eq {u-TRUE_EQ:+.4f}  {w:.0f}s", flush=True)
+    torch.save({"rows": rows, "true_eq": TRUE_EQ}, os.path.join(ART, "heatbath_insmc_sweep.pt"))
+    ns = [r[0] for r in rows]; us = [r[1] for r in rows]; ws = [r[2] for r in rows]
+    fig, ax = plt.subplots(1, 2, figsize=(11, 4.2))
+    ax[0].plot(ns, us, "-o"); ax[0].axhline(TRUE_EQ, color="g", ls="--", label=f"true eq {TRUE_EQ}")
+    ax[0].set_xlabel("n_heatbath / mutation round"); ax[0].set_ylabel("final <U>/N"); ax[0].legend(fontsize=8)
+    ax[0].set_title("depth vs heat-bath budget (plateau above eq => collective)")
+    ax[1].plot(ws, us, "-o")
+    for n, u, w in rows: ax[1].annotate(str(n), (w, u), fontsize=8)
+    ax[1].axhline(TRUE_EQ, color="g", ls="--"); ax[1].set_xlabel("wall (s)"); ax[1].set_ylabel("final <U>/N")
+    ax[1].set_title("depth vs wall (labels = n_heatbath)")
+    fig.tight_layout(); p = os.path.join(ART, "heatbath_insmc_sweep.png"); fig.savefig(p, dpi=120)
+    print(f"saved plot -> {p}", flush=True)
+    print(f"VERDICT: depth {us[0]:.4f} (n=0) -> {us[-1]:.4f} (n={ns[-1]}); "
+          f"{'still deepening = BUDGET' if us[-1]-us[-2] < -0.005 else 'PLATEAUED above eq = COLLECTIVE'}", flush=True)
+
+
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "stationarity"
-    {"stationarity": stationarity, "accept": accept, "amortization": amortization, "insmc": insmc}[cmd]()
+    {"stationarity": stationarity, "accept": accept, "amortization": amortization,
+     "insmc": insmc, "sweep": insmc_sweep}[cmd]()

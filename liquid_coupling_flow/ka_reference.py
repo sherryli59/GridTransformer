@@ -45,8 +45,11 @@ def _mc_sweep(x, sd, L, kT, step, n_swap, Aidx, Bidx):
 
 def parallel_tempering(N, L, sd, T_ladder, device, n_per=8, n_equil=3000, n_collect=80,
                        every=20, step=0.05, n_swap=None, exchange_every=10, track_every=400,
-                       seed=0):
-    """T_ladder cold->hot [M]. Runs M*n_per replicas. Returns (cold configs, traj, exch_acc)."""
+                       seed=0, collect_all_rungs=False, track_all_rungs=False):
+    """T_ladder cold->hot [M]. Runs M*n_per replicas. Returns (cold configs, traj, exch_acc, rungs).
+
+    rungs is None unless collect_all_rungs (Stage-0 ladder dataset): then a [n_coll, M, B, N, 2] tensor of
+    per-rung snapshots. track_all_rungs additionally records per-rung <U>/N in traj (drift-tail gate)."""
     torch.manual_seed(seed)
     M, B = len(T_ladder), n_per
     n_swap = N // 8 if n_swap is None else n_swap
@@ -54,7 +57,7 @@ def parallel_tempering(N, L, sd, T_ladder, device, n_per=8, n_equil=3000, n_coll
     beta = (1.0 / T_ladder).to(device)                              # [M]
     kT = T_ladder[:, None].expand(M, B).reshape(-1).to(device)      # [M*B]
     x = torch.rand(M, B, N, 2, device=device) * L
-    traj, exch_acc, snaps = [], [], []
+    traj, exch_acc, snaps, rung_snaps = [], [], [], []
     for sweep in range(n_equil + n_collect):
         x = _mc_sweep(x.reshape(M * B, N, 2), sd, L, kT, step, n_swap, Aidx, Bidx).reshape(M, B, N, 2)
         if (sweep + 1) % exchange_every == 0:
@@ -67,10 +70,17 @@ def parallel_tempering(N, L, sd, T_ladder, device, n_per=8, n_equil=3000, n_coll
                     xl = x[l].clone(); x[l] = torch.where(a[:, None, None], x[l + 1], x[l]); x[l + 1] = torch.where(a[:, None, None], xl, x[l + 1])
                     Ul = U[l].clone(); U[l] = torch.where(a, U[l + 1], U[l]); U[l + 1] = torch.where(a, Ul, U[l + 1])
         if (sweep + 1) % track_every == 0:
-            traj.append((sweep + 1, (ka_energy(x[0], sd, L) / N).mean().item()))   # cold level
+            if track_all_rungs:
+                urung = (ka_energy(x.reshape(M * B, N, 2), sd, L).reshape(M, B) / N).mean(1).tolist()
+                traj.append((sweep + 1, urung))                          # per-rung <U>/N
+            else:
+                traj.append((sweep + 1, (ka_energy(x[0], sd, L) / N).mean().item()))   # cold level
         if sweep >= n_equil and (sweep - n_equil) % every == 0:
             snaps.append(x[0].clone())                                  # cold-level samples
-    return torch.cat(snaps, 0), traj, float(np.mean(exch_acc))
+            if collect_all_rungs:
+                rung_snaps.append(x.clone())                            # [M,B,N,2] all rungs
+    rungs = torch.stack(rung_snaps, 0) if collect_all_rungs else None   # [n_coll,M,B,N,2]
+    return torch.cat(snaps, 0), traj, float(np.mean(exch_acc)), rungs
 
 
 def main(device="cuda" if torch.cuda.is_available() else "cpu"):
@@ -80,8 +90,8 @@ def main(device="cuda" if torch.cuda.is_available() else "cpu"):
     reps, trajs, cfgs = [], [], []
     fig, ax = plt.subplots(1, 2, figsize=(12, 4.4))
     for seed in (0, 1):
-        cfg, traj, ex = parallel_tempering(N, L, sd, T_ladder, device, n_per=8,
-                                           n_equil=12000, n_collect=150, every=40, seed=seed)
+        cfg, traj, ex, _ = parallel_tempering(N, L, sd, T_ladder, device, n_per=8,
+                                              n_equil=12000, n_collect=150, every=40, seed=seed)
         U = (ka_energy(cfg, sd, L) / N).mean().item()
         se = (ka_energy(cfg, sd, L) / N).std().item() / np.sqrt(cfg.shape[0])
         reps.append((U, se)); trajs.append(traj); cfgs.append(cfg)
@@ -116,5 +126,76 @@ def main(device="cuda" if torch.cuda.is_available() else "cpu"):
     print(f"saved {ref.shape[0]} reference configs -> artifacts/ka_reference_N256.pt", flush=True)
 
 
+def main_ladder(N, n_equil=16000, n_collect=4000, every=8, n_per=8, track_every=500,
+                device="cuda" if torch.cuda.is_available() else "cpu"):
+    """Stage-0 PT-LADDER dataset: instrument the validated PT protocol to persist ALL M rungs (not just cold),
+    with the four honest convergence gates. One run buys (i) trustworthy N reference, (ii) A2 per-rung training
+    data, (iii) Stage-B event-mining raw material. Saves artifacts/pt_ladder_N{N}.pt.
+
+    Gates: (1) seed-pair agreement on cold <U>/N; (2) drift-free tail (per-rung 2nd-half vs 1st-half slope ~0);
+    (3) exchange acceptance in-band; (4) finite-size direction is a CROSS-N check -> run finite_size_check()."""
+    L = (N / RHO) ** 0.5; T = 0.5
+    sd = make_species(N, FRACB).to(device)
+    T_ladder = 0.5 * (1.25 / 0.5) ** (torch.arange(10) / 9)          # 10-level geometric 0.5->1.25
+    beta_ladder = (1.0 / T_ladder).tolist()
+    cold, drift_tail, seed_rungs, seed_ex = [], [], [], []
+    for seed in (0, 1):
+        cfg, traj, ex, rungs = parallel_tempering(N, L, sd, T_ladder, device, n_per=n_per, n_equil=n_equil,
+                                                  n_collect=n_collect, every=every, track_every=track_every,
+                                                  seed=seed, collect_all_rungs=True, track_all_rungs=True)
+        # rungs [n_coll,M,B,N,2] -> per-rung stacks [M, n_coll*B, N, 2]
+        nc, M, Bp = rungs.shape[0], rungs.shape[1], rungs.shape[2]
+        per_rung = rungs.permute(1, 0, 2, 3, 4).reshape(M, nc * Bp, N, 2).cpu()
+        seed_rungs.append(per_rung); seed_ex.append(ex)
+        Ucold = (ka_energy(cfg, sd, L) / N).mean().item()
+        se = (ka_energy(cfg, sd, L) / N).std().item() / np.sqrt(cfg.shape[0])
+        cold.append((Ucold, se))
+        # drift-tail gate: per-rung <U>/N, 2nd-half mean vs 1st-half mean (traj entries = (sweep, [per-rung list]))
+        arr = np.array([u for _, u in traj])                        # [T_track, M]
+        half = arr.shape[0] // 2
+        drift_tail.append(np.abs(arr[half:].mean(0) - arr[:half].mean(0)).max())
+        print(f"seed {seed}: cold <U>/N {Ucold:.4f}+/-{se:.4f} exch {ex:.2f} "
+              f"tail-drift(max over rungs) {drift_tail[-1]:.4f} rung-configs {per_rung.shape[1]}", flush=True)
+    d = abs(cold[0][0] - cold[1][0]); tol = max(3 * (cold[0][1] + cold[1][1]), 5e-3)
+    agree = d < tol
+    flat = max(drift_tail) < 5e-3
+    ex_ok = 0.15 < min(seed_ex) and max(seed_ex) < 0.95
+    ok = agree and flat and ex_ok
+    # combine seeds per rung
+    configs_per_rung = [torch.cat([seed_rungs[0][l], seed_rungs[1][l]], 0) for l in range(len(beta_ladder))]
+    out = os.path.join(ART, f"pt_ladder_N{N}.pt")
+    torch.save({"N": N, "L": L, "T": T, "s": sd.cpu(), "betas": beta_ladder,
+                "configs_per_rung": configs_per_rung,           # list[M] of [n, N, 2]
+                "cold_U_per_N": cold[0][0], "seed_diff": d, "tol": tol, "tail_drift": max(drift_tail),
+                "exch_acc": seed_ex, "gates": {"agree": agree, "flat": flat, "exch_in_band": ex_ok},
+                "converged": ok}, out)
+    print(f"LADDER N={N}: agree={agree}(|d|={d:.4f}/tol{tol:.4f}) flat={flat}(drift{max(drift_tail):.4f}) "
+          f"exch_in_band={ex_ok}({min(seed_ex):.2f}-{max(seed_ex):.2f}) -> {'CONVERGED' if ok else 'NOT CONVERGED'}",
+          flush=True)
+    print(f"saved ladder ({sum(c.shape[0] for c in configs_per_rung)} configs over {len(beta_ladder)} rungs, "
+          f"~{configs_per_rung[0].shape[0]}/rung) -> {out}", flush=True)
+
+
+def finite_size_check(device="cpu"):
+    """Gate 4 (cross-N): intensive <U>/N should be size-consistent with the correct sign. Loads both ladders."""
+    res = {}
+    for N in (100, 256):
+        f = os.path.join(ART, f"pt_ladder_N{N}.pt")
+        if os.path.exists(f):
+            res[N] = torch.load(f, map_location=device, weights_only=False)["cold_U_per_N"]
+    if len(res) == 2:
+        print(f"finite-size: N=100 {res[100]:.4f} vs N=256 {res[256]:.4f} "
+              f"(intensive |diff| {abs(res[100]-res[256]):.4f})", flush=True)
+    else:
+        print(f"finite-size: have {list(res.keys())}, need both N=100 and N=256", flush=True)
+    return res
+
+
 if __name__ == "__main__":
-    main()
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "ladder":
+        main_ladder(N=int(sys.argv[2]) if len(sys.argv) > 2 else 100)
+    elif len(sys.argv) > 1 and sys.argv[1] == "finite_size":
+        finite_size_check()
+    else:
+        main()

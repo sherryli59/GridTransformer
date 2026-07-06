@@ -113,3 +113,23 @@ supplies the full cage, and is the FIRST learned kernel to give a real cost-effe
 (-0.068 @ 1.11x wall, ~39% of the remaining gap), exact (mixed), and amortized across temperatures. The learned
 generator finally earns its keep. Open: the deep glassy tail (0.107 remaining) -> Stage B collective moves /
 heat-bath budget; N=256 transfer -> needs the longer PT reference.
+
+### n_heatbath BUDGET SWEEP — plateau => the residual gap is COLLECTIVE (Stage-B trigger FIRES)
+Same seed/schedule, n_heatbath in {0,1,2,4,8} (heat-bath sweeps per mutation round):
+| n | final U/N | gap to -3.276 | wall |
+|---|---|---|---|
+| 0 | -3.1007 | +0.175 | 1204s |
+| 1 | -3.1690 | +0.107 | 1328s |
+| 2 | -3.1298 | +0.146 | 1406s |
+| 4 | -3.1442 | +0.132 | 1654s |
+| 8 | -3.1143 | +0.162 | 2397s |
+- All four n>=1 points are deeper than n=0 (sign 4/4) => the heat-bath gain is REAL, but the n>=1 points
+  SCATTER -3.11..-3.17 with NO trend in n — a plateau at ~-3.14 +/- (single-seed noise ~+/-0.02-0.03, RNG
+  stream shifts with n + adaptive-ladder interaction). CAVEAT: the headline -0.068 (n=1) is the best draw;
+  the expected gain is ~-0.04; a multi-seed rerun would tighten it (cheap follow-up).
+- n=8 (2x wall) is no deeper than n=1 => depth is NOT budget-limited. More single-site relaxation cannot
+  close the remaining ~0.13: the tail is COLLECTIVE (multi-particle rearrangements a single-site move can't
+  express, however sharp). Consistent with the spec's pre-committed trigger: "acceptance high but depth
+  plateaus => the missing class is collective." **STAGE B (learned collective move, event-mined from the
+  Stage-0 ladder) is the required next stage; its dataset (pt_ladder_N100.pt) is in hand.**
+Plot: reports/logs-2026-07-05/heatbath_insmc_sweep.png (artifacts/heatbath_insmc_sweep.{png,pt}).

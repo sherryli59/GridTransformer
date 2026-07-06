@@ -88,6 +88,25 @@ def ga1(M=16, T=10, B=128, beta=2.0):
                os.path.join(ART, f"csmc_ga1_M{M}.pt"))
 
 
+def insmc_depth(n_csmc=1, csmc_M=16, B=256, max_rungs=40, n_mut=2, n_disp=40, seed=0):
+    """GA1 in-SMC depth gate (primary success criterion): does adding a cSMC mutation to the local-SMC stack
+    reach deeper <U>/N than the ARM-0 baseline? Runs baseline (n_csmc=0) then +cSMC at the SAME schedule;
+    reports final depth + wall-clock (the matched-cost read). Saves both trajectories."""
+    from liquid_coupling_flow.ka_local_smc import smc_run
+    print(f"=== in-SMC depth: baseline (n_csmc=0) vs +cSMC (n_csmc={n_csmc}, M={csmc_M}), B={B} ===", flush=True)
+    base = smc_run("arm0", N=100, B=B, max_rungs=max_rungs, n_mut=n_mut, n_disp=n_disp, seed=seed, n_csmc=0)
+    ub = base["history"][-1]["U_mean"]; wb = base["wall"]
+    print(f"BASELINE   final U/N {ub:.4f}  {wb:.0f}s  rungs {len(base['history'])}", flush=True)
+    aug = smc_run("arm0", N=100, B=B, max_rungs=max_rungs, n_mut=n_mut, n_disp=n_disp, seed=seed,
+                  n_csmc=n_csmc, csmc_M=csmc_M)
+    ua = aug["history"][-1]["U_mean"]; wa = aug["wall"]
+    print(f"+cSMC      final U/N {ua:.4f}  {wa:.0f}s  rungs {len(aug['history'])}", flush=True)
+    print(f"VERDICT: depth delta {ua-ub:+.4f} (neg=deeper=win) at {wa/max(wb,1e-9):.2f}x wall", flush=True)
+    torch.save({"baseline": base["history"], "csmc": aug["history"], "n_csmc": n_csmc, "csmc_M": csmc_M,
+                "U_base": ub, "U_csmc": ua, "wall_base": wb, "wall_csmc": wa},
+               os.path.join(ART, f"csmc_insmc_depth_M{csmc_M}.pt"))
+
+
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "stationarity"
     if cmd == "stationarity":
@@ -97,3 +116,6 @@ if __name__ == "__main__":
         stationarity(M=M, resample=rs, ancestor=an)
     elif cmd == "ga1":
         ga1(M=int(sys.argv[2]) if len(sys.argv) > 2 else 16)
+    elif cmd == "insmc":
+        insmc_depth(n_csmc=int(sys.argv[2]) if len(sys.argv) > 2 else 1,
+                    csmc_M=int(sys.argv[3]) if len(sys.argv) > 3 else 16)

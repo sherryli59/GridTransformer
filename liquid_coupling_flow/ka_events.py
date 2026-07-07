@@ -100,6 +100,83 @@ def mine_ladder(fname, rungs=None, max_pairs=None, d_mobile=D_MOBILE, d_event=D_
     return out
 
 
+@torch.no_grad()
+def harvest_events(x0, s, L, betas, n_sweeps=40000, dt=400, warm=1000, device="cuda", step=0.05,
+                   d_mobile=D_MOBILE, d_event=D_EVENT):
+    """GB0-FALLBACK harvester: dedicated DISPLACEMENT-ONLY MC chains (n_swap=0 => no identity-swap teleports;
+    no PT => no exchange contamination), per-chain temperatures, snapshots every dt sweeps, adjacent pairs
+    classified with the same classify_pair. Returns {beta: {n_pairs, n_exchange, n_quiet, n_event, events}}
+    with FULL (xa, xb) config pairs stored per event ([[record-simulation-data]]).
+
+    x0 [B,N,2] equilibrated starts (chains split evenly across betas; `warm` sweeps at the target beta first —
+    hotter betas re-equilibrate from the cold starts; residual warm-start bias is acceptable for a proposal-
+    TRAINING bank, the MH guard owns correctness)."""
+    from liquid_coupling_flow.ka_reference import _mc_sweep
+    B, N, _ = x0.shape
+    nb = len(betas)
+    per = B // nb
+    x = x0[:per * nb].to(device).clone()
+    sd = s.to(device)
+    kT = torch.cat([torch.full((per,), 1.0 / b, device=device) for b in betas])
+    Aidx = (sd == 0).nonzero().squeeze(-1); Bidx = (sd == 1).nonzero().squeeze(-1)
+    for _ in range(warm):
+        x = _mc_sweep(x, sd, L, kT, step, 0, Aidx, Bidx)
+    snaps = [x.clone()]
+    for sw in range(n_sweeps):
+        x = _mc_sweep(x, sd, L, kT, step, 0, Aidx, Bidx)
+        if (sw + 1) % dt == 0:
+            snaps.append(x.clone())
+    out = {}
+    for j, b in enumerate(betas):
+        grp = {"n_pairs": 0, "n_exchange": 0, "n_quiet": 0, "n_event": 0, "events": []}
+        for c in range(j * per, (j + 1) * per):
+            for t in range(len(snaps) - 1):
+                xa, xb = snaps[t][c].cpu(), snaps[t + 1][c].cpu()
+                r = classify_pair(xa, xb, L, d_mobile=d_mobile, d_event=d_event)
+                grp["n_pairs"] += 1
+                if r["kind"] == "exchange":                       # safety only (shouldn't fire here)
+                    grp["n_exchange"] += 1
+                elif r["kind"] == "quiet":
+                    grp["n_quiet"] += 1
+                else:
+                    grp["n_event"] += 1
+                    sp = s.long()[r["mobile"]]
+                    grp["events"].append({"xa": xa, "xb": xb, "mobile": r["mobile"],
+                                          "k": r["k"], "extent": r["extent"],
+                                          "single_cluster": r["single_cluster"],
+                                          "nA": int((sp == 0).sum()), "nB": int((sp == 1).sum()),
+                                          "beta": b, "chain": c, "t": t})
+        out[b] = grp
+    return out
+
+
+def harvest_main(n_sweeps=40000, dt=400, warm=1000, B=126, betas=(2.0, 1.81, 1.63),
+                 device="cuda" if torch.cuda.is_available() else "cpu"):
+    """Run the fallback harvest from the N=100 reference; save the full event bank + print the gate."""
+    import time
+    ref = torch.load(os.path.join(ART, "ka_reference_N100.pt"), map_location=device, weights_only=False)
+    x0 = ref["x"][:B]; s = ref["s"].long()
+    L = ref["L"] if "L" in ref else (100 / 1.2) ** 0.5
+    t0 = time.time()
+    print(f"HARVEST: {len(betas)} betas {list(betas)}, {B} chains, warm {warm} + {n_sweeps} sweeps, dt {dt}",
+          flush=True)
+    out = harvest_events(x0, s, L, betas=list(betas), n_sweeps=n_sweeps, dt=dt, warm=warm, device=device)
+    n_loc_cold = 0
+    for b, grp in out.items():
+        loc = sum(1 for e in grp["events"] if e["single_cluster"] and e["k"] <= 10)
+        ks = [e["k"] for e in grp["events"]]
+        if b >= 1.81:
+            n_loc_cold += loc
+        print(f"beta {b:.2f}: pairs {grp['n_pairs']}  events {grp['n_event']}  localized {loc}  "
+              f"k median {sorted(ks)[len(ks)//2] if ks else 0} max {max(ks) if ks else 0}", flush=True)
+    torch.save({"harvest": out, "betas": list(betas), "n_sweeps": n_sweeps, "dt": dt, "warm": warm,
+                "d_mobile": D_MOBILE, "d_event": D_EVENT},
+               os.path.join(ART, "ka_event_bank_N100.pt"))
+    print(f"GB0-FALLBACK GATE: localized events at beta>=1.81 = {n_loc_cold} -> "
+          f"{'GO (>=200)' if n_loc_cold >= 200 else 'insufficient — extend harvest'};  "
+          f"saved ka_event_bank_N100.pt  ({time.time()-t0:.0f}s)", flush=True)
+
+
 def report(fname="pt_ladder_N100.pt", max_pairs=None):
     """GB0 gate report: per-rung counts + cold-rung event morphology."""
     stats = mine_ladder(fname, max_pairs=max_pairs)
@@ -121,4 +198,7 @@ def report(fname="pt_ladder_N100.pt", max_pairs=None):
 
 if __name__ == "__main__":
     import sys
-    report(fname=sys.argv[1] if len(sys.argv) > 1 else "pt_ladder_N100.pt")
+    if len(sys.argv) > 1 and sys.argv[1] == "harvest":
+        harvest_main(n_sweeps=int(sys.argv[2]) if len(sys.argv) > 2 else 40000)
+    else:
+        report(fname=sys.argv[1] if len(sys.argv) > 1 else "pt_ladder_N100.pt")

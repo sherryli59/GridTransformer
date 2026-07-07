@@ -67,6 +67,22 @@ def test_min_image_wrap():
     assert r["kind"] == "quiet", "wrap-crossing vibration misread as a hop (min-image bug)"
 
 
+def test_harvest_events_smoke():
+    """Displacement-only harvest (no swaps => no teleport contamination, no PT exchanges): tiny run returns
+    grouped events with FULL config pairs saved (record-simulation-data) and correct beta bookkeeping."""
+    from liquid_coupling_flow.ka_events import harvest_events
+    torch.manual_seed(0)
+    x0 = _base(B=6, N=100, seed=3)
+    s = (torch.rand(100) < 0.35).long()
+    out = harvest_events(x0, s, L, betas=[2.0, 1.63], n_sweeps=40, dt=20, warm=10, device="cpu")
+    assert set(out.keys()) == {2.0, 1.63}
+    for b, grp in out.items():
+        assert grp["n_pairs"] == 3 * (40 // 20 - 1 + 1)          # 3 chains/beta, pairs per chain = n_snaps-1
+        for ev in grp["events"]:
+            assert ev["xa"].shape == (100, 2) and ev["xb"].shape == (100, 2)
+            assert ev["k"] >= 1 and ev["beta"] == b
+
+
 @pytest.mark.skipif(not os.path.exists(os.path.join(os.path.dirname(__file__), "..", "artifacts",
                                                     "pt_ladder_N256.pt")), reason="no ladder artifact")
 def test_mine_ladder_runs_on_real_artifact():

@@ -1,0 +1,5 @@
+HARVEST: 3 betas [2.0, 1.81, 1.63], 126 chains, warm 1000 + 100000 sweeps, dt 100
+beta 2.00: pairs 42000  events 63  localized 51  k median 1 max 5
+beta 1.81: pairs 42000  events 133  localized 91  k median 2 max 7
+beta 1.63: pairs 42000  events 194  localized 100  k median 2 max 10
+GB0-FALLBACK GATE: localized events at beta>=1.81 = 142 -> insufficient — extend harvest;  saved ka_event_bank_N100.pt  (190s)

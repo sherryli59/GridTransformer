@@ -133,3 +133,23 @@ Same seed/schedule, n_heatbath in {0,1,2,4,8} (heat-bath sweeps per mutation rou
   plateaus => the missing class is collective." **STAGE B (learned collective move, event-mined from the
   Stage-0 ladder) is the required next stage; its dataset (pt_ladder_N100.pt) is in hand.**
 Plot: reports/logs-2026-07-05/heatbath_insmc_sweep.png (artifacts/heatbath_insmc_sweep.{png,pt}).
+
+## Stage B — GB0 event mining (2026-07-06)
+
+Miner `ka_events.py` (7/7 TDD: exchange rejection, min-image, locality; harvester displacement-only).
+**PT-ladder mining is structurally unsuitable, twice over:**
+1. PT exchanges contaminate 40-65% of adjacent snapshot pairs (measured; edge rungs less — one exchange
+   partner instead of two; N=100 worse than N=256 because exch acc 0.49 vs 0.28).
+2. DECISIVE: ladder windows (8 sweeps) are SHORTER than a cage-break's duration (tens of sweeps) — events
+   fragment below the d_event threshold. Canonical N=100 cold rungs: **0** usable events; N=256: 5.
+   The dedicated-harvest rate at matched beta is ~3.5x the ladder-implied rate for exactly this reason.
+
+**Fallback harvester = strictly better data, nearly free** (displacement-only `_mc_sweep`, no swaps => no
+identity-teleports, no PT => no contamination; per-chain betas {2.0, 1.81, 1.63}; 41k sweeps / 71 s):
+- WINDOW CALIBRATION (measured): dt=400 over-merges (k median 6-8, max 23, mostly multi-cluster); dt=8
+  fragments (see above); **dt=100 is the sweet spot** — k median 1-2, max 5-10, ~70% single-cluster localized.
+- **MEASURED MOVE CLASS (the GB1 design input): cold collective events are 1-10 particle, single-cluster,
+  compact (extent <~ 2 sigma) string-like hops — k_block ~ 8-12 covers the class. NOT avalanches.**
+- Rates: beta=2.0: 63 events/42k pairs(dt=100); 1.81: 133; 1.63: 194. Gate needs >=200 localized at
+  beta>=1.81 -> 142 at 100k sweeps -> 300k-sweep run in flight (~10 min; the harvest scales trivially).
+Bank: artifacts/ka_event_bank_N100.pt (full (xa,xb) config pairs per event, [[record-simulation-data]]).

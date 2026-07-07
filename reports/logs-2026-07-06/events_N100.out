@@ -1,0 +1,11 @@
+rung 0 (beta 2.00): pairs 7984  exch 2975  quiet 5009  events 0  localized(k<=10,1-cluster) 0  k median 0 max 0
+rung 1 (beta 1.81): pairs 7984  exch 4989  quiet 2994  events 1  localized(k<=10,1-cluster) 0  k median 2 max 2
+rung 2 (beta 1.63): pairs 7984  exch 4949  quiet 3030  events 5  localized(k<=10,1-cluster) 2  k median 2 max 2
+rung 3 (beta 1.47): pairs 7984  exch 5073  quiet 2902  events 9  localized(k<=10,1-cluster) 5  k median 2 max 4
+rung 4 (beta 1.33): pairs 7984  exch 5020  quiet 2954  events 10  localized(k<=10,1-cluster) 5  k median 2 max 3
+rung 5 (beta 1.20): pairs 7984  exch 5037  quiet 2934  events 13  localized(k<=10,1-cluster) 9  k median 2 max 2
+rung 6 (beta 1.09): pairs 7984  exch 5092  quiet 2841  events 51  localized(k<=10,1-cluster) 24  k median 2 max 4
+rung 7 (beta 0.98): pairs 7984  exch 5182  quiet 2721  events 81  localized(k<=10,1-cluster) 25  k median 2 max 3
+rung 8 (beta 0.89): pairs 7984  exch 5223  quiet 2677  events 84  localized(k<=10,1-cluster) 29  k median 2 max 3
+rung 9 (beta 0.80): pairs 7984  exch 3138  quiet 4529  events 317  localized(k<=10,1-cluster) 106  k median 2 max 6
+GB0 GATE: cold-rung (beta 2.0+1.81) localized events = 0  -> FALLBACK: swap-MC harvest above T*

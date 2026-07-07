@@ -169,6 +169,12 @@ def main_ladder(N, n_equil=16000, n_collect=4000, every=8, n_per=8, track_every=
         Ucold = (ka_energy(cfg, sd, L) / N).mean().item()
         se = (ka_energy(cfg, sd, L) / N).std().item() / np.sqrt(cfg.shape[0])
         cold.append((Ucold, se))
+        # PERSIST PER SEED, IMMEDIATELY (hours of data must never be hostage to a later stage completing —
+        # user directive after PT2 seed-0 was unrecoverable mid-run; see CLAUDE.md "checkpoint incrementally")
+        torch.save({"N": N, "L": L, "T": T, "s": sd.cpu(), "betas": beta_ladder, "seed": seed,
+                    "configs_per_rung": [per_rung[l] for l in range(M)], "cold_U_per_N": Ucold,
+                    "cold_se": se, "exch_acc": ex, "traj": traj},
+                   os.path.join(ART, f"pt_ladder{tag}_N{N}_seed{seed}.partial.pt"))
         # drift-tail gate: COLD-rung <U>/N drift over the COLLECTION window only (2nd-half vs 1st-half mean).
         # Two mislabel modes fixed here (both measured): (a) HOT rungs fluctuate far more than the cold target,
         # so max-over-all-rungs fails a converged cold reference (N=100: seed-diff 0.0005, hot-max 0.058);

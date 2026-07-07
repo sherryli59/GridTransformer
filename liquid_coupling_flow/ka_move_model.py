@@ -132,7 +132,7 @@ def event_to_tuple(ev, s, sc, L, geo, k_block=8, d_mobile=D_MOBILE):
 
 def _augment_pair(xa, xb, L, gen=None):
     """Shared random shift + D4 (rot90/reflect) applied to BOTH frames (events are jointly equivariant)."""
-    sh = torch.rand(2, generator=gen) * L
+    sh = (torch.rand(2, generator=gen) * L).to(xa.device)
     k = int(torch.randint(0, 4, (1,), generator=gen).item())
     fl = bool(torch.randint(0, 2, (1,), generator=gen).item())
     out = []

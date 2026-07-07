@@ -45,21 +45,38 @@ def _mc_sweep(x, sd, L, kT, step, n_swap, Aidx, Bidx):
 
 def parallel_tempering(N, L, sd, T_ladder, device, n_per=8, n_equil=3000, n_collect=80,
                        every=20, step=0.05, n_swap=None, exchange_every=10, track_every=400,
-                       seed=0, collect_all_rungs=False, track_all_rungs=False):
+                       seed=0, collect_all_rungs=False, track_all_rungs=False,
+                       hb_ckpt=None, hb_every=10, hb_moves=None):
     """T_ladder cold->hot [M]. Runs M*n_per replicas. Returns (cold configs, traj, exch_acc, rungs).
 
     rungs is None unless collect_all_rungs (Stage-0 ladder dataset): then a [n_coll, M, B, N, 2] tensor of
-    per-rung snapshots. track_all_rungs additionally records per-rung <U>/N in traj (drift-tail gate)."""
+    per-rung snapshots. track_all_rungs additionally records per-rung <U>/N in traj (drift-tail gate).
+
+    hb_ckpt (PT+A2, learned-augmented PT): every hb_every sweeps run one beta-conditioned full-cage heat-bath
+    sweep over ALL rungs at per-chain beta (A2 amortizes flat across the ladder). Each such sweep is
+    pi_beta_rung-invariant MH mixed with displacement => PT's invariant distribution is UNCHANGED — pure
+    acceleration. Requires the ckpt's model to pass the frozen-cage DB gate at this N (PT0) first."""
     torch.manual_seed(seed)
     M, B = len(T_ladder), n_per
     n_swap = N // 8 if n_swap is None else n_swap
     Aidx = (sd == 0).nonzero().squeeze(-1); Bidx = (sd == 1).nonzero().squeeze(-1)
     beta = (1.0 / T_ladder).to(device)                              # [M]
     kT = T_ladder[:, None].expand(M, B).reshape(-1).to(device)      # [M*B]
+    HB = sc = geo = None
+    if hb_ckpt is not None:
+        from liquid_coupling_flow.ka_heatbath import _load as _hb_load, single_site_mh_sweep
+        from liquid_coupling_flow.ka_cluster_flow import _scaffold, ART as _ART
+        HB = _hb_load(torch.load(os.path.join(_ART, hb_ckpt), map_location=device, weights_only=False), device)
+        sc, L_sc, geo = _scaffold(N, device)
+        beta_chain = (1.0 / kT)                                     # [M*B] per-chain beta
+        s_rows = sd.long()[None].expand(M * B, N)
     x = torch.rand(M, B, N, 2, device=device) * L
     traj, exch_acc, snaps, rung_snaps = [], [], [], []
     for sweep in range(n_equil + n_collect):
         x = _mc_sweep(x.reshape(M * B, N, 2), sd, L, kT, step, n_swap, Aidx, Bidx).reshape(M, B, N, 2)
+        if HB is not None and (sweep + 1) % hb_every == 0:
+            xf, _ = single_site_mh_sweep(HB, x.reshape(M * B, N, 2), s_rows, sc, L, geo, beta=beta_chain, n_moves=hb_moves)
+            x = xf.reshape(M, B, N, 2)
         if (sweep + 1) % exchange_every == 0:
             U = ka_energy(x.reshape(M * B, N, 2), sd, L).reshape(M, B)   # [M,B]
             for parity in (0, 1):
@@ -127,6 +144,7 @@ def main(device="cuda" if torch.cuda.is_available() else "cpu"):
 
 
 def main_ladder(N, n_equil=16000, n_collect=4000, every=8, n_per=8, track_every=500,
+                hb_ckpt=None, hb_every=10, hb_moves=None, tag="",
                 device="cuda" if torch.cuda.is_available() else "cpu"):
     """Stage-0 PT-LADDER dataset: instrument the validated PT protocol to persist ALL M rungs (not just cold),
     with the four honest convergence gates. One run buys (i) trustworthy N reference, (ii) A2 per-rung training
@@ -142,7 +160,8 @@ def main_ladder(N, n_equil=16000, n_collect=4000, every=8, n_per=8, track_every=
     for seed in (0, 1):
         cfg, traj, ex, rungs = parallel_tempering(N, L, sd, T_ladder, device, n_per=n_per, n_equil=n_equil,
                                                   n_collect=n_collect, every=every, track_every=track_every,
-                                                  seed=seed, collect_all_rungs=True, track_all_rungs=True)
+                                                  seed=seed, collect_all_rungs=True, track_all_rungs=True,
+                                                  hb_ckpt=hb_ckpt, hb_every=hb_every, hb_moves=hb_moves)
         # rungs [n_coll,M,B,N,2] -> per-rung stacks [M, n_coll*B, N, 2]
         nc, M, Bp = rungs.shape[0], rungs.shape[1], rungs.shape[2]
         per_rung = rungs.permute(1, 0, 2, 3, 4).reshape(M, nc * Bp, N, 2).cpu()
@@ -173,7 +192,7 @@ def main_ladder(N, n_equil=16000, n_collect=4000, every=8, n_per=8, track_every=
     ok = agree and flat and ex_ok
     # combine seeds per rung
     configs_per_rung = [torch.cat([seed_rungs[0][l], seed_rungs[1][l]], 0) for l in range(len(beta_ladder))]
-    out = os.path.join(ART, f"pt_ladder_N{N}.pt")
+    out = os.path.join(ART, f"pt_ladder{tag}_N{N}.pt")
     torch.save({"N": N, "L": L, "T": T, "s": sd.cpu(), "betas": beta_ladder,
                 "configs_per_rung": configs_per_rung,           # list[M] of [n, N, 2]
                 "cold_U_per_N": cold[0][0], "seed_diff": d, "tol": tol, "tail_drift": max(drift_tail),
@@ -204,7 +223,10 @@ def finite_size_check(device="cpu"):
 if __name__ == "__main__":
     import sys
     if len(sys.argv) > 1 and sys.argv[1] == "ladder":
-        main_ladder(N=int(sys.argv[2]) if len(sys.argv) > 2 else 100)
+        hb = "hb" in sys.argv[3:]
+        ne = next((int(a) for a in sys.argv[3:] if a.isdigit()), 16000)
+        main_ladder(N=int(sys.argv[2]) if len(sys.argv) > 2 else 100, n_equil=ne,
+                    hb_ckpt="ka_heatbath_N100.pt" if hb else None, tag="_hb" if hb else "")
     elif len(sys.argv) > 1 and sys.argv[1] == "finite_size":
         finite_size_check()
     else:

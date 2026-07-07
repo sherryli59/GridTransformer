@@ -1,0 +1,11 @@
+[oracle real] stuck start <U>/N -3.1587  library 2280 events  B 256
+  block   1: <U>/N -3.1632  fired 0.144  accept 0.0000  (0.3s/block)
+  block   5: <U>/N -3.1661  fired 0.133  accept 0.0000  (0.2s/block)
+  block  10: <U>/N -3.1665  fired 0.129  accept 0.0000  (0.2s/block)
+  block  15: <U>/N -3.1642  fired 0.129  accept 0.0000  (0.2s/block)
+  block  20: <U>/N -3.1645  fired 0.127  accept 0.0000  (0.2s/block)
+  block  25: <U>/N -3.1623  fired 0.127  accept 0.0000  (0.2s/block)
+  block  30: <U>/N -3.1645  fired 0.127  accept 0.0000  (0.2s/block)
+  block  35: <U>/N -3.1666  fired 0.128  accept 0.0000  (0.2s/block)
+  block  40: <U>/N -3.1705  fired 0.129  accept 0.0000  (0.2s/block)
+[oracle real] final <U>/N -3.1705  (start -3.1587, true eq -3.276)

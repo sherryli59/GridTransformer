@@ -1,0 +1,11 @@
+[oracle disp] stuck start <U>/N -3.1587  library 2280 events  B 256
+  block   1: <U>/N -3.1651  fired 0.000  accept 0.0000  (0.1s/block)
+  block   5: <U>/N -3.1572  fired 0.000  accept 0.0000  (0.0s/block)
+  block  10: <U>/N -3.1665  fired 0.000  accept 0.0000  (0.0s/block)
+  block  15: <U>/N -3.1689  fired 0.000  accept 0.0000  (0.0s/block)
+  block  20: <U>/N -3.1652  fired 0.000  accept 0.0000  (0.0s/block)
+  block  25: <U>/N -3.1641  fired 0.000  accept 0.0000  (0.0s/block)
+  block  30: <U>/N -3.1697  fired 0.000  accept 0.0000  (0.0s/block)
+  block  35: <U>/N -3.1628  fired 0.000  accept 0.0000  (0.0s/block)
+  block  40: <U>/N -3.1689  fired 0.000  accept 0.0000  (0.0s/block)
+[oracle disp] final <U>/N -3.1689  (start -3.1587, true eq -3.276)

@@ -1,0 +1,8 @@
+PT1 plain: final cold <U>/N -3.2615  wall 782s (43 ms/sweep)  exch 0.49
+/home/sherryli/xsli/softwares/anaconda3/envs/lightning/lib/python3.11/site-packages/torch/nn/modules/transformer.py:379: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+PT1 hb: final cold <U>/N -3.2702  wall 1667s (93 ms/sweep)  exch 0.48
+  at wall 196s: plain -3.2548  PT+A2 -3.2117
+  at wall 391s: plain -3.2231  PT+A2 -3.2603
+  at wall 782s: plain -3.2603  PT+A2 -3.2457
+QUEUE_DONE

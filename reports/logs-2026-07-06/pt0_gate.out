@@ -1,0 +1,5 @@
+/home/sherryli/xsli/softwares/anaconda3/envs/lightning/lib/python3.11/site-packages/torch/nn/modules/transformer.py:379: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+PT0(i) frozen-cage DB @N=256: max|dlogq| 0.00e+00 -> PASS
+PT0(ii) acceptance @N=256 cold: 0.286 (N=100 was ~0.33)
+PT0(iii) mixed stationarity: start -3.2193 end -3.2233 band 0.0113 (NOTE: N=256 ladder under-converged, downward drift toward true eq expected/OK; watch for blowup)

@@ -186,3 +186,26 @@ Options forward: (a) v2 region-anchored kernel trained on the stable ~30% subset
 events; variable-k blocks ~9-11; one more build-train-gate cycle); (b) accept the structural finding and
 pivot (learned-augmented PT / transfer-scale crossover); (c) variable-membership block machinery (grand-
 canonical-flavored) — principled but a research project of its own.
+
+## ORACLE TEST — the collective channel is priced at ~ZERO; STAGE B CLOSES (2026-07-07)
+
+3 arms from the same A2-stack stuck population (-3.159), matched schedule (ka_collective_oracle.py):
+real-event transplant vs scrambled control vs displacement-only. Library = 2280 localized events (1M bank).
+- **accept 0.0000 over ~66,000 FIRED transplant row-attempts** (fire rate 13%): a real rearrangement pattern
+  transplanted onto a 0.35-matched lookalike structure is ALWAYS energetically catastrophic. The collective
+  move is a dance tuned to its exact micro-cage — the precision wall's collective face.
+- real (-3.1705) == scrambled (-3.1727) == disp (-3.1689): the true rearrangement structure carries NO
+  transferable advantage over random kicks or nothing. No arm approaches -3.2.
+- VERDICT: pattern-replay collective proposals are worthless; combined with the selection-symmetry wall
+  (kNN 2% / region 30%) and A1's one-shot precedent, **v2 is NOT built. Stage B closes**: the residual
+  ~0.10 to -3.276 is KINETICS (alpha-relaxation), not a missing expressible move class. (Caveat kept honest:
+  the oracle upper-bounds replay, not a fully env-adaptive kernel — but every adaptive precedent (A1 0.3%)
+  and the 0/66k measurement point the same way.)
+
+## PT+A2 — PT0 PASS (A2 transfers to N=256 zero-shot) + PT1 promising
+- **PT0: DB max|dlogq| 0.00e+00 at N=256 (exact); acceptance 28.6% zero-shot (vs 33% at N=100); mixed
+  stationarity band 0.011.** The N=100-trained heat-bath is valid inside an N=256 reference generator.
+- PT1 (N=100, 18k+2k sweeps each): plain final -3.2615 @782s; **PT+A2 final -3.2702 @1667s (2.16x wall)** —
+  the deepest PT result yet, past the -3.264 plateau toward the true -3.276. Strict matched-wall verdict
+  needs plain PT at the same 1667s (38k sweeps) — control queued; interpolated single-snapshot comparisons
+  are +/-0.02 noisy (8-replica cold mean).

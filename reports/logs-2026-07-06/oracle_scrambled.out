@@ -1,0 +1,11 @@
+[oracle scrambled] stuck start <U>/N -3.1587  library 2280 events  B 256
+  block   1: <U>/N -3.1650  fired 0.150  accept 0.0000  (0.3s/block)
+  block   5: <U>/N -3.1651  fired 0.131  accept 0.0000  (0.2s/block)
+  block  10: <U>/N -3.1680  fired 0.128  accept 0.0000  (0.2s/block)
+  block  15: <U>/N -3.1622  fired 0.130  accept 0.0000  (0.2s/block)
+  block  20: <U>/N -3.1697  fired 0.129  accept 0.0000  (0.2s/block)
+  block  25: <U>/N -3.1679  fired 0.130  accept 0.0000  (0.2s/block)
+  block  30: <U>/N -3.1704  fired 0.130  accept 0.0000  (0.2s/block)
+  block  35: <U>/N -3.1697  fired 0.131  accept 0.0000  (0.2s/block)
+  block  40: <U>/N -3.1727  fired 0.131  accept 0.0000  (0.2s/block)
+[oracle scrambled] final <U>/N -3.1727  (start -3.1587, true eq -3.276)

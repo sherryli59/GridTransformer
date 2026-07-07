@@ -86,7 +86,7 @@ def _resample(pos, s, logw, gen=None):
 def smc_run(arm, N=100, B=256, beta0=0.8, beta1=2.0, ess_target=0.6, max_rungs=40, n_mut=2, n_disp=40,
             transport_seeds=None, seed=0, device="cuda", init="warm", n_init=400,
             n_csmc=0, csmc_M=16, csmc_moves=None, n_heatbath=0, hb_ckpt="ka_heatbath_N100.pt", hb_moves=None,
-            n_move=0, move_ckpt="ka_move_model_N100.pt", move_moves=None):
+            n_move=0, move_ckpt="ka_move_model_N100.pt", move_moves=None, save_tag=""):
     """arm in {'arm0','arm1'}. Returns dict(history, final pos/s/logw); saves artifacts/smc_pilot_{arm}_N{N}.pt."""
     assert arm in ("arm0", "arm1")
     torch.manual_seed(seed)
@@ -175,6 +175,6 @@ def smc_run(arm, N=100, B=256, beta0=0.8, beta1=2.0, ess_target=0.6, max_rungs=4
         pos, s = _canonicalize(pos, s)
     out = {"history": hist, "pos": pos.cpu(), "s": s.cpu(), "logw": logw.cpu(), "arm": arm, "N": N, "B": B,
            "beta0": beta0, "beta1": beta1, "wall": time.time() - t0}
-    torch.save(out, os.path.join(ART, f"smc_pilot_{arm}_N{N}.pt"))
-    print(f"saved smc_pilot_{arm}_N{N}.pt  wall {out['wall']:.0f}s", flush=True)
+    torch.save(out, os.path.join(ART, f"smc_pilot_{arm}{save_tag}_N{N}.pt"))
+    print(f"saved smc_pilot_{arm}{save_tag}_N{N}.pt  wall {out['wall']:.0f}s", flush=True)
     return out

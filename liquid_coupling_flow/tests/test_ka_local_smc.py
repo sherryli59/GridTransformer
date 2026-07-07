@@ -32,7 +32,7 @@ def test_smoke_two_rungs_gpu():
     if not torch.cuda.is_available():
         return
     from liquid_coupling_flow.ka_local_smc import smc_run
-    out = smc_run("arm0", N=100, B=16, ess_target=0.5, max_rungs=2, n_mut=1, n_disp=5, seed=0)
+    out = smc_run("arm0", N=100, B=16, ess_target=0.5, max_rungs=2, n_mut=1, n_disp=5, seed=0, save_tag="_smoke")
     assert all(torch.isfinite(torch.tensor(h["ess"])) for h in out["history"])
     assert torch.isfinite(out["logw"]).all()
     assert (out["s"].sum(1) == out["s"][0].sum()).all()

@@ -1,0 +1,5 @@
+HARVEST: 3 betas [2.0, 1.81, 1.63], 126 chains, warm 1000 + 300000 sweeps, dt 100
+beta 2.00: pairs 126000  events 195  localized 147  k median 1 max 6
+beta 1.81: pairs 126000  events 320  localized 199  k median 2 max 6
+beta 1.63: pairs 126000  events 532  localized 306  k median 2 max 8
+GB0-FALLBACK GATE: localized events at beta>=1.81 = 346 -> GO (>=200);  saved ka_event_bank_N100.pt  (588s)

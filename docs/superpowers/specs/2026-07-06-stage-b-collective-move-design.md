@@ -47,3 +47,16 @@ toward -3.276 at near-matched wall.
 session cleanup). The protocol is seeded => regeneration reproduces it (relaunched 16:46, ~2.6 h). Mitigation:
 after regen, keep `pt_ladder_N100.pt.bak` alongside (guards the observed failure mode: accidental deletion).
 Miner development proceeds against `pt_ladder_N256.pt` (identical layout) meanwhile.
+
+---
+## GB0 RESULT (2026-07-06): GO — measured design inputs for GB1
+- PT-ladder mining REFUTED structurally (exchange contamination 40-65% + 8-sweep window < event duration ~tens
+  of sweeps => canonical N=100 cold rungs: 0 events). Fallback harvester (displacement-only, no swaps/PT) is
+  strictly better and nearly free (~1.7 ms/sweep); **dt=100 = the calibrated window** (dt=8 fragments, dt=400
+  merges: k 6-23 multi-cluster).
+- **Move class (stable across runs): 1-8 particle, single-cluster, compact (extent <~ 2 sigma) string hops.**
+- Bank: ka_event_bank_N100.pt — 652 localized events (147 @ beta 2.0, 199 @ 1.81, 306 @ 1.63), full (xa,xb)
+  config pairs. GATE PASSED (346 >= 200 at beta>=1.81).
+- GB1 fixed parameters: k_block = 8 (mobile set + nearest fill-up to fixed size); beta-FiLM over the harvest
+  betas; two-way exact conditional; ONE-SHOT MH first, A1-cSMC composition (per-step filtering with retained
+  reference) as the pre-committed fallback if one-shot acceptance floors (the A1 disease).

@@ -153,3 +153,10 @@ identity-teleports, no PT => no contamination; per-chain betas {2.0, 1.81, 1.63}
 - Rates: beta=2.0: 63 events/42k pairs(dt=100); 1.81: 133; 1.63: 194. Gate needs >=200 localized at
   beta>=1.81 -> 142 at 100k sweeps -> 300k-sweep run in flight (~10 min; the harvest scales trivially).
 Bank: artifacts/ka_event_bank_N100.pt (full (xa,xb) config pairs per event, [[record-simulation-data]]).
+
+### GB0 CLOSE-OUT: **GO** (300k-sweep bank, 588s)
+beta=2.00: 195 events / 147 localized; 1.81: 320/199; 1.63: 532/306 => **346 localized at beta>=1.81 (>=200)**,
+652 total. Morphology STABLE across all runs: k median 1-2, max 6-8, single-cluster, compact. Bank:
+artifacts/ka_event_bank_N100.pt (full config pairs). GB1 design inputs fixed: k_block=8 (covers max), betas
+{2.0, 1.81, 1.63} via FiLM, two-way conditional q(x'_block|x_block, env) with A1-cSMC composition as the
+acceptance fallback.

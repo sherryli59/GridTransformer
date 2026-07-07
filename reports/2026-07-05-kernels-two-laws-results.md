@@ -209,3 +209,16 @@ real-event transplant vs scrambled control vs displacement-only. Library = 2280 
   the deepest PT result yet, past the -3.264 plateau toward the true -3.276. Strict matched-wall verdict
   needs plain PT at the same 1667s (38k sweeps) — control queued; interpolated single-snapshot comparisons
   are +/-0.02 noisy (8-replica cold mean).
+
+### PT1 matched-wall control — VERDICT: PT+A2 NEGATIVE at matched wall at N=100 (+ a goalpost discovery)
+Plain PT at the SAME wall (38k sweeps / 1662s): **-3.2840** vs PT+A2 -3.2702 (18k+hb / 1667s). At N=100 the
+heat-bath's 2.16x per-sweep overhead costs more than its mixing buys inside PT — plain sweeps are simply too
+cheap (43 ms). PT+A2 @N=100: NEGATIVE at matched wall.
+- **GOALPOST: plain-PT-38k reaches -3.284, DEEPER than the "-3.276 true eq" pinned by exact displacement.**
+  Both displacement plateaus (-3.264 from above, -3.30 relaxing to -3.276) were KERNEL-RELATIVE; PT digs past
+  them. The true N=100 eq is <= -3.284 and every "floor" so far was a protocol plateau — reference numbers
+  must always carry their protocol. (Classic glass: the target descends as samplers improve.)
+- N=256 OUTLOOK unchanged-to-favorable: hb cost is ~constant (model-forward-bound, local) while plain sweeps
+  scale O(N^2) and equilibrate slower — overhead ratio drops from 2.16x (N=100) to ~1.3x (N=256), so the
+  augmentation crossover may itself sit between N=100 and 256. PT2 (running, WITH hb) judges via its internal
+  gates; its finite-size check must now use N=100 <= -3.284.

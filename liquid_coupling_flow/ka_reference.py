@@ -150,13 +150,19 @@ def main_ladder(N, n_equil=16000, n_collect=4000, every=8, n_per=8, track_every=
         Ucold = (ka_energy(cfg, sd, L) / N).mean().item()
         se = (ka_energy(cfg, sd, L) / N).std().item() / np.sqrt(cfg.shape[0])
         cold.append((Ucold, se))
-        # drift-tail gate: COLD-rung <U>/N tail drift (2nd-half vs 1st-half mean). Cold rung (index 0, beta=2) is
-        # the reference target; HOT rungs fluctuate far more, so max-over-all-rungs mislabels a converged cold
-        # reference as non-flat (measured N=100: cold seed-diff 0.0005 but hot-rung max-drift 0.058). Gate on cold.
+        # drift-tail gate: COLD-rung <U>/N drift over the COLLECTION window only (2nd-half vs 1st-half mean).
+        # Two mislabel modes fixed here (both measured): (a) HOT rungs fluctuate far more than the cold target,
+        # so max-over-all-rungs fails a converged cold reference (N=100: seed-diff 0.0005, hot-max 0.058);
+        # (b) halving the FULL track includes the equilibration descent from the uniform start, so even the
+        # cold drift reads the transient (N=100 regen: 0.044-0.053 on full track). Gate on cold x collection.
         arr = np.array([u for _, u in traj])                        # [T_track, M] per-rung <U>/N track
-        half = arr.shape[0] // 2
-        cold_drift = float(np.abs(arr[half:, 0].mean() - arr[:half, 0].mean()))
-        max_drift = float(np.abs(arr[half:].mean(0) - arr[:half].mean(0)).max())
+        sweeps_tr = np.array([t for t, _ in traj])
+        coll = arr[sweeps_tr > n_equil]                             # collection-phase entries only
+        if coll.shape[0] < 4:                                       # too few tracked points in collection
+            coll = arr[-4:]
+        half = coll.shape[0] // 2
+        cold_drift = float(np.abs(coll[half:, 0].mean() - coll[:half, 0].mean()))
+        max_drift = float(np.abs(coll[half:].mean(0) - coll[:half].mean(0)).max())
         drift_tail.append(cold_drift)
         print(f"seed {seed}: cold <U>/N {Ucold:.4f}+/-{se:.4f} exch {ex:.2f} "
               f"cold-drift {cold_drift:.4f} (hot-max {max_drift:.4f}) rung-configs {per_rung.shape[1]}", flush=True)

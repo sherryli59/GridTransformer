@@ -222,3 +222,10 @@ cheap (43 ms). PT+A2 @N=100: NEGATIVE at matched wall.
   scale O(N^2) and equilibrate slower — overhead ratio drops from 2.16x (N=100) to ~1.3x (N=256), so the
   augmentation crossover may itself sit between N=100 and 256. PT2 (running, WITH hb) judges via its internal
   gates; its finite-size check must now use N=100 <= -3.284.
+
+### PT2 seed-0 (N=256, 32k equil + hb): -3.2311 — deeper (+0.021 vs plain-16k) but STILL under-converged
+Cold -3.2311+/-0.0006, cold-drift 0.0005 (FLAT — the plateau blind spot; only the cross-N check catches it),
+vs N=100 goalpost <= -3.284: finite-size direction still wrong (0.053 shallow). Credit for the +0.021
+confounded (hb AND 2x equil changed). **NEW DIAGNOSIS: exchange acc 0.27 at N=256 vs 0.49 at N=100 on the
+same M=10 ladder — sigma_U ~ sqrt(N) shrinks rung overlap; N=256 wants M~16 rungs. Ladder RESOLUTION, not
+just sweep count: redesign before buying more sweeps.** Seed 1 running (~6h; artifact saves only after both).

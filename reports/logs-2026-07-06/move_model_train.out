@@ -1,0 +1,35 @@
+/home/sherryli/xsli/softwares/anaconda3/envs/lightning/lib/python3.11/site-packages/torch/nn/modules/transformer.py:379: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+MOVE MODEL train: 7675 train tuples / 90 patterns (+10 val patterns), skipped 1900/10432 (coverage), params 0.68M, {'n_bins': 24, 'box': 3.0, 'n_ctx': 24, 'd_model': 128, 'n_head': 4, 'n_layer': 3, 'head': 'spline', 'num_flow_bins': 16, 'tail_bound': 3.5, 'pair_feats': True}
+  step     0 train 2.932  VAL 2.965  lr 2.0e-06 1s
+  step   500 train 2.319  VAL 2.235  lr 3.0e-04 100s
+  step  1000 train 1.965  VAL 2.011  lr 3.0e-04 198s
+  step  1500 train 1.820  VAL 1.892  lr 3.0e-04 305s
+  step  2000 train 1.578  VAL 1.825  lr 2.9e-04 403s
+  step  2500 train 1.820  VAL 1.618  lr 2.8e-04 501s
+  step  3000 train 1.393  VAL 1.534  lr 2.8e-04 598s
+  step  3500 train 0.950  VAL 1.342  lr 2.7e-04 697s
+  step  4000 train 0.988  VAL 1.363  lr 2.6e-04 798s
+  step  4500 train 1.089  VAL 1.275  lr 2.4e-04 895s
+  step  5000 train 0.729  VAL 1.126  lr 2.3e-04 993s
+  step  5500 train 0.582  VAL 1.140  lr 2.2e-04 1090s
+  step  6000 train 0.744  VAL 1.200  lr 2.0e-04 1190s
+  step  6500 train 1.013  VAL 1.061  lr 1.9e-04 1288s
+  step  7000 train 0.464  VAL 1.050  lr 1.7e-04 1386s
+  step  7500 train 0.665  VAL 1.004  lr 1.5e-04 1483s
+  step  8000 train 0.703  VAL 0.925  lr 1.4e-04 1582s
+  step  8500 train 0.249  VAL 0.893  lr 1.2e-04 1696s
+  step  9000 train 0.257  VAL 0.917  lr 1.1e-04 1810s
+  step  9500 train 0.304  VAL 0.905  lr 9.2e-05 1923s
+  step 10000 train 0.022  VAL 0.899  lr 7.8e-05 2036s
+  step 10500 train 0.273  VAL 0.871  lr 6.4e-05 2149s
+  step 11000 train 0.130  VAL 0.887  lr 5.2e-05 2263s
+  step 11500 train -0.064  VAL 0.881  lr 4.0e-05 2376s
+  step 12000 train 0.077  VAL 0.899  lr 3.0e-05 2490s
+  step 12500 train 0.150  VAL 0.919  lr 2.1e-05 2603s
+  step 13000 train 0.245  VAL 0.885  lr 1.3e-05 2717s
+  step 13500 train 0.624  VAL 0.906  lr 7.6e-06 2830s
+  step 14000 train -0.029  VAL 0.912  lr 3.4e-06 2944s
+  step 14500 train -0.552  VAL 0.918  lr 8.5e-07 3057s
+  step 14999 train 0.233  VAL 0.919  lr 0.0e+00 3170s
+saved best (val 0.871) -> ka_move_model_N100.pt

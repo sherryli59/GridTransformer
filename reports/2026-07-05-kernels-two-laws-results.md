@@ -160,3 +160,29 @@ beta=2.00: 195 events / 147 localized; 1.81: 320/199; 1.63: 532/306 => **346 loc
 artifacts/ka_event_bank_N100.pt (full config pairs). GB1 design inputs fixed: k_block=8 (covers max), betas
 {2.0, 1.81, 1.63} via FiLM, two-way conditional q(x'_block|x_block, env) with A1-cSMC composition as the
 acceptance fallback.
+
+## GB1 gate 1 + the SELECTION-SYMMETRY WALL (2026-07-07)
+
+Training: best group-held-out val 0.871 (ckpt saved at the val optimum; late-run overfit gap confirmed —
+train -0.5 vs val 0.92 by step 15k — user called it; 1M-sweep harvest (4x bank) banked for a v2).
+
+**Gate 1 (one-shot MH acceptance): 0.0000 — but the diagnosis is NOT proposal quality: abort 92-94%.**
+The occupancy-symmetry check (required for DB under slot-anchored block selection) kills moves before MH
+evaluates. Attribution chain (3 measurements):
+1. `_curve_order` is a GLOBAL argsort of curve codes => any cell-crossing mover changes its own rank and
+   shifts every rank between old/new codes. Real collective moves inherently cross cells => slot-set
+   preservation ~never holds. The 93% abort is bookkeeping-structural, not physics.
+2. Particle-kNN selection (fold q_sel into Hastings): only **2%** of real bank events are reverse-selectable
+   — a cage-break BY DEFINITION rearranges the neighborhood any kNN rule keys on.
+3. Region-anchored selection (fixed ball, occupants-as-block, symmetric abort): best case R=1.6sigma gives
+   **30%** of real events covered+occupancy-stable (block ~9-11); larger R strictly worse.
+
+**THE FINDING (new, campaign-level): the collective move class DESTROYS the neighborhood structure that any
+local block-selection rule keys on.** Exact same-particle-set block kernels can express at most ~30% of real
+events (region-anchored, R=1.6). The pre-committed cSMC-composition fallback does NOT apply (it fixes hit
+rate; acceptance never evaluates here) — overridden by the measured diagnosis.
+
+Options forward: (a) v2 region-anchored kernel trained on the stable ~30% subset (1M bank => ~650 such
+events; variable-k blocks ~9-11; one more build-train-gate cycle); (b) accept the structural finding and
+pivot (learned-augmented PT / transfer-scale crossover); (c) variable-membership block machinery (grand-
+canonical-flavored) — principled but a research project of its own.

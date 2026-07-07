@@ -199,6 +199,7 @@ def report(fname="pt_ladder_N100.pt", max_pairs=None):
 if __name__ == "__main__":
     import sys
     if len(sys.argv) > 1 and sys.argv[1] == "harvest":
-        harvest_main(n_sweeps=int(sys.argv[2]) if len(sys.argv) > 2 else 40000)
+        harvest_main(n_sweeps=int(sys.argv[2]) if len(sys.argv) > 2 else 40000,
+                     dt=int(sys.argv[3]) if len(sys.argv) > 3 else 400)
     else:
         report(fname=sys.argv[1] if len(sys.argv) > 1 else "pt_ladder_N100.pt")

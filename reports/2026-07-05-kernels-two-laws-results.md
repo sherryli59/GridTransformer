@@ -278,3 +278,7 @@ finite-size physics even enters (user's challenge further vindicated). Experimen
 N=576 prechecks: ALL PASS — incl **A2 frozen-cage DB = 0.00e0 zero-shot at 5.76x training size** (the locality
 thesis at its hardest test). N=100 block (matched wall ~1290s): SMC -3.1690 | **plain PT -3.2761** | PT+A2 (running).
 Plain PT dominates at small N by 0.107/particle, as expected — the crossover question lives at 256/576.
+
+### Crossover N=100 COMPLETE (matched wall ~1290s): plain -3.2761 | PT+A2 -3.2701 (14.4k vs 31.2k sweeps —
+the 2.16x hb overhead reproduced) | SMC -3.1690. Plain PT owns N=100. N=256: SMC -3.0742@3367s (budget set),
+PT arms running.

@@ -37,6 +37,12 @@ def fixed_count_species(N, frac_B=0.35, seed=0):
 
 def run_unit(N, real, n_equil=36000, n_collect=4000, nB=None):
     L = (N / 1.2) ** 0.5
+    nB_eff = nB if nB is not None else round(0.35 * N)
+    done = os.path.join(ART, f"fss_N{N}_r{real}_nB{nB_eff}.pt")
+    if os.path.exists(done):                                     # resume support: unit already banked
+        out = torch.load(done, map_location="cpu", weights_only=False)
+        print(f"FSS N={N} r={real}: SKIP (banked: U/N {out['U']:.4f})", flush=True)
+        return out
     if nB is None:
         sd = fixed_count_species(N, 0.35, seed=real).to(DEV)
     else:                                                   # composition-sensitivity unit: exact nB, seed=real
@@ -65,7 +71,7 @@ def run_unit(N, real, n_equil=36000, n_collect=4000, nB=None):
     return out
 
 
-def main(Ns=(64, 100, 144), reals=(0, 1, 2)):
+def main(Ns=(64, 100, 144), reals=(0,)):
     res = []
     for N in Ns:
         for r in reals:
@@ -73,7 +79,7 @@ def main(Ns=(64, 100, 144), reals=(0, 1, 2)):
     # composition sensitivity at N=100: nB = 37 and 39 (35 comes from the trend family). HISTORICAL DISCOVERY:
     # seeded-Bernoulli make_species gave 39%B at N=100 and 37.1%B at N=256 — all past cross-N comparisons
     # carried a ~2-point composition difference. dU/dx_B from these units converts that into an energy correction.
-    for nB in (37, 39):
+    for nB in (39,):
         res.append(run_unit(100, 0, nB=nB))
     # trend: converged units only (budget-flat < 0.01)
     print("\n=== FINITE-SIZE TREND (converged units: budget-flat < 0.01) ===", flush=True)

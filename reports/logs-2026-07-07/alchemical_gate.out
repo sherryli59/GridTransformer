@@ -1,0 +1,5 @@
+NCMC T=  1: accept 0.00000  1s/200 moves  accepted-exchanges/s 0.00
+NCMC T=  4: accept 0.00000  4s/200 moves  accepted-exchanges/s 0.00
+NCMC T= 16: accept 0.00102  18s/200 moves  accepted-exchanges/s 1.48
+NCMC T= 64: accept 0.00336  70s/200 moves  accepted-exchanges/s 1.23
+compare: swap-and-breathe v2 = 1.9% per ~70s/exchange-chain [[swap-breathe-kernel]]

@@ -248,3 +248,18 @@ room even off-equilibrium (the "stuck states have density inhomogeneities" bet: 
 grand-canonical/variable-membership block direction closes at its cheapest gate, as designed. Kernel + tests
 remain in the repo (correct, reusable if a future system has real pockets — e.g., lower density or mixtures
 with size disparity).
+
+### ALCHEMICAL NCMC T-SCAN — mechanism VALIDATED, economics at PARITY with SB v2 (not a win at first settings)
+| T | accept | accepted-exchanges/s (B=128) | s per exchange-chain |
+|---|--------|------------------------------|----------------------|
+| 1 | 0.00000 | 0.00 | dead (sanity anchor = plain-swap-dead REPRODUCED) |
+| 4 | 0.00000 | 0.00 | dead |
+| 16 | 0.00102 | 1.48 | ~86 |
+| 64 | 0.00336 | 1.23 | ~104 |
+- **The pathwise hypothesis is confirmed**: the dead species channel turns ON monotonically with path length —
+  the third independent "paths beat endpoint jumps" datapoint (PT temperature paths; oracle endpoint-transplant
+  zero; now alchemical lambda-paths). A PURE-PHYSICS kernel (no learning) reaches within 1.5x of the learned
+  SB v2's economics (~86 vs ~70 s/exchange-chain).
+- Verdict vs the gate bar (beat SB v2): NOT passed at first settings => flow-drift upgrade stays LOCKED per the
+  pre-agreement. Headroom unexplored: n_relax/T tuning, adaptive protocols, geometry-targeted pair selection.
+  Second independent equilibrium species kernel banked (diversity value even at parity).

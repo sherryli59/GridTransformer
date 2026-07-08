@@ -1,0 +1,10 @@
+FSS N=64 r=0: SKIP (banked: U/N -2.0986)
+FSS N=100 r=0: U/N -3.1700+/-0.0010  exch 0.48  budget-flat 0.0259  coll-drift 0.0202  nB 35  1716s
+FSS N=144 r=0: U/N -3.1518+/-0.0008  exch 0.40  budget-flat 0.0185  coll-drift 0.0115  nB 50  2536s
+FSS N=100 r=0: U/N -3.2818+/-0.0010  exch 0.48  budget-flat 0.0086  coll-drift 0.0116  nB 39  1719s
+
+=== FINITE-SIZE TREND (converged units: budget-flat < 0.01) ===
+N=64: NO unit passed budget-flatness — protocol insufficient at this N
+N=100: mean -3.2818  realization-scatter 0.0559  (1/2 converged)
+N=144: NO unit passed budget-flatness — protocol insufficient at this N
+VERDICT guide: slope of converged U/N vs 1/N pointing to ~-3.23 at N=256 => finite-size physics; flat within ~0.01 => the N=256 gap is protocol shortfall (M=16 rerun justified).

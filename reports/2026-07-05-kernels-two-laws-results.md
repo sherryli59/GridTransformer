@@ -300,3 +300,14 @@ nB=39 matched-protocol unit, the N=100<->N=256 discrepancy was mostly TWO DIFFER
 (composition), not under-convergence, not finite-size geometry. User's challenge substantially vindicated;
 all campaign cross-N metrics need composition-matched restatement. N=144 @34.7%B: -3.1518 (flat 0.019; trend
 vs N=100 not yet separable from convergence shortfall).
+
+### FINITE-SIZE/COMPOSITION DECOMPOSITION — CLOSED: the historical cross-N gap was ENTIRELY composition
+nB=39 matched-protocol unit: **-3.2818+/-0.0010 (flat 0.0086)** — replicates historical -3.284 to 0.002
+(=> realization scatter at fixed composition ~0.002, tiny). **dU/dx_B = -2.80**; composition correction for
+the historical comparison (39%B vs 37.1%B) = 2.80x0.019 = **0.053 = the whole gap; residual ~0.000+/-0.01**.
+- The two sizes were DIFFERENT PHYSICAL SYSTEMS; the N=256 "-3.231 badly-under-converged" verdict DISSOLVES
+  (it is consistent with composition-corrected N=100); **M=16 ladder rerun likely unnecessary**.
+- Fixed-35% trend (composition-rounding-corrected): N=64 -3.155(conv), N=100 -3.170(desc), N=144 -3.160(desc)
+  — no large geometric finite-size slope within convergence uncertainty.
+- Within-N arm comparisons (all crossover rows) were never contaminated (same composition per N); only
+  cross-N-absolute claims need restatement. User challenge vindicated with mechanism.

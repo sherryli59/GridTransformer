@@ -1,0 +1,7 @@
+/home/sherryli/xsli/softwares/anaconda3/envs/lightning/lib/python3.11/site-packages/torch/nn/modules/transformer.py:379: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+seed 0: cold <U>/N -3.2311+/-0.0006 exch 0.27 cold-drift 0.0005 (hot-max 0.0286) rung-configs 4000
+seed 1: cold <U>/N -3.2267+/-0.0006 exch 0.27 cold-drift 0.0040 (hot-max 0.0307) rung-configs 4000
+LADDER N=256: agree=True(|d|=0.0044/tol0.0050) flat=True(drift0.0040) exch_in_band=True(0.27-0.27) -> CONVERGED
+saved ladder (80000 configs over 10 rungs, ~8000/rung) -> /mnt/ssd/GridTransformer/liquid_coupling_flow/artifacts/pt_ladder_hb_N256.pt
+PT2_DONE

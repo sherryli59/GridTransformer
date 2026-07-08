@@ -229,3 +229,13 @@ vs N=100 goalpost <= -3.284: finite-size direction still wrong (0.053 shallow). 
 confounded (hb AND 2x equil changed). **NEW DIAGNOSIS: exchange acc 0.27 at N=256 vs 0.49 at N=100 on the
 same M=10 ladder — sigma_U ~ sqrt(N) shrinks rung overlap; N=256 wants M~16 rungs. Ladder RESOLUTION, not
 just sweep count: redesign before buying more sweeps.** Seed 1 running (~6h; artifact saves only after both).
+
+### PT2 COMPLETE (N=256, 32k equil, +hb, 12h): internal gates "CONVERGED" — read as PER-PROTOCOL only
+seed0 -3.2311+/-0.0006, seed1 -3.2267+/-0.0006 (|d| 0.0044, 9x looser than N=100's 0.0005), cold-drift <=0.004,
+exch 0.27. Dataset: pt_ladder_hb_N256.pt (80k configs / 10 rungs) + .bak. ROLE (downgraded per user challenge):
+a deeper N=256 ladder DATASET + one confounded data point (hb + 2x equil changed together) — NOT the reference
+deliverable. The -3.231-vs-N=100(-3.284) gap remains unresolved between protocol shortfall (evidence: number
+moved 0.021 with budget; exch 0.27 => M=16 ladder needed) and genuine 2D finite-size physics (user hypothesis;
+composition rounding + single species realization uncontrolled). DECISIVE NEXT TEST (pending approval):
+converged-by-construction U/N(N) at N=64/100/144 x 2-3 species realizations -> slope vs 1/N decides, and
+calibrates every cross-N gap metric in the campaign (incl transfer experiments).

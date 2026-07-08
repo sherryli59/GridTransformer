@@ -273,3 +273,8 @@ finite-size physics even enters (user's challenge further vindicated). Experimen
 - composition sensitivity: N=100 at nB=35/37/39 -> dU/dx_B converts the historical delta into an energy
   correction. Decomposition target: historical gap = finite-size slope + composition correction + residual
   (= true convergence shortfall). Log: reports/logs-2026-07-07/finite_size_scaling.out.
+
+## 3-ARM SCALE CROSSOVER (running; user-reordered ahead of finite-size)
+N=576 prechecks: ALL PASS — incl **A2 frozen-cage DB = 0.00e0 zero-shot at 5.76x training size** (the locality
+thesis at its hardest test). N=100 block (matched wall ~1290s): SMC -3.1690 | **plain PT -3.2761** | PT+A2 (running).
+Plain PT dominates at small N by 0.107/particle, as expected — the crossover question lives at 256/576.

@@ -288,3 +288,6 @@ PT+A2 measured overhead 1.46x (157 vs 108 ms/sweep) — still net-negative vs pl
 wall). SMC deficit GROWS with N (0.107@100 -> 0.151@256). Both crossovers unarrived by 256; N=576 = the
 decisive row (PT exch acc 0.49->0.28->? on fixed M=10 is PT's stress point). Note: plain-PT-56min at 256
 (-3.2254) ~= PT2's 12h result (-3.2311) — sweeps-per-wall dominates everything.
+
+### Crossover N=576: SMC arm -3.0533@10498s (ladder completed rung 62, ESS alive, all components zero-shot
+at 5.76x training size — machinery transfer holds); PT arms at the 2.9h budget follow.

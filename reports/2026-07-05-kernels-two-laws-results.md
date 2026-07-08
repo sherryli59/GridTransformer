@@ -282,3 +282,9 @@ Plain PT dominates at small N by 0.107/particle, as expected — the crossover q
 ### Crossover N=100 COMPLETE (matched wall ~1290s): plain -3.2761 | PT+A2 -3.2701 (14.4k vs 31.2k sweeps —
 the 2.16x hb overhead reproduced) | SMC -3.1690. Plain PT owns N=100. N=256: SMC -3.0742@3367s (budget set),
 PT arms running.
+
+### Crossover N=256 COMPLETE: SMC -3.0742@3367s | plain -3.2254@3372s | PT+A2 -3.2181@3782s
+PT+A2 measured overhead 1.46x (157 vs 108 ms/sweep) — still net-negative vs plain (+0.007 shallow at +12%
+wall). SMC deficit GROWS with N (0.107@100 -> 0.151@256). Both crossovers unarrived by 256; N=576 = the
+decisive row (PT exch acc 0.49->0.28->? on fixed M=10 is PT's stress point). Note: plain-PT-56min at 256
+(-3.2254) ~= PT2's 12h result (-3.2311) — sweeps-per-wall dominates everything.

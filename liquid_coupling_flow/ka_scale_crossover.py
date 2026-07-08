@@ -86,6 +86,8 @@ def run_size(N, B_smc=None):
     # ARM 1: A2-stack SMC (sets the wall budget)
     out = smc_run("arm0", N=N, B=B_smc, n_heatbath=1, max_rungs=64, save_tag=f"_xover")
     W = out["wall"]; u_smc = out["history"][-1]["U_mean"]
+    del out
+    import gc; gc.collect(); torch.cuda.empty_cache()               # OOM@576: SMC left ~21GB held in-process
     print(f"XOVER N={N} SMC: U/N {u_smc:.4f}  wall {W:.0f}s (budget-setter)", flush=True)
     # timing probe for PT sweeps
     T_ladder = 0.5 * (1.25 / 0.5) ** (torch.arange(10) / 9)
@@ -106,6 +108,8 @@ def run_size(N, B_smc=None):
         wall = time.time() - t0
         U = (ka_energy(cfg, sd, L) / N).mean().item()
         res[name] = {"U": U, "wall": wall, "n_sweeps": n_sw, "exch": ex, "traj": traj}
+        del cfg
+        import gc; gc.collect(); torch.cuda.empty_cache()
         torch.save(res, os.path.join(ART, f"crossover_N{N}_partial.pt"))
         print(f"XOVER N={N} {name}: U/N {U:.4f}  wall {wall:.0f}s ({n_sw} sweeps, exch {ex:.2f})", flush=True)
     print(f"XOVER N={N} SUMMARY: SMC {u_smc:.4f}@{W:.0f}s | plain {res['pt_plain']['U']:.4f}@"
@@ -125,8 +129,40 @@ def main(Ns=(100, 256, 576)):
     print("CROSSOVER COMPLETE", flush=True)
 
 
+def pt_arms_only(N):
+    """Recovery: run just the PT arms using the saved SMC budget from crossover_N{N}_partial.pt."""
+    d = torch.load(os.path.join(ART, f"crossover_N{N}_partial.pt"), map_location="cpu", weights_only=False)
+    W, s_sweep = d["smc"]["wall"], d["s_per_sweep_pt"]
+    L = (N / 1.2) ** 0.5
+    sd = make_species(N, 0.35).to(DEV)
+    T_ladder = 0.5 * (1.25 / 0.5) ** (torch.arange(10) / 9)
+    res = dict(d)
+    for name, hb in (("pt_plain", None), ("pt_hb", "ka_heatbath_N100.pt")):
+        if name in res:
+            continue
+        factor = 1.0 if hb is None else 1.3 if N >= 256 else 2.16
+        n_sw = max(2000, int(W / (s_sweep * factor)))
+        n_coll = max(400, n_sw // 10)
+        t0 = time.time()
+        cfg, traj, ex, _ = parallel_tempering(N, L, sd, T_ladder, DEV, n_per=8, n_equil=n_sw - n_coll,
+                                              n_collect=n_coll, every=8, track_every=500, seed=0,
+                                              hb_ckpt=hb, hb_every=10, hb_moves=25)
+        wall = time.time() - t0
+        U = (ka_energy(cfg, sd, L) / N).mean().item()
+        res[name] = {"U": U, "wall": wall, "n_sweeps": n_sw, "exch": ex, "traj": traj}
+        torch.save(res, os.path.join(ART, f"crossover_N{N}_partial.pt"))
+        print(f"XOVER N={N} {name}: U/N {U:.4f}  wall {wall:.0f}s ({n_sw} sweeps, exch {ex:.2f})", flush=True)
+        del cfg
+        import gc; gc.collect(); torch.cuda.empty_cache()
+    print(f"XOVER N={N} SUMMARY: SMC {res['smc']['U']:.4f}@{res['smc']['wall']:.0f}s | "
+          f"plain {res['pt_plain']['U']:.4f}@{res['pt_plain']['wall']:.0f}s | "
+          f"PT+A2 {res['pt_hb']['U']:.4f}@{res['pt_hb']['wall']:.0f}s", flush=True)
+
+
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "precheck":
+    if len(sys.argv) > 1 and sys.argv[1] == "pt_arms":
+        pt_arms_only(int(sys.argv[2]))
+    elif len(sys.argv) > 1 and sys.argv[1] == "precheck":
         precheck(int(sys.argv[2]) if len(sys.argv) > 2 else 576)
     else:
         main(tuple(int(a) for a in sys.argv[1:] if a.isdigit()) or (100, 256, 576))

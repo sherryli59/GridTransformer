@@ -291,3 +291,12 @@ decisive row (PT exch acc 0.49->0.28->? on fixed M=10 is PT's stress point). Not
 
 ### Crossover N=576: SMC arm -3.0533@10498s (ladder completed rung 62, ESS alive, all components zero-shot
 at 5.76x training size — machinery transfer holds); PT arms at the 2.9h budget follow.
+
+## FINITE-SIZE/COMPOSITION — PRELIMINARY BOMBSHELL (2026-07-08)
+N=100 @35%B(exact): U/N -3.1700 (36k+4k, flat 0.026) vs the historical N=100 @39%B: -3.284 => **dU/dx_B ~
+-2.4 to -2.9: four points of B moved U/N by ~0.11**. Applied to the historical cross-N comparison (39%B vs
+37.1%B, dx=1.9pts): composition correction ~0.045-0.054 =~ the ENTIRE historical 0.053 gap. PENDING the
+nB=39 matched-protocol unit, the N=100<->N=256 discrepancy was mostly TWO DIFFERENT PHYSICAL SYSTEMS
+(composition), not under-convergence, not finite-size geometry. User's challenge substantially vindicated;
+all campaign cross-N metrics need composition-matched restatement. N=144 @34.7%B: -3.1518 (flat 0.019; trend
+vs N=100 not yet separable from convergence shortfall).

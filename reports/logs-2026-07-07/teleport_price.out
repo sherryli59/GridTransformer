@@ -1,0 +1,6 @@
+/home/sherryli/xsli/softwares/anaconda3/envs/lightning/lib/python3.11/site-packages/torch/nn/modules/transformer.py:379: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+TELEPORT equilibrium(b=2): accept 0.00002  abort 0.23  (3.4s/sweep)
+TELEPORT mid-anneal(b=1.2): accept 0.00000  abort 0.32  (3.1s/sweep)
+TELEPORT SMC-stuck(b=2): accept 0.00000  abort 0.23  (3.3s/sweep)
+TELEPORT PRICE: {'equilibrium(b=2)': 2.0032051282051282e-05, 'mid-anneal(b=1.2)': 0.0, 'SMC-stuck(b=2)': 0.0} -> CLOSES at pricing gate

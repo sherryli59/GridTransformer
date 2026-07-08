@@ -239,3 +239,12 @@ moved 0.021 with budget; exch 0.27 => M=16 ladder needed) and genuine 2D finite-
 composition rounding + single species realization uncontrolled). DECISIVE NEXT TEST (pending approval):
 converged-by-construction U/N(N) at N=64/100/144 x 2-3 species realizations -> slope vs 1/N decides, and
 calibrates every cross-N gap metric in the campaign (incl transfer experiments).
+
+### TELEPORT PRICING — CLOSES at the gate (the variable-membership direction ends here)
+Teleport-swap (long-range occupant exchange via A2 frozen-cage conditionals, exact, 4/4 TDD): acceptance
+**2e-5 at equilibrium, 0.0 at mid-anneal (b=1.2), 0.0 on the SMC-stuck population** (5 sweeps x 128 chains
+each; abort 0.23-0.32). Even a learned smart-insertion never finds a pocket — the glass has no interstitial
+room even off-equilibrium (the "stuck states have density inhomogeneities" bet: WRONG, measured). The
+grand-canonical/variable-membership block direction closes at its cheapest gate, as designed. Kernel + tests
+remain in the repo (correct, reusable if a future system has real pockets — e.g., lower density or mixtures
+with size disparity).

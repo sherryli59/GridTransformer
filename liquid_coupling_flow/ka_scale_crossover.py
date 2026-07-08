@@ -21,6 +21,13 @@ from liquid_coupling_flow.ka_energy import ka_energy
 DEV = "cuda" if torch.cuda.is_available() else "cpu"
 
 
+def _energy_chunked(cfg, sd, L, N, chunk=128):
+    """ka_energy over a big config stack builds [n,N,N,2] => 10.4 GiB at N=576 (the crash that killed BOTH
+    N=576 PT-arm attempts at their final measurement line). Chunk it."""
+    us = [ka_energy(cfg[i:i + chunk], sd, L) for i in range(0, cfg.shape[0], chunk)]
+    return torch.cat(us)
+
+
 def precheck(N=576):
     ok = {}
     # (a) scaffold machinery
@@ -106,7 +113,8 @@ def run_size(N, B_smc=None):
                                               n_collect=n_coll, every=8, track_every=500, seed=0,
                                               hb_ckpt=hb, hb_every=10, hb_moves=25)
         wall = time.time() - t0
-        U = (ka_energy(cfg, sd, L) / N).mean().item()
+        torch.save({"cfg": cfg.cpu(), "traj": traj, "exch": ex}, os.path.join(ART, f"crossover_N{N}_{name}_cfgs.pt"))
+        U = (_energy_chunked(cfg, sd, L, N) / N).mean().item()
         res[name] = {"U": U, "wall": wall, "n_sweeps": n_sw, "exch": ex, "traj": traj}
         del cfg
         import gc; gc.collect(); torch.cuda.empty_cache()
@@ -148,7 +156,8 @@ def pt_arms_only(N):
                                               n_collect=n_coll, every=8, track_every=500, seed=0,
                                               hb_ckpt=hb, hb_every=10, hb_moves=25)
         wall = time.time() - t0
-        U = (ka_energy(cfg, sd, L) / N).mean().item()
+        torch.save({"cfg": cfg.cpu(), "traj": traj, "exch": ex}, os.path.join(ART, f"crossover_N{N}_{name}_cfgs.pt"))
+        U = (_energy_chunked(cfg, sd, L, N) / N).mean().item()
         res[name] = {"U": U, "wall": wall, "n_sweeps": n_sw, "exch": ex, "traj": traj}
         torch.save(res, os.path.join(ART, f"crossover_N{N}_partial.pt"))
         print(f"XOVER N={N} {name}: U/N {U:.4f}  wall {wall:.0f}s ({n_sw} sweeps, exch {ex:.2f})", flush=True)

@@ -263,3 +263,13 @@ with size disparity).
 - Verdict vs the gate bar (beat SB v2): NOT passed at first settings => flow-drift upgrade stays LOCKED per the
   pre-agreement. Headroom unexplored: n_relax/T tuning, adaptive protocols, geometry-targeted pair selection.
   Second independent equilibrium species kernel banked (diversity value even at parity).
+
+## FINITE-SIZE + COMPOSITION EXPERIMENT LAUNCHED (2026-07-07 ~22:40) — and a pre-launch DISCOVERY
+**All historical cross-N comparisons carried a hidden composition difference**: seeded-Bernoulli make_species
+gave nB=39 (39%B) at N=100 and nB=95 (37.1%B) at N=256 — never the nominal 35%, and ~2 points apart between
+the sizes whose energies we compared. The "intensive U/N must match" gate was broken by composition before
+finite-size physics even enters (user's challenge further vindicated). Experiment (11 units, per-unit saves):
+- trend family: EXACT-count 35% at N=64/100/144 x 3 arrangements (isolates arrangement scatter + 1/N slope);
+- composition sensitivity: N=100 at nB=35/37/39 -> dU/dx_B converts the historical delta into an energy
+  correction. Decomposition target: historical gap = finite-size slope + composition correction + residual
+  (= true convergence shortfall). Log: reports/logs-2026-07-07/finite_size_scaling.out.

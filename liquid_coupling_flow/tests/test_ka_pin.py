@@ -186,3 +186,26 @@ def test_stretched_exp_fit_graceful_on_short_input():
     assert out["ok"] is False
     out2 = stretched_exp_fit(np.array([0.,1.,2.]), np.array([1.,0.8,0.6]))   # 3 < 4 params
     assert out2["ok"] is False
+
+from liquid_coupling_flow.ka_pin_gates import g_conv, g_corr, g_stick
+
+def _run(qinf, tau, tmax, n=40, arm="ref"):
+    t = np.linspace(0, tmax, n)
+    sign = 1.0 if arm == "ref" else -1.0
+    Q = qinf + sign * 0.4 * np.exp(-(t / tau) ** 0.8)
+    return {"t": list(t), "Q": list(Q), "arm": arm}
+
+def test_gconv_needs_agreement_and_run_length():
+    good_ref = _run(0.30, 20, 200, arm="ref"); good_scr = _run(0.30, 20, 200, arm="scramble")
+    r = g_conv(good_ref, good_scr, tol=0.02)
+    assert r["passed"] and r["run_ok"]
+    # same plateaus but run too short (tmax < 3 tau) -> run_ok False -> gate fails
+    short_ref = _run(0.30, 100, 150, arm="ref"); short_scr = _run(0.30, 100, 150, arm="scramble")
+    assert not g_conv(short_ref, short_scr, tol=0.02)["passed"]
+    # disagreeing plateaus -> fail
+    assert not g_conv(_run(0.30, 20, 200, arm="ref"), _run(0.36, 20, 200, arm="scramble"), tol=0.02)["passed"]
+
+def test_gstick_and_gcorr():
+    a = _run(0.30, 20, 200, arm="ref"); b = _run(0.30, 20, 200, arm="scramble"); c = _run(0.30, 20, 400, arm="ref")
+    assert g_stick(a, b, c, tol=0.02)["passed"]
+    assert g_corr(_run(0.30, 20, 200, arm="ref"), _run(0.31, 20, 200, arm="ref"), tol=0.02)["passed"]

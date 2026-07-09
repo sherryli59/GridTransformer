@@ -1,0 +1,22 @@
+
+=== N=3  L=2.4495  rho*=0.500  T*=1 ===
+  ground truth <U>       = 0.32595 +/- 0.00013   [grid quad (bedrock)]
+  displacement MC <U>    = 0.32513 +/- 0.00062
+  RAW proposal E_q[U]    = 361599047146248833933000291909632.00000   (no MH -> WRONG)
+  ordered-MH <U>         = 0.32492 +/- 0.00095   (acc 0.101)
+  |ordered-MH - GT|      = 0.00103   tol 0.00485   -> PASS
+  raw-vs-GT gap          = 361599047146248833933000291909632.00000  (2876245422118917074321843362581184512 sigma) -> MH is load-bearing
+  P(U): total-variation  = 0.0028   KS = 0.0015
+  g(r): max |diff|       = 0.0259
+
+=== N=5  L=3.1623  rho*=0.500  T*=1 ===
+  ground truth <U>       = 0.63242 +/- 0.00093   [displacement MC]
+  displacement MC <U>    = 0.63242 +/- 0.00093
+  RAW proposal E_q[U]    = 35903367337487193945311019008.00000   (no MH -> WRONG)
+  ordered-MH <U>         = 0.62863 +/- 0.00439   (acc 0.012)
+  |ordered-MH - GT|      = 0.00379   tol 0.02290   -> PASS
+  raw-vs-GT gap          = 35903367337487193945311019008.00000  (38601588948942531746507893243904 sigma) -> MH is load-bearing
+  P(U): total-variation  = 0.0078   KS = 0.0030
+  g(r): max |diff|       = 0.0625
+
+FIGURE -> /mnt/ssd/GridTransformer/reports/logs-2026-07-09/ordmh_exactness.png

@@ -43,3 +43,12 @@ def overlap_Q(occ_t, occ_ref, excluded):
     num = (occ_t & occ_ref & keep).sum(1).float()
     den = (occ_ref & keep).sum(1).float().clamp_min(1.0)
     return float((num / den).mean())
+
+
+def overlap_Q_perchain(occ_t, occ_ref, excluded):
+    """Per-config occupancy overlap: Q_b = sum_i n_i(t)n_i(0) / sum_i n_i(0) over non-excluded cells, per row.
+    Returns a float tensor [B] (no batch reduction). mean(overlap_Q_perchain(...)) == overlap_Q(...)."""
+    keep = ~excluded
+    num = (occ_t & occ_ref & keep).sum(1).float()
+    den = (occ_ref & keep).sum(1).float().clamp_min(1.0)
+    return num / den

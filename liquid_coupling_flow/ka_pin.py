@@ -89,7 +89,8 @@ def constrained_run(x_ref, s_ref, mobile, T, L, n_iter, table_fn=None, dt=0.01,
     arm='ref': mobile start at reference positions (Q decays from 1); arm='scramble': mobile start at
     scramble_x (Q rises). Species channel: masked_swap (+ masked_block_relabel if table_fn given), both exact.
     Learned part (table_fn) enters block-relabel only, behind MH."""
-    from liquid_coupling_flow.ka_pin_overlap import cell_occupancy, pinned_cells, overlap_Q
+    assert arm in ("ref", "scramble"), f"arm must be 'ref' or 'scramble', got {arm!r}"
+    from liquid_coupling_flow.ka_pin_overlap import cell_occupancy, pinned_cells, overlap_Q, overlap_Q_perchain
     beta = 1.0 / T
     x = x_ref.clone(); s = s_ref.clone()
     if arm == "scramble":
@@ -99,11 +100,13 @@ def constrained_run(x_ref, s_ref, mobile, T, L, n_iter, table_fn=None, dt=0.01,
     efn = lambda a, b: ka_energy(a, b, L); ffn = lambda a, b: ka_forces(a, b, L)
     U = efn(x, s)
     occ_ref = cell_occupancy(x_ref, L); excl = pinned_cells(x_ref, mobile, L)
-    rec = {"t": [], "Q": [], "U": [], "arm": arm}
+    rec = {"t": [], "Q": [], "Q_chain": [], "U": [], "arm": arm}
     for it in range(n_iter + 1):
         if it % record_every == 0:
             rec["t"].append(it)
-            rec["Q"].append(overlap_Q(cell_occupancy(x, L), occ_ref, excl))
+            occ_now = cell_occupancy(x, L)
+            rec["Q"].append(overlap_Q(occ_now, occ_ref, excl))
+            rec["Q_chain"].append(overlap_Q_perchain(occ_now, occ_ref, excl).cpu())
             rec["U"].append(float((U / x.shape[1]).median()))
         if it == n_iter:
             break

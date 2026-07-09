@@ -126,3 +126,21 @@ def test_constrained_run_two_arms_frozen_fixed():
     # Q(t) recorded; ref arm starts at 1 (mobile at reference), scramble arm starts below 1
     assert ref["Q"][0] > 0.95 and scb["Q"][0] < ref["Q"][0]
     assert len(ref["t"]) == len(ref["Q"]) == len(ref["U"])
+
+def test_overlap_perchain_matches_batch_mean():
+    from liquid_coupling_flow.ka_pin_overlap import overlap_Q_perchain
+    x, s, L = _setup(B=6, N=64, seed=11)
+    occ = cell_occupancy(x, L); occ2 = cell_occupancy(torch.rand_like(x) * L, L)
+    excl = torch.zeros_like(occ)
+    pc = overlap_Q_perchain(occ2, occ, excl)
+    assert pc.shape == (6,)
+    assert abs(float(pc.mean()) - overlap_Q(occ2, occ, excl)) < 1e-6
+
+def test_constrained_run_records_qchain_and_guards_arm():
+    import pytest
+    x, s, L = _setup(B=4, N=100, seed=12)
+    mobile = pin_mask(4, 100, 0.2, "cpu", generator=torch.Generator().manual_seed(2))
+    r = constrained_run(x, s, mobile, T=0.8, L=L, n_iter=10, dt=0.01, record_every=5, arm="ref")
+    assert len(r["Q_chain"]) == len(r["Q"]) and len(r["Q_chain"][0]) == 4    # per-chain, B=4
+    with pytest.raises(AssertionError):
+        constrained_run(x, s, mobile, T=0.8, L=L, n_iter=5, arm="bogus")

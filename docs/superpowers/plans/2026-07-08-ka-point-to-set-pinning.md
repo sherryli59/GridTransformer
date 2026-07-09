@@ -794,13 +794,23 @@ def run_cell(T, c, refs, n_iter, table_fn, device, out_dir, n_real=16, dt=0.01, 
     scr_run = constrained_run(x, s, mobile, T, L, n_iter, table_fn, dt, record_every,
                               arm="scramble", scramble_x=scr)
     gc = g_conv(ref_run, scr_run)
-    fit = stretched_exp_fit(ref_run["t"], ref_run["Q"])
+    # per-realization Q_inf -> REAL bootstrap error over pinning realizations (not a stub), from the ref arm's
+    # per-chain Q(t) (Q_chain). The ref arm decays, so stretched_exp_fit's default rising=False is correct.
+    t = np.asarray(ref_run["t"], float)
+    Qc = np.stack([q.numpy() for q in ref_run["Q_chain"]])              # [n_steps, n_real]
+    qinf_b = []
+    for b in range(Qc.shape[1]):
+        f = stretched_exp_fit(t, Qc[:, b])
+        qinf_b.append(f["Qinf"] if f["ok"] else float(Qc[-max(1, len(t) // 5):, b].mean()))
+    qinf_b = np.asarray(qinf_b, float)
+    Qinf = float(np.median(qinf_b))
+    Qinf_err = float(qinf_b.std(ddof=1) / np.sqrt(len(qinf_b))) if len(qinf_b) > 1 else 0.02
     lc = (c * RHO) ** -0.5
-    cell = {"T": T, "c": c, "lc": lc, "Qinf": fit["Qinf"], "Qinf_err": 0.01,
+    cell = {"T": T, "c": c, "lc": lc, "Qinf": Qinf, "Qinf_err": Qinf_err,
             "gconv": gc, "xB": float((s[mobile] == 1).float().mean()),
             "arms": {"ref": ref_run, "scramble": scr_run}}
     torch.save(cell, os.path.join(out_dir, f"cell_T{T}_c{c}.pt"))       # incremental save
-    print(f"[pts] T={T} c={c} lc={lc:.2f} Qinf={fit['Qinf']:.3f} "
+    print(f"[pts] T={T} c={c} lc={lc:.2f} Qinf={Qinf:.3f}+/-{Qinf_err:.3f} "
           f"gconv={'PASS' if gc['passed'] else 'BOUND'} -> {os.path.join(out_dir, f'cell_T{T}_c{c}.pt')}",
           flush=True)
     return cell

@@ -1,0 +1,50 @@
+[traj] gentle melt T_hot=1.5; budget 3000 it x30 disp; watching for CONVERGING vs PLATEAUED-APART
+[traj] --- c=0.16 lc=2.28  (Q_rand=0.108, scr melt-start Q=0.428) ---
+    [ref     ] it    0 Q 1.000
+    [ref     ] it  300 Q 0.449
+    [ref     ] it  600 Q 0.414
+    [ref     ] it  900 Q 0.412
+    [ref     ] it 1200 Q 0.423
+    [ref     ] it 1500 Q 0.380
+    [ref     ] it 1800 Q 0.400
+    [ref     ] it 2100 Q 0.416
+    [ref     ] it 2400 Q 0.386
+    [ref     ] it 2700 Q 0.376
+    [ref     ] it 3000 Q 0.381
+    [scramble] it    0 Q 0.428
+    [scramble] it  300 Q 0.434
+    [scramble] it  600 Q 0.436
+    [scramble] it  900 Q 0.387
+    [scramble] it 1200 Q 0.391
+    [scramble] it 1500 Q 0.379
+    [scramble] it 1800 Q 0.387
+    [scramble] it 2100 Q 0.389
+    [scramble] it 2400 Q 0.363
+    [scramble] it 2700 Q 0.369
+    [scramble] it 3000 Q 0.358
+[traj] c=0.16: ref plateau~0.381 scr plateau~0.363  GAP(last3)=0.018  (fit gap 0.005)  ref-excess~0.273
+[traj] --- c=0.08 lc=3.23  (Q_rand=0.108, scr melt-start Q=0.371) ---
+    [ref     ] it    0 Q 1.000
+    [ref     ] it  300 Q 0.316
+    [ref     ] it  600 Q 0.288
+    [ref     ] it  900 Q 0.264
+    [ref     ] it 1200 Q 0.250
+    [ref     ] it 1500 Q 0.235
+    [ref     ] it 1800 Q 0.251
+    [ref     ] it 2100 Q 0.233
+    [ref     ] it 2400 Q 0.237
+    [ref     ] it 2700 Q 0.220
+    [ref     ] it 3000 Q 0.223
+    [scramble] it    0 Q 0.371
+    [scramble] it  300 Q 0.307
+    [scramble] it  600 Q 0.287
+    [scramble] it  900 Q 0.264
+    [scramble] it 1200 Q 0.261
+    [scramble] it 1500 Q 0.250
+    [scramble] it 1800 Q 0.211
+    [scramble] it 2100 Q 0.233
+    [scramble] it 2400 Q 0.223
+    [scramble] it 2700 Q 0.214
+    [scramble] it 3000 Q 0.212
+[traj] c=0.08: ref plateau~0.226 scr plateau~0.216  GAP(last3)=0.010  (fit gap 0.014)  ref-excess~0.118
+[traj] DONE

@@ -1,0 +1,4 @@
+[properinit] T=0.8 N=256 step=0.1 melt=hot(T=5) — scramble starts from a VALID melted config
+[properinit] c=0.16 lc=2.28: scr_start_Q=0.236 -> ref_Qinf=0.399 scr_Qinf=0.309 GAP=0.090 (uniform-init gave 0.198/0.070) excess=0.291 -> NOT-CONV  (151s)
+[properinit] c=0.08 lc=3.23: scr_start_Q=0.168 -> ref_Qinf=0.241 scr_Qinf=0.000 GAP=0.241 (uniform-init gave 0.198/0.070) excess=0.133 -> NOT-CONV  (303s)
+[properinit] DONE

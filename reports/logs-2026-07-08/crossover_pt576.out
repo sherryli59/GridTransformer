@@ -1,0 +1,13 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/mnt/ssd/GridTransformer/liquid_coupling_flow/ka_scale_crossover.py", line 164, in <module>
+    pt_arms_only(int(sys.argv[2]))
+  File "/mnt/ssd/GridTransformer/liquid_coupling_flow/ka_scale_crossover.py", line 151, in pt_arms_only
+    U = (ka_energy(cfg, sd, L) / N).mean().item()
+         ^^^^^^^^^^^^^^^^^^^^^
+  File "/mnt/ssd/GridTransformer/liquid_coupling_flow/ka_energy.py", line 30, in ka_energy
+    diff = diff - L * torch.round(diff / L)
+                      ^^^^^^^^^^^^^^^^^^^^^
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 10.42 GiB. GPU 0 has a total capacity of 23.67 GiB of which 2.30 GiB is free. Including non-PyTorch memory, this process has 21.26 GiB memory in use. Of the allocated memory 20.87 GiB is allocated by PyTorch, and 101.47 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+RECOVERY_DONE

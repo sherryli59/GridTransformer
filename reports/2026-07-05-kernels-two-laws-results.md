@@ -311,3 +311,9 @@ the historical comparison (39%B vs 37.1%B) = 2.80x0.019 = **0.053 = the whole ga
   — no large geometric finite-size slope within convergence uncertainty.
 - Within-N arm comparisons (all crossover rows) were never contaminated (same composition per N); only
   cross-N-absolute claims need restatement. User challenge vindicated with mechanism.
+
+### Crossover N=576 pt_plain: -3.1973@10720s (42k sweeps) vs SMC -3.0533 — PT wins (deficit 0.144).
+**exch@576 = 0.11: the fixed-M=10 exchange collapse completes (0.49->0.28->0.11)** — PT's stress mechanism is
+real, but raw sweep throughput still carries it past the learned stack. SMC deficit vs N: 0.107->0.151->0.144
+(no crossover; plateaued even as PT's exchange dies). Caveat for the verdict: at large N a practitioner
+re-tunes the ladder (M~16-20) — fixed-M handicaps PT, so the true PT bar is even higher. pt_hb@576 running.

@@ -217,3 +217,15 @@ def test_gconv_fails_short_scramble_with_asymmetric_tau():
     r = g_conv(ref, scr, tol=0.02)
     assert not r["run_ok"], f"expected run_ok False (fitted tau_s={r['tau']:.1f}), got {r}"
     assert not r["passed"]
+
+import os
+from liquid_coupling_flow.ka_pin_refs import get_references
+
+def test_get_references_highT_smoke(tmp_path):
+    r = get_references(T=0.8, N=100, n_configs=8, device="cpu", out_dir=str(tmp_path))
+    assert r["x"].shape == (8, 100, 2) and r["s"].shape == (100,)
+    assert 0.30 < r["xB"] < 0.45                                    # ~0.37 nominal
+    assert os.path.exists(os.path.join(str(tmp_path), "refs_T0.8_N100.pt"))
+    # equilibrated high-T energy is well below the ideal-gas 0 and finite
+    from liquid_coupling_flow.ka_energy import ka_energy
+    u = float((ka_energy(r["x"], r["s"], r["L"]) / 100).median()); assert -4.0 < u < -1.0

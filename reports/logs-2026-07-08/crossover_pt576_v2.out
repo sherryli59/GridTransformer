@@ -1,0 +1,5 @@
+XOVER N=576 pt_plain: U/N -3.1973  wall 10720s (42116 sweeps, exch 0.11)
+/home/sherryli/xsli/softwares/anaconda3/envs/lightning/lib/python3.11/site-packages/torch/nn/modules/transformer.py:379: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+XOVER N=576 pt_hb: U/N -3.1925  wall 9711s (32397 sweeps, exch 0.11)
+XOVER N=576 SUMMARY: SMC -3.0533@10498s | plain -3.1973@10720s | PT+A2 -3.1925@9711s

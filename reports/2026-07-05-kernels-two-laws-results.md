@@ -317,3 +317,22 @@ the historical comparison (39%B vs 37.1%B) = 2.80x0.019 = **0.053 = the whole ga
 real, but raw sweep throughput still carries it past the learned stack. SMC deficit vs N: 0.107->0.151->0.144
 (no crossover; plateaued even as PT's exchange dies). Caveat for the verdict: at large N a practitioner
 re-tunes the ladder (M~16-20) — fixed-M handicaps PT, so the true PT bar is even higher. pt_hb@576 running.
+
+## SCALE CROSSOVER — FINAL VERDICT (2026-07-08)
+| N | SMC stack | plain PT | PT+A2 | SMC deficit | exch acc |
+|---|-----------|----------|-------|-------------|----------|
+| 100 | -3.1690 | **-3.2761** | -3.2701 (2.16x oh) | 0.107 | 0.49 |
+| 256 | -3.0742 | **-3.2254** | -3.2181 (1.46x oh) | 0.151 | 0.28 |
+| 576 | -3.0533 | **-3.1973** | -3.1925 @0.91x wall (1.18x oh) | 0.144 | 0.11 |
+1. **No SMC crossover through N=576**: plain PT wins every size; the learned stack's deficit plateaus ~0.14
+   (stops growing 256->576 — a weak scaling positive, not a win).
+2. **PT+A2 converges to ~parity with N** (net-negative @100 -> ~tie @576 at 10% less wall as overhead falls
+   2.16x->1.18x): the augmentation crossover extrapolates to just beyond 576 — plausible but UNDEMONSTRATED.
+3. **PT's exchange collapse is real** (0.49->0.28->0.11 on fixed M=10, the sqrt(N) mechanism confirmed) but
+   raw sweep throughput dominates it. Honest caveat: a practitioner re-tunes M at large N => the true PT bar
+   is HIGHER than measured; conversely the SMC/hb arms used N=100-trained parts zero-shot.
+4. **What the learned stack demonstrably owns**: exact zero-shot transfer of the full kernel suite to 5.76x
+   training size (DB 0.0e0), and within-stack acceleration (A2's -0.068@1.11x at N=100 vs its own baseline).
+   What it does not own at any tested size: beating tuned classical PT at matched wall on depth.
+All within-N comparisons composition-clean (shared species per size). Artifacts: crossover_N{100,256,576}_partial.pt,
+per-arm config stacks crossover_N576_pt_*_cfgs.pt, smc_pilot_arm0_xover_N{100,256,576}.pt.

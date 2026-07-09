@@ -69,8 +69,15 @@ def mc_run(N, L, beta, n_equil, n_collect, every, seed, step0=0.15, B=8, track_e
         if s % 2000 == 0:
             save_partial(s)
 
-    # drift guard #1: recompute fresh at collection start (avoid carrying equil-length incremental drift)
-    U = mw_energy_chunked(x, L)
+    # drift guard #1: compare the incrementally-carried U against a fresh recompute at collection start,
+    # warn (don't crash) if it drifted, THEN reset to fresh — surfaces equilibration-phase bookkeeping bugs
+    # that guard #2 (which only sees collection-phase drift after this reset) would otherwise mask.
+    U_fresh_coll = mw_energy_chunked(x, L)
+    drift_equil = float((U - U_fresh_coll).abs().max().item())
+    if drift_equil >= 1e-2:
+        print(f"WARNING mc_run: equilibration drift guard tripped "
+              f"(|dU_carried - dU_fresh|={drift_equil:.4f} >= 1e-2); recomputing U fresh.", flush=True)
+    U = U_fresh_coll
 
     # --- collection ---
     n_snap = n_collect // every
@@ -111,6 +118,8 @@ def mc_run(N, L, beta, n_equil, n_collect, every, seed, step0=0.15, B=8, track_e
     final_mean = float((Uall / N).mean().item()) if Uall.numel() > 0 else float("nan")
     flat_budget = abs(final_mean - u_half)
 
+    # NB: sparse track_every vs short n_collect can yield <4 collection traj points -> NaN by design
+    # (mirrors ka_finite_size.run_unit's guard); real reference runs populate this properly.
     coll_vals = uv[sw > n_equil]
     coll_drift = (float(abs(coll_vals[len(coll_vals) // 2:].mean() - coll_vals[:len(coll_vals) // 2].mean()))
                   if len(coll_vals) >= 4 else float("nan"))

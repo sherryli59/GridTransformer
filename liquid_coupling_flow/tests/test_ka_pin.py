@@ -241,3 +241,18 @@ def test_get_references_T05_pt2_branch(tmp_path):
     u = float((ka_energy(r["x"], r["s"], r["L"]) / 256).median())
     assert -3.4 < u < -3.0                                       # cold T=0.5 rung, ~ -3.23
     assert 0.30 < r["xB"] < 0.42
+
+from liquid_coupling_flow.ka_pin_campaign import run_cell, aggregate
+
+def test_run_cell_and_aggregate_smoke(tmp_path):
+    from liquid_coupling_flow.ka_pin_refs import get_references
+    refs = get_references(0.8, 100, 8, "cpu", str(tmp_path))
+    cell = run_cell(T=0.8, c=0.16, refs=refs, n_iter=20, table_fn=None, device="cpu",
+                    out_dir=str(tmp_path), n_real=8)
+    assert set(["T", "c", "lc", "Qinf", "gconv", "xB"]).issubset(cell.keys())
+    assert cell["lc"] > 0
+    # aggregate a synthetic monotone set of cells into a xi at threshold 0.2
+    cells = [{"T": 0.8, "lc": lc, "Qinf": q, "Qinf_err": 0.01}
+             for lc, q in zip([1.5, 2.0, 2.5, 3.0], [0.55, 0.38, 0.22, 0.12])]
+    agg = aggregate(cells, thresholds=(0.2,))
+    assert 0.8 in {round(t, 3) for t in agg[0.2].keys()}

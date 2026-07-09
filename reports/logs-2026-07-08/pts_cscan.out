@@ -1,0 +1,6 @@
+[cscan] T=0.8 N=256 B=12 step=0.1 Q_rand=0.108; gap<=0.02 = converged, excess>~0.05 = signal
+[cscan] c=0.24 lc=1.86: ref_Qinf=0.493 scr_Qinf=0.234 GAP=0.259 excess(ref-Qrand)=0.385 -> NOT-CONV/signal  (147s)
+[cscan] c=0.16 lc=2.28: ref_Qinf=0.391 scr_Qinf=0.193 GAP=0.198 excess(ref-Qrand)=0.283 -> NOT-CONV/signal  (293s)
+[cscan] c=0.12 lc=2.64: ref_Qinf=0.279 scr_Qinf=0.168 GAP=0.111 excess(ref-Qrand)=0.171 -> NOT-CONV/signal  (439s)
+[cscan] c=0.08 lc=3.23: ref_Qinf=0.226 scr_Qinf=0.156 GAP=0.070 excess(ref-Qrand)=0.118 -> NOT-CONV/signal  (585s)
+[cscan] DONE

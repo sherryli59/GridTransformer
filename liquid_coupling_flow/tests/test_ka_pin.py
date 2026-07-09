@@ -229,3 +229,15 @@ def test_get_references_highT_smoke(tmp_path):
     # equilibrated high-T energy is well below the ideal-gas 0 and finite
     from liquid_coupling_flow.ka_energy import ka_energy
     u = float((ka_energy(r["x"], r["s"], r["L"]) / 100).median()); assert -4.0 < u < -1.0
+
+def test_get_references_T05_pt2_branch(tmp_path):
+    import os
+    from liquid_coupling_flow.ka_pin_refs import get_references, PT2_N256
+    if not os.path.exists(PT2_N256):
+        import pytest; pytest.skip("PT2 dataset not present")
+    r = get_references(T=0.5, N=256, n_configs=6, device="cpu", out_dir=str(tmp_path))
+    assert r["x"].shape == (6, 256, 2) and r["s"].shape == (256,)
+    from liquid_coupling_flow.ka_energy import ka_energy
+    u = float((ka_energy(r["x"], r["s"], r["L"]) / 256).median())
+    assert -3.4 < u < -3.0                                       # cold T=0.5 rung, ~ -3.23
+    assert 0.30 < r["xB"] < 0.42

@@ -93,3 +93,20 @@ def test_block_relabel_guards_k_gt_mobile():
     table_fn = lambda xx: torch.full((xx.shape[0], xx.shape[1]), 0.4)
     with pytest.raises(AssertionError):
         masked_block_relabel(x, s, efn(x, s), mobile, 2.0, efn, table_fn, k=4)
+
+from liquid_coupling_flow.ka_pin_overlap import cell_occupancy, q_rand, overlap_Q
+
+def test_overlap_self_is_one_and_qrand():
+    assert abs(q_rand(0.3, 1.2) - 0.108) < 1e-9
+    x, s, L = _setup(seed=5)
+    occ = cell_occupancy(x, L, a_c=0.3)
+    excluded = torch.zeros_like(occ)
+    # Q(ref, ref) over all cells = 1 exactly
+    assert abs(overlap_Q(occ, occ, excluded) - 1.0) < 1e-9
+    # occupancy is species-blind: relabelling s must not change occ
+    occ2 = cell_occupancy(x, L, a_c=0.3)
+    assert torch.equal(occ, occ2)
+    # a fully-decorrelated config has Q near q_rand (loose bound, statistical)
+    torch.manual_seed(9); xr = torch.rand_like(x) * L
+    q = overlap_Q(cell_occupancy(xr, L), occ, excluded)
+    assert 0.0 <= q <= 0.4

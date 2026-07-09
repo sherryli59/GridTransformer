@@ -1,0 +1,12 @@
+N=3 L=2.449 | acc antipode=0.1025 uniform=0.0811 | ord-std antipode=0.088 (per-particle 0.029) uniform=8.88e-16 | beta^2 Var(U)=0.424
+N=4 L=2.828 | acc antipode=0.0384 uniform=0.0297 | ord-std antipode=0.112 (per-particle 0.028) uniform=0.00e+00 | beta^2 Var(U)=0.460
+N=5 L=3.162 | acc antipode=0.0162 uniform=0.0139 | ord-std antipode=0.138 (per-particle 0.028) uniform=0.00e+00 | beta^2 Var(U)=0.541
+N=6 L=3.464 | acc antipode=0.0107 uniform=0.0101 | ord-std antipode=0.165 (per-particle 0.027) uniform=1.78e-15 | beta^2 Var(U)=0.764
+N=7 L=3.742 | acc antipode=0.0093 uniform=0.0091 | ord-std antipode=0.186 (per-particle 0.027) uniform=0.00e+00 | beta^2 Var(U)=0.933
+N=8 L=4.000 | acc antipode=0.0090 uniform=0.0088 | ord-std antipode=0.204 (per-particle 0.025) uniform=0.00e+00 | beta^2 Var(U)=1.110
+
+FIGURE -> /mnt/ssd/GridTransformer/reports/logs-2026-07-09/ordmh_efficiency.png
+
+acceptance(antipode) ~ exp(-0.481 * N)  [per added particle x0.618]
+acceptance(uniform)  ~ exp(-0.427 * N)  [per added particle x0.652]
+ordering-std slope   = 0.024 nats per particle (per-particle std 0.027 +/- 0.001)

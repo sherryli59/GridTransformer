@@ -1,0 +1,8 @@
+N=3 | local-energy: frac tied=0.692 max class=2.22 (tol=0.009) | coordination#: frac tied=0.970 max class=2.91
+N=4 | local-energy: frac tied=0.823 max class=2.58 (tol=0.012) | coordination#: frac tied=0.958 max class=2.79
+N=5 | local-energy: frac tied=0.723 max class=2.76 (tol=0.015) | coordination#: frac tied=0.784 max class=2.98
+N=6 | local-energy: frac tied=0.765 max class=3.26 (tol=0.015) | coordination#: frac tied=0.793 max class=3.24
+N=7 | local-energy: frac tied=0.809 max class=3.95 (tol=0.015) | coordination#: frac tied=0.826 max class=3.49
+N=8 | local-energy: frac tied=0.808 max class=4.50 (tol=0.016) | coordination#: frac tied=0.850 max class=3.89
+
+FIGURE -> /mnt/ssd/GridTransformer/reports/logs-2026-07-09/ordmh_tie_probe.png

@@ -701,7 +701,8 @@ def get_references(T, N, n_configs, device, out_dir, fracB=0.35):
     L = (N / 1.2) ** 0.5
     if abs(T - 0.5) < 1e-9 and N == 256 and os.path.exists(PT2_N256):
         d = torch.load(PT2_N256, map_location="cpu", weights_only=False)
-        x = d["x"][:n_configs].float(); s = d["s"].long()
+        x = d["configs_per_rung"][0][:n_configs].float()          # rung 0 = cold (beta=2.0, T=0.5)
+        s = d["s"].long()
     else:
         s = make_species(N, fracB).to(device)
         x, s = swap_mcmc_fast(N, L, T, s, device=device, n_chains=n_configs,

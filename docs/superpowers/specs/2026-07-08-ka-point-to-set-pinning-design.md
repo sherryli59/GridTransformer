@@ -41,10 +41,19 @@ Chakrabarty et al. 2016).
   Q(t) = Q_∞ + A·exp[−(t/τ)^β] on the reference-initialized (decaying) arm, cross-checked against the
   scrambled-initialized (rising) arm's tail mean (see gate G-conv).
 - **Pin-spacing:** ℓ_c = (c·ρ₀)^(−1/2) (mean inter-pin distance; c = pinned fraction).
-- **Length extraction:** ξ_pin(T) = the ℓ_c at which Q_∞(c;T) − Q_rand crosses a fixed threshold, by monotone
+- **Length extraction:** ξ_pin(T) = the ℓ_c at which Q_∞(c;T) − Q_rand crosses a fixed threshold, by
   interpolation of the measured curve. Primary threshold **0.2**; robustness thresholds **0.1 and 0.3** — the
   growth claim ξ(0.5) > ξ(0.65) > ξ(0.8) must hold at all three. Full Q_∞(c;T) curves are always reported;
   the threshold length is a summary, not a replacement.
+- **ξ error propagation (resolvability condition):** the G-conv vertical tolerance ΔQ = 0.02 propagates to
+  δξ_tol = ΔQ / |dQ_∞/dℓ_c| evaluated at the crossing (local slope from the interpolant); total ξ error =
+  δξ_tol ⊕ realization-bootstrap. **Requirement:** δξ_total must be < the claimed growth Δξ between adjacent
+  temperatures at that threshold; where the curve flattens and the lever arm blows δξ up, either tighten the
+  vertical tolerance for those runs or report the T-pair as unresolved at that threshold. A growth claim is
+  made only where this resolvability condition holds.
+- **Non-monotonicity handling:** if Q_∞(c) − Q_rand crosses a threshold more than once within errors, ξ is
+  reported as the crossing **range** [ℓ_first, ℓ_last], and the growth claim must hold on the conservative ends
+  of the ranges (upper end at higher T vs lower end at lower T).
 - **Composition:** pins drawn uniformly from all particles (composition-neutral in expectation); x_B of the
   mobile set recorded per realization. References composition-matched within N; all cross-N absolute statements
   carry x_B (dU/dx_B = −2.80 lesson).
@@ -83,11 +92,30 @@ Chakrabarty et al. 2016).
 - **G-corr (correctness of constrained sampling):** at one *easy, convergeable* point (T=0.8, c=0.16), the
   learned-kernel result must match a brute-force constrained sampler (masked displacement + swap only) with both
   samplers individually passing init-independence. Validates correctness only — explicitly does NOT validate
-  large-ℓ convergence.
-- **G-conv (convergence, the binding gate — run at EVERY c, smallest c binding):** |Q_∞(decaying arm) −
-  Q_∞(rising arm)| ≤ 0.02 per (T,c). **Stated failure mode:** an unconverged large-ℓ point biases Q_∞ upward
-  (interior hasn't forgotten the reference) → ξ_PTS too large, smoothly and silently. Points failing G-conv are
-  reported as bounds, never fit.
+  large-ℓ convergence. **Division of guarantees (explicit):** at the hard points, where brute-force comparison
+  is unreachable, correctness rests on the **MH construction itself** (detailed-balance-exact kernels, verified
+  by the existing kernel test suite), not on G-corr; G-corr validates the *implementation* at points where a
+  converged brute-force exists. Two gates, two different failures — neither subsumes the other.
+- **G-conv (convergence, the binding gate — run at EVERY c, smallest c binding):** two conditions, both required
+  per (T,c):
+  (i) **two-arm agreement:** |Q_∞(decaying arm) − Q_∞(rising arm)| ≤ 0.02;
+  (ii) **run length ≥ 3τ_fit per arm (target 5τ):** the run must extend past the fitted stretched-exp timescale,
+  because the Q_∞↔τ fit degeneracy on a too-short run smuggles in exactly the upward plateau bias this gate
+  targets — extrapolated fits from both arms can agree and both be wrong; two-arm agreement alone does not catch
+  it. Fits with T_run < 3τ_fit are invalid regardless of agreement.
+  **Stated failure mode:** an unconverged large-ℓ point biases Q_∞ upward (interior hasn't forgotten the
+  reference) → ξ_PTS too large, smoothly and silently. Points failing G-conv are reported as bounds, never fit.
+- **G-stick (co-sticking check, at the binding point only — smallest passing c at T=0.5):** two arms can
+  converge to the *same wrong plateau* in a glass (both trapped in an intermediate region). At the binding
+  point add (a) a **third init arm** — mobile particles initialized from a *different* equilibrium reference
+  config under the same pins (a decorrelated glassy start, unlike the random scramble) — required to reach the
+  same plateau; and (b) a **2× run extension** on one realization — the plateau must be stable under doubling.
+  Fail ⇒ the point is a bound, and the binding point moves to the next-larger c.
+- **Drift spot-check (largest ℓ_c only, informative):** guard against residual long-wavelength (Mermin–Wagner
+  -like) motion *between* distant pins depressing the far-field plateau: (a) decompose Q_∞ into near-pin vs
+  far-from-pin cells; (b) recompute Q_∞ after best-fit local registration (window ~ℓ_c/2) of sample to
+  reference. Disparity > 0.02 between standard and registered/near-far values flags long-wavelength
+  contamination; report both values for that point.
 - **G-anchor (protocol sanity):** Q_∞(c) curves qualitatively consistent with the established pinning
   phenomenology (monotone in c; high-T curve below low-T curve; Q_∞ → Q_rand as c → 0). Quantitative external
   comparison is out of scope (no 2D-KA literature value exists).

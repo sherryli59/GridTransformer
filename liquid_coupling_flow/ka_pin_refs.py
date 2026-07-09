@@ -11,6 +11,8 @@ PT2_N256 = "liquid_coupling_flow/artifacts/pt_ladder_hb_N256.pt"
 def get_references(T, N, n_configs, device, out_dir, fracB=0.35):
     os.makedirs(out_dir, exist_ok=True)
     out = os.path.join(out_dir, f"refs_T{T}_N{N}.pt")
+    if os.path.exists(out):
+        return torch.load(out, map_location="cpu", weights_only=False)
     L = (N / 1.2) ** 0.5
     if abs(T - 0.5) < 1e-9 and N == 256 and os.path.exists(PT2_N256):
         d = torch.load(PT2_N256, map_location="cpu", weights_only=False)

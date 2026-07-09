@@ -61,17 +61,20 @@ def run_cell(T, c, refs, n_iter, table_fn, device, out_dir, n_real=16, dt=0.01, 
     Qinf = float(np.median(qinf_b))
     Qinf_err = float(qinf_b.std(ddof=1) / np.sqrt(len(qinf_b))) if len(qinf_b) > 1 else 0.02
     lc = (c * RHO) ** -0.5
-    cell = {"T": T, "c": c, "lc": lc, "Qinf": Qinf, "Qinf_err": Qinf_err,
+    passed = bool(gc["passed"] and abs(Qinf - gc["q_ref"]) <= 0.02)   # gate + estimator-consistency
+    cell = {"T": T, "c": c, "lc": lc, "Qinf": Qinf, "Qinf_err": Qinf_err, "passed": passed,
             "gconv": gc, "xB": float((s[mobile] == 1).float().mean()),
             "arms": {"ref": ref_run, "scramble": scr_run}}
     torch.save(cell, os.path.join(out_dir, f"cell_T{T}_c{c}.pt"))       # incremental save
     print(f"[pts] T={T} c={c} lc={lc:.2f} Qinf={Qinf:.3f}+/-{Qinf_err:.3f} "
-          f"gconv={'PASS' if gc['passed'] else 'BOUND'} -> {os.path.join(out_dir, f'cell_T{T}_c{c}.pt')}",
-          flush=True)
+          f"{'PASS' if passed else 'BOUND'} -> {os.path.join(out_dir, f'cell_T{T}_c{c}.pt')}", flush=True)
     return cell
 
 
 def aggregate(cells, thresholds=(0.1, 0.2, 0.3), Qrand=None):
+    """Per threshold, per T: fit xi_threshold ONLY from cells that passed G-conv (cell['passed']); cells that
+    failed are recorded as BOUNDS (their lc), never fitted (spec: unconverged -> bound). Cells lacking a
+    'passed' key default to passing (synthetic/manual use). Fewer than 2 passing points -> kind='none'."""
     Qrand = q_rand() if Qrand is None else Qrand
     by_T = {}
     for cl in cells:
@@ -80,11 +83,37 @@ def aggregate(cells, thresholds=(0.1, 0.2, 0.3), Qrand=None):
     for thr in thresholds:
         out[thr] = {}
         for T, cs in by_T.items():
-            cs = sorted(cs, key=lambda z: z["lc"])
-            lv = np.array([z["lc"] for z in cs]); qi = np.array([z["Qinf"] for z in cs])
-            qe = np.array([z.get("Qinf_err", 0.01) for z in cs])
-            out[thr][T] = xi_threshold(lv, qi, qe, thr, Qrand=Qrand)
+            passing = sorted([z for z in cs if z.get("passed", True)], key=lambda z: z["lc"])
+            bound_lc = sorted([z["lc"] for z in cs if not z.get("passed", True)])
+            if len(passing) < 2:
+                out[thr][T] = {"xi": None, "dxi": None, "kind": "none",
+                               "n_pass": len(passing), "n_bound": len(bound_lc), "bound_lc": bound_lc}
+                continue
+            lv = np.array([z["lc"] for z in passing]); qi = np.array([z["Qinf"] for z in passing])
+            qe = np.array([z.get("Qinf_err", 0.01) for z in passing])
+            r = xi_threshold(lv, qi, qe, thr, Qrand=Qrand)
+            r.update({"n_pass": len(passing), "n_bound": len(bound_lc), "bound_lc": bound_lc})
+            out[thr][T] = r
     return out
+
+
+def resolvability_verdict(agg, thresholds=(0.1, 0.2, 0.3)):
+    """For each threshold and each adjacent T-pair, decide if the xi difference is RESOLVED:
+    |xi_lo - xi_hi| > dxi_lo + dxi_hi, and BOTH points are kind='point'. Returns a list of verdict dicts."""
+    verdicts = []
+    for thr in thresholds:
+        Ts = sorted(agg[thr].keys())
+        for Ta, Tb in zip(Ts[:-1], Ts[1:]):
+            ra, rb = agg[thr][Ta], agg[thr][Tb]
+            if ra["kind"] != "point" or rb["kind"] != "point":
+                verdicts.append({"thr": thr, "T_pair": (Ta, Tb), "resolved": False,
+                                 "reason": f"{ra['kind']}/{rb['kind']}"})
+                continue
+            dxi = (ra["dxi"] or 0.0) + (rb["dxi"] or 0.0)
+            gap = abs(ra["xi"] - rb["xi"])
+            verdicts.append({"thr": thr, "T_pair": (Ta, Tb), "resolved": bool(gap > dxi),
+                             "gap": float(gap), "dxi_sum": float(dxi)})
+    return verdicts
 
 
 def main():
@@ -109,7 +138,13 @@ def main():
             for c in cs:
                 cells.append(run_cell(T, c, refs, n_iter=3000, table_fn=table_fn, device=dev, out_dir=out_dir))
     agg = aggregate(cells)
-    torch.save({"cells": cells, "agg": agg}, os.path.join(out_dir, "pts_summary.pt"))
+    verdicts = resolvability_verdict(agg)
+    torch.save({"cells": cells, "agg": agg, "resolvability": verdicts},
+               os.path.join(out_dir, "pts_summary.pt"))
+    for v in verdicts:
+        tag = "RESOLVED" if v["resolved"] else "UNRESOLVED"
+        detail = v.get("reason") or f"gap {v.get('gap', 0):.2f} vs dxi_sum {v.get('dxi_sum', 0):.2f}"
+        print(f"[pts] resolvability thr={v['thr']} T{v['T_pair']}: {tag} ({detail})", flush=True)
     p = os.path.join(out_dir, "xi_of_T.png")
     for w in _plot_xi_of_T(agg, p):
         print(f"[pts] WARN {w}", flush=True)

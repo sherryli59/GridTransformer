@@ -268,3 +268,23 @@ def test_plot_xi_of_T_handles_all_kinds(tmp_path):
     warns = _plot_xi_of_T(agg, str(tmp_path / "xi.png"), thresholds=(0.2,))
     assert os.path.exists(str(tmp_path / "xi.png"))
     assert any("RANGE" in w for w in warns) and any("NO crossing" in w for w in warns)
+
+def test_aggregate_excludes_failed_gconv_cells():
+    from liquid_coupling_flow.ka_pin_campaign import aggregate
+    cells = [
+        {"T": 0.5, "lc": 1.5, "Qinf": 0.55 + 0.108, "Qinf_err": 0.01, "passed": True},
+        {"T": 0.5, "lc": 2.0, "Qinf": 0.35 + 0.108, "Qinf_err": 0.01, "passed": True},
+        {"T": 0.5, "lc": 2.5, "Qinf": 0.22 + 0.108, "Qinf_err": 0.01, "passed": True},
+        {"T": 0.5, "lc": 3.0, "Qinf": 0.80 + 0.108, "Qinf_err": 0.01, "passed": False},  # unconverged, excluded
+    ]
+    r = aggregate(cells, thresholds=(0.2,))[0.2][0.5]
+    assert r["n_bound"] == 1 and 3.0 in r["bound_lc"] and r["n_pass"] == 3
+
+def test_resolvability_verdict():
+    from liquid_coupling_flow.ka_pin_campaign import resolvability_verdict
+    agg = {0.2: {0.8: {"xi": 2.0, "dxi": 0.1, "kind": "point"},
+                 0.5: {"xi": 3.0, "dxi": 0.1, "kind": "point"}}}   # well separated
+    assert resolvability_verdict(agg, thresholds=(0.2,))[0]["resolved"] is True
+    agg2 = {0.2: {0.8: {"xi": 2.0, "dxi": 0.4, "kind": "point"},
+                  0.5: {"xi": 2.3, "dxi": 0.4, "kind": "point"}}}   # overlapping error bars
+    assert resolvability_verdict(agg2, thresholds=(0.2,))[0]["resolved"] is False

@@ -1,0 +1,5 @@
+[cav] N=256 T=0.5 step=0.08 shell=1.0 Q_rand=0.108; walled cavity interior physics gate
+[cav R=3.0] n_mob~34 deepcells=145 | melt-start Q=0.420 U/N=-3.122 | ref 0.576 scr 0.538 GAP=0.038 excess(ref)~0.468 | hard-wall rejects 1608373/73224000 -> CONVERGED  (435s)
+[cav R=4.0] n_mob~61 deepcells=325 | melt-start Q=0.382 U/N=-3.002 | ref 0.475 scr 0.533 GAP=0.058 excess(ref)~0.367 | hard-wall rejects 2148619/132164800 -> STALL  (843s)
+[cav R=5.0] n_mob~94 deepcells=569 | melt-start Q=0.363 U/N=-2.852 | ref 0.477 scr 0.445 GAP=0.032 excess(ref)~0.369 | hard-wall rejects 2816029/204846400 -> CONVERGED  (1248s)
+[cav] DONE

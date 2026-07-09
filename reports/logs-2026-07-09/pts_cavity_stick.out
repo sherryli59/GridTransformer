@@ -1,0 +1,8 @@
+[stick] N=256 T=0.5 step=0.08 shell=1.0 Q_rand=0.108; 3-arm hard-wall G-stick discriminator
+[stick R=3.0] n_mob~34 | plateaus ref 0.549 scrA 0.564 scrB 0.562 | gap ref-scrA 0.029[0.008,0.050] scrA-scrB 0.024[0.006,0.043] | excess~0.441 -> H1-CONVERGED  (769s)
+[stick] saved liquid_coupling_flow/artifacts/pts/cavity_stick_T0.5_N256.pt through R=3.0
+[stick R=4.0] n_mob~61 | plateaus ref 0.489 scrA 0.465 scrB 0.500 | gap ref-scrA 0.027[0.007,0.048] scrA-scrB 0.036[0.016,0.055] | excess~0.381 -> H1-CONVERGED  (1544s)
+[stick] saved liquid_coupling_flow/artifacts/pts/cavity_stick_T0.5_N256.pt through R=4.0
+[stick R=5.0] n_mob~94 | plateaus ref 0.483 scrA 0.464 scrB 0.452 | gap ref-scrA 0.023[0.006,0.039] scrA-scrB 0.023[0.006,0.040] | excess~0.375 -> H1-CONVERGED  (2323s)
+[stick] saved liquid_coupling_flow/artifacts/pts/cavity_stick_T0.5_N256.pt through R=5.0
+[stick] DONE

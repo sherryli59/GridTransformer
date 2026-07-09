@@ -6,18 +6,11 @@ from liquid_coupling_flow.ka_pin_extract import stretched_exp_fit
 
 
 def _qinf_tau(run):
-    t = np.asarray(run["t"], float)
     Q = np.asarray(run["Q"], float)
-    # For increasing data (Q[-1] > Q[0]), fit the residual (Q[-1] - Q),
-    # which decays to 0. The actual plateau is Q[-1].
-    if Q[-1] > Q[0]:
-        Q_residual = Q[-1] - Q
-        f = stretched_exp_fit(t, Q_residual)
-        return Q[-1], f["tau"]
-    else:
-        # For decreasing data, fit normally
-        f = stretched_exp_fit(t, Q)
-        return f["Qinf"], f["tau"]
+    w = max(1, Q.size // 5)
+    rising = float(Q[-w:].mean()) > float(Q[:w].mean())     # trailing vs leading window (noise-robust)
+    f = stretched_exp_fit(run["t"], Q, rising=rising)
+    return f["Qinf"], f["tau"]
 
 
 def g_conv(ref_run, scr_run, tol=0.02):

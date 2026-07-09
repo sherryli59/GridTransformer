@@ -4,19 +4,23 @@ import numpy as np
 from scipy.optimize import curve_fit
 
 
-def _sexp(t, Qinf, A, tau, beta):
-    return Qinf + A * np.exp(-((t / np.maximum(tau, 1e-9)) ** beta))
+def _sexp(t, Qinf, A, tau, beta, rising=False):
+    core = A * np.exp(-((t / np.maximum(tau, 1e-9)) ** beta))
+    return Qinf - core if rising else Qinf + core   # rising: Q(0)=Qinf-A grows to Qinf
 
 
-def stretched_exp_fit(t, Q):
+def stretched_exp_fit(t, Q, rising=False):
+    """Fit Q = Qinf +/- A*exp[-(t/tau)^beta] (decaying if rising=False, rising if True). Qinf is the plateau,
+    extrapolated from the whole curve (NOT the last point). Returns {Qinf,A,tau,beta,ok}; ok=False on failure."""
     t = np.asarray(t, float); Q = np.asarray(Q, float)
     if t.size < 4:
         qinf = float(Q[-1]) if Q.size else float("nan")
         return {"Qinf": qinf, "A": 0.0, "tau": 1.0, "beta": 1.0, "ok": False}
-    p0 = [Q[-1], max(Q[0] - Q[-1], 1e-3), max(t[-1] / 3, 1.0), 0.7]
+    p0 = [Q[-1], max(abs(Q[-1] - Q[0]), 1e-3), max(t[-1] / 3, 1.0), 0.7]
     bounds = ([0.0, 0.0, 1e-3, 0.2], [1.0, 1.5, 1e6, 1.5])
+    model = lambda tt, Qi, A, tau, b: _sexp(tt, Qi, A, tau, b, rising=rising)
     try:
-        p, _ = curve_fit(_sexp, t, Q, p0=p0, bounds=bounds, maxfev=20000)
+        p, _ = curve_fit(model, t, Q, p0=p0, bounds=bounds, maxfev=20000)
         return {"Qinf": float(p[0]), "A": float(p[1]), "tau": float(p[2]), "beta": float(p[3]), "ok": True}
     except Exception:
         return {"Qinf": float(Q[-1]), "A": 0.0, "tau": float(t[-1]), "beta": 1.0, "ok": False}

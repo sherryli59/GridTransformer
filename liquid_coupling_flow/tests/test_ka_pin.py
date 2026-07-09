@@ -209,3 +209,11 @@ def test_gstick_and_gcorr():
     a = _run(0.30, 20, 200, arm="ref"); b = _run(0.30, 20, 200, arm="scramble"); c = _run(0.30, 20, 400, arm="ref")
     assert g_stick(a, b, c, tol=0.02)["passed"]
     assert g_corr(_run(0.30, 20, 200, arm="ref"), _run(0.31, 20, 200, arm="ref"), tol=0.02)["passed"]
+
+def test_gconv_fails_short_scramble_with_asymmetric_tau():
+    # reference well-converged (150/5=30 >> 3); scramble under-converged (150/55=2.73 < 3) -> MUST fail run-length
+    ref = _run(0.30, 5, 150, arm="ref")
+    scr = _run(0.30, 55, 150, arm="scramble")
+    r = g_conv(ref, scr, tol=0.02)
+    assert not r["run_ok"], f"expected run_ok False (fitted tau_s={r['tau']:.1f}), got {r}"
+    assert not r["passed"]

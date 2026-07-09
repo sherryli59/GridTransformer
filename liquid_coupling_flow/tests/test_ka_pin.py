@@ -1,6 +1,7 @@
 import torch
-from liquid_coupling_flow.ka_pin import pin_mask, masked_mala
+from liquid_coupling_flow.ka_pin import pin_mask, masked_mala, masked_swap, masked_block_relabel
 from liquid_coupling_flow.ka_energy import ka_energy, ka_forces
+from liquid_coupling_flow.ipl44.ipl_swap_smc import uniform_weight_fn
 
 def _setup(B=4, N=64, dev="cpu", seed=0):
     torch.manual_seed(seed)
@@ -40,3 +41,20 @@ def test_masked_mala_multi_step_frozen_invariance():
 
     # After 20 steps, frozen particles must be unchanged from initial
     assert torch.equal(x[~mobile], x0[~mobile]), "Frozen particles changed after multi-step loop"
+
+def test_masked_species_moves_keep_frozen_and_composition():
+    x, s, L = _setup(seed=2)
+    mobile = pin_mask(4, 64, 0.25, "cpu", generator=torch.Generator().manual_seed(3))
+    efn = lambda a, b: ka_energy(a, b, L)
+    U = ka_energy(x, s, L)
+    s0 = s.clone()
+    s1, U1, acc = masked_swap(x, s, U, mobile, 2.0, efn, uniform_weight_fn)
+    assert torch.equal(s1[~mobile], s0[~mobile])                 # frozen species untouched
+    assert torch.equal(s1.sum(1), s0.sum(1))                     # swap conserves count
+    assert torch.allclose(ka_energy(x, s1, L), U1, atol=1e-4)
+    # block-relabel with a constant table (uncertain everywhere) -> exact, frozen fixed, count preserved
+    table_fn = lambda xx: torch.full((xx.shape[0], xx.shape[1]), 0.4)
+    s2, U2, acc2 = masked_block_relabel(x, s0, U, mobile, 2.0, efn, table_fn, k=4)
+    assert torch.equal(s2[~mobile], s0[~mobile])
+    assert torch.equal(s2.sum(1), s0.sum(1))
+    assert torch.allclose(ka_energy(x, s2, L), U2, atol=1e-4)

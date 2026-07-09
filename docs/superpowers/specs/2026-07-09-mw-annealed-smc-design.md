@@ -76,9 +76,11 @@ one-forward exact log q (required in the weight path — EGNN-CNF integrator-err
 disqualified there), with geometry-invariant local-frame conditioning = the only conditioning that
 transferred across N without a cliff.
 
-- **Ordering:** `gilbert3d_path` on a 4×4×4 grid (N=64) / 6×6×6 (N=216) — used ONLY to define the
-  factorization order. Hard invariant: **no conditioning feature may reference the curve** (curve
-  conditioning is the measured transfer-killer).
+- **Ordering:** `gilbert3d_path` on a 4×4×4 grid (N=64) / 6×6×6 (N=216) — defines the factorization
+  order AND the per-step anchor t_j = scaffold cell center, regenerated at each N (the rail/localframe
+  mechanism measured to transfer). Hard invariant: **the curve enters conditioning ONLY through t_j**;
+  no feature may encode curve indices or arc-length of neighbors (index-style curve conditioning is the
+  measured transfer-killer).
 - **Local frame (the one genuinely new component):** per step j, an orthonormal triad built by
   Gram–Schmidt from the displacement vectors to the two nearest already-placed neighbors (min-image).
   Fallback hierarchy: j=0 → box frame at a fixed anchor; j=1 → axis from the single neighbor completed
@@ -137,10 +139,12 @@ displacement-MC reference.
   mutation DB on a 2-particle system (empirical transition-ratio vs Boltzmann ratio); uniform-base
   reduction (log q₀ terms provably absent from ratios); weight-guard asserts fire on deliberate
   corruption.
-- `test_mw_generator.py`: frame orthonormality + equivariance (global rotation/translation of placed
-  set ⇒ identical conditional density); fallback-path coverage (j=0,1, collinear); sample↔log_prob
-  consistency; normalization spot-check by 1D quadrature on a conditional; zero curve-feature leakage
-  (permute curve labels at fixed geometry ⇒ identical conditioning tensors).
+- `test_mw_generator.py`: frame orthonormality + covariance (rotating the neighbor displacement vectors
+  rotates the frame so frame-coordinates are invariant; box-lattice translations of config ⇒ identical
+  density — global rotation invariance is NOT claimed, the box-fixed scaffold breaks it); fallback-path
+  coverage (j=0, j=1, collinear); sample↔log_prob consistency; normalization spot-check by 1D quadrature
+  on a conditional; prefix-permutation invariance (permuting storage order of placed particles ⇒
+  identical conditioning tensors — features are geometry-only, no curve indices).
 
 ## 7. Risks (pre-registered)
 

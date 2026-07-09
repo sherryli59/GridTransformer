@@ -144,3 +144,24 @@ def test_constrained_run_records_qchain_and_guards_arm():
     assert len(r["Q_chain"]) == len(r["Q"]) and len(r["Q_chain"][0]) == 4    # per-chain, B=4
     with pytest.raises(AssertionError):
         constrained_run(x, s, mobile, T=0.8, L=L, n_iter=5, arm="bogus")
+
+import numpy as np
+from liquid_coupling_flow.ka_pin_extract import stretched_exp_fit, xi_threshold
+
+def test_stretched_exp_recovers_plateau():
+    t = np.arange(0, 200, 5.0)
+    Q = 0.35 + 0.6 * np.exp(-(t / 30.0) ** 0.7)
+    fit = stretched_exp_fit(t, Q)
+    assert fit["ok"] and abs(fit["Qinf"] - 0.35) < 0.02
+
+def test_xi_threshold_and_error_propagation():
+    lvals = np.array([1.5, 2.0, 2.5, 3.0, 3.5])
+    excess = np.array([0.50, 0.35, 0.22, 0.12, 0.05])           # Qinf - Qrand, monotone decreasing
+    Qinf = excess + 0.108
+    out = xi_threshold(lvals, Qinf, Qinf_err=np.full(5, 0.01), thr=0.2, Qrand=0.108, dQ_tol=0.02)
+    assert out["kind"] == "point" and abs(out["xi"] - 2.6) < 0.05   # 0.22->0.12 crosses 0.2 across l=2.5..3.0
+    # near-flat curve AT THE CROSSING inflates dxi (small slope -> large horizontal error).
+    # This curve also crosses 0.2 (last excess 0.19 < 0.2) but with a shallow final slope.
+    flat = np.array([0.30, 0.26, 0.23, 0.21, 0.19]) + 0.108
+    o2 = xi_threshold(lvals, flat, np.full(5, 0.01), thr=0.2, Qrand=0.108, dQ_tol=0.02)
+    assert o2["kind"] == "point" and o2["dxi"] > out["dxi"]

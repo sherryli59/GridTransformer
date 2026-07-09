@@ -110,3 +110,19 @@ def test_overlap_self_is_one_and_qrand():
     torch.manual_seed(9); xr = torch.rand_like(x) * L
     q = overlap_Q(cell_occupancy(xr, L), occ, excluded)
     assert 0.0 <= q <= 0.4
+
+from liquid_coupling_flow.ka_pin import constrained_run
+
+def test_constrained_run_two_arms_frozen_fixed():
+    x, s, L = _setup(B=8, N=100, seed=7)
+    mobile = pin_mask(8, 100, 0.2, "cpu", generator=torch.Generator().manual_seed(8))
+    torch.manual_seed(1); scr = torch.rand_like(x) * L
+    ref = constrained_run(x, s, mobile, T=0.8, L=L, n_iter=30, dt=0.01, record_every=5, arm="ref")
+    scb = constrained_run(x, s, mobile, T=0.8, L=L, n_iter=30, dt=0.01, record_every=5,
+                          arm="scramble", scramble_x=scr)
+    # frozen positions never move in either arm
+    assert torch.equal(ref["x_final"][~mobile], x[~mobile])
+    assert torch.equal(scb["x_final"][~mobile], x[~mobile])
+    # Q(t) recorded; ref arm starts at 1 (mobile at reference), scramble arm starts below 1
+    assert ref["Q"][0] > 0.95 and scb["Q"][0] < ref["Q"][0]
+    assert len(ref["t"]) == len(ref["Q"]) == len(ref["U"])

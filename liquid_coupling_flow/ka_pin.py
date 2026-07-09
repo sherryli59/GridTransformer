@@ -83,6 +83,39 @@ def masked_block_relabel(x, s, U, mobile, beta, energy_fn, table_fn, k):
     return torch.where(acc[:, None], s_prop, s), torch.where(acc, U_prop, U), acc
 
 
+def constrained_run(x_ref, s_ref, mobile, T, L, n_iter, table_fn=None, dt=0.01,
+                    record_every=5, arm="ref", scramble_x=None, n_swap=4, k_block=8, fmax=60.0):
+    """Re-equilibrate mobile particles among frozen pins; record occupancy overlap Q(t) vs x_ref.
+    arm='ref': mobile start at reference positions (Q decays from 1); arm='scramble': mobile start at
+    scramble_x (Q rises). Species channel: masked_swap (+ masked_block_relabel if table_fn given), both exact.
+    Learned part (table_fn) enters block-relabel only, behind MH."""
+    from liquid_coupling_flow.ka_pin_overlap import cell_occupancy, pinned_cells, overlap_Q
+    beta = 1.0 / T
+    x = x_ref.clone(); s = s_ref.clone()
+    if arm == "scramble":
+        assert scramble_x is not None
+        m3 = mobile[..., None]
+        x = torch.where(m3, torch.remainder(scramble_x, L), x)          # only mobile scrambled
+    efn = lambda a, b: ka_energy(a, b, L); ffn = lambda a, b: ka_forces(a, b, L)
+    U = efn(x, s)
+    occ_ref = cell_occupancy(x_ref, L); excl = pinned_cells(x_ref, mobile, L)
+    rec = {"t": [], "Q": [], "U": [], "arm": arm}
+    for it in range(n_iter + 1):
+        if it % record_every == 0:
+            rec["t"].append(it)
+            rec["Q"].append(overlap_Q(cell_occupancy(x, L), occ_ref, excl))
+            rec["U"].append(float((U / x.shape[1]).median()))
+        if it == n_iter:
+            break
+        x, U, _ = masked_mala(x, s, U, mobile, beta, L, dt, efn, ffn, fmax)
+        for _ in range(n_swap):
+            s, U, _ = masked_swap(x, s, U, mobile, beta, efn, uniform_weight_fn)
+        if table_fn is not None:
+            s, U, _ = masked_block_relabel(x, s, U, mobile, beta, efn, table_fn, k_block)
+    rec["x_final"] = x; rec["s_final"] = s; rec["x_ref"] = x_ref; rec["mobile"] = mobile
+    return rec
+
+
 def load_geometry_table(N, L, nB, ckpt_path, device):
     """Load the N=100-trained two-time joint flow (knn=32) and return table_fn(x)->P(species=B) [B,N], which
     is s-INDEPENDENT (queried at t_pos=1, t_spec=0 with the canonical labelling) -> valid block-relabel table."""

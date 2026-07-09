@@ -288,3 +288,16 @@ def test_resolvability_verdict():
     agg2 = {0.2: {0.8: {"xi": 2.0, "dxi": 0.4, "kind": "point"},
                   0.5: {"xi": 2.3, "dxi": 0.4, "kind": "point"}}}   # overlapping error bars
     assert resolvability_verdict(agg2, thresholds=(0.2,))[0]["resolved"] is False
+
+
+def test_masked_block_relabel_int8_species():
+    """Regression: block-relabel must accept int8 species (swap_mcmc_fast/make_species path), not only int64.
+    The scatter previously required src.dtype==self.dtype and crashed the T=0.8/0.65 campaign."""
+    x, s, L = _setup(B=4, N=64, seed=21)
+    s = s.to(torch.int8)                                   # the swap-MC reference dtype
+    mobile = pin_mask(4, 64, 0.25, "cpu", generator=torch.Generator().manual_seed(5))
+    efn = lambda a, b: ka_energy(a, b, L)
+    table_fn = lambda xx: torch.full((xx.shape[0], xx.shape[1]), 0.4)
+    s0 = s.clone()
+    s2, U2, _ = masked_block_relabel(x, s, efn(x, s), mobile, 2.0, efn, table_fn, k=4)   # must NOT raise
+    assert torch.equal(s2[~mobile], s0[~mobile]) and torch.equal(s2.sum(1), s0.sum(1))

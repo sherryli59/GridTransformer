@@ -21,7 +21,7 @@ def get_references(T, N, n_configs, device, out_dir, fracB=0.35):
         s = make_species(N, fracB).to(device)
         x, s = swap_mcmc_fast(N, L, T, s, device=device, n_chains=n_configs,
                               n_equil=4000, n_collect=1, every=1, step=0.05)
-        x = x.cpu(); s = s.cpu()
+        x = x.cpu(); s = s.cpu().long()                              # int64 for a consistent artifact contract
     res = {"x": x, "s": s, "L": L, "T": T, "N": N, "xB": float((s == 1).float().mean())}
     torch.save(res, out)
     return res

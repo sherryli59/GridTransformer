@@ -76,7 +76,7 @@ def masked_block_relabel(x, s, U, mobile, beta, energy_fn, table_fn, k):
     wblk = W.gather(1, blk); sblk = s.gather(1, blk)
     m = sblk.sum(1).long()
     sblk_new = _cb_sample(wblk, m)
-    s_prop = s.scatter(1, blk, sblk_new)
+    s_prop = s.scatter(1, blk, sblk_new.to(s.dtype))                  # dtype-safe (s may be int8 or int64)
     U_prop = energy_fn(x, s_prop)
     log_ratio = -beta * (U_prop - U) + _cb_logprob(wblk, sblk) - _cb_logprob(wblk, sblk_new)
     acc = torch.log(torch.rand(B, device=x.device)) < log_ratio

@@ -37,7 +37,7 @@ def _plot_xi_of_T(agg, out_path, thresholds=(0.1, 0.2, 0.3)):
 
 def run_cell(T, c, refs, n_iter, table_fn, device, out_dir, n_real=16, dt=0.01, record_every=5):
     os.makedirs(out_dir, exist_ok=True)
-    x = refs["x"][:n_real].to(device); s = refs["s"].to(device)
+    x = refs["x"][:n_real].to(device); s = refs["s"].to(device).long()   # species as int64 (dtype-safe kernels)
     if s.dim() == 1:
         s = s[None].expand(n_real, -1).contiguous()
     N = x.shape[1]; L = refs["L"]

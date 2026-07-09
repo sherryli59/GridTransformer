@@ -2,8 +2,19 @@
 Pinned particles never move but contribute to the full KA energy; every learned component is behind
 exact Metropolis. See docs/superpowers/specs/2026-07-08-ka-point-to-set-pinning-design.md."""
 import math, torch
-from liquid_coupling_flow.ipl44.ipl_swap_smc import _tame, _pick, _swap_log_ratio, _cb_sample, _cb_logprob, uniform_weight_fn
+from liquid_coupling_flow.ipl44.ipl_swap_smc import _tame, _pick, _sel_prob, _cb_sample, _cb_logprob, uniform_weight_fn, EPS
 from liquid_coupling_flow.ka_energy import ka_energy, ka_forces
+
+
+def _masked_swap_log_ratio(pB_f, pB_r, s, s_new, mobile, i, j):
+    """Selection log-ratio for masked_swap: normalizers restricted to MOBILE same-species particles (the
+    frozen-aware analogue of ipl_swap_smc._swap_log_ratio). Exact for any weight_fn."""
+    dt = pB_f.dtype
+    isA = ((s == 0) & mobile).to(dt);      isB = ((s == 1) & mobile).to(dt)
+    isAn = ((s_new == 0) & mobile).to(dt); isBn = ((s_new == 1) & mobile).to(dt)
+    g_i = _sel_prob(pB_f, isA, i);         g_j = _sel_prob(1.0 - pB_f, isB, j)
+    gp_j = _sel_prob(pB_r, isAn, j);       gp_i = _sel_prob(1.0 - pB_r, isBn, i)
+    return (gp_j + EPS).log() + (gp_i + EPS).log() - (g_i + EPS).log() - (g_j + EPS).log()
 
 
 def pin_mask(B, N, c, device, generator=None):
@@ -37,7 +48,8 @@ def masked_mala(x, s, U, mobile, beta, L, dt, energy_fn, force_fn, fmax=60.0):
 
 
 def masked_swap(x, s, U, mobile, beta, energy_fn, weight_fn):
-    """Paired-reeval MH swap of one mobile-A with one mobile-B per config (frozen never picked). Exact."""
+    """Paired-reeval MH swap of one mobile-A with one mobile-B per config (frozen never picked); the selection
+    normalizer is restricted to MOBILE same-species particles, so this is exact for any weight_fn."""
     B = x.shape[0]; ar = torch.arange(B, device=x.device)
     pB_f = weight_fn(x, s); dt = pB_f.dtype
     isA = ((s == 0) & mobile).to(dt); isB = ((s == 1) & mobile).to(dt)
@@ -45,15 +57,17 @@ def masked_swap(x, s, U, mobile, beta, energy_fn, weight_fn):
     s_prop = s.clone(); s_prop[ar, i] = 1; s_prop[ar, j] = 0
     U_prop = energy_fn(x, s_prop)
     pB_r = weight_fn(x, s_prop)
-    log_ratio = -beta * (U_prop - U) + _swap_log_ratio(pB_f, pB_r, s, s_prop, i, j)
+    log_ratio = -beta * (U_prop - U) + _masked_swap_log_ratio(pB_f, pB_r, s, s_prop, mobile, i, j)
     acc = torch.log(torch.rand(B, device=x.device)) < log_ratio
     return torch.where(acc[:, None], s_prop, s), torch.where(acc, U_prop, U), acc
 
 
 def masked_block_relabel(x, s, U, mobile, beta, energy_fn, table_fn, k):
     """Gumbel-top-k block relabel over MOBILE sites only (score=-inf on frozen), conditional-Bernoulli redraw
-    preserving the block count. x-only randomized selection cancels in the MH ratio -> exact."""
+    preserving the block count. x-only randomized selection cancels in the MH ratio -> exact, PROVIDED
+    k <= every row's mobile count (asserted below; otherwise frozen sites would fill the block)."""
     B, N = s.shape
+    assert k <= int(mobile.sum(1).min()), "block size k exceeds a row's mobile count -> would relabel frozen sites"
     W = table_fn(x).clamp(1e-6, 1 - 1e-6)
     score = -((W - 0.5).abs() + 1e-3).log()
     score = score.masked_fill(~mobile, -1e30)                        # frozen never selected
@@ -62,10 +76,9 @@ def masked_block_relabel(x, s, U, mobile, beta, energy_fn, table_fn, k):
     wblk = W.gather(1, blk); sblk = s.gather(1, blk)
     m = sblk.sum(1).long()
     sblk_new = _cb_sample(wblk, m)
-    log_ratio = -beta * (energy_fn(x, s.scatter(1, blk, sblk_new)) - U) \
-        + _cb_logprob(wblk, sblk) - _cb_logprob(wblk, sblk_new)
     s_prop = s.scatter(1, blk, sblk_new)
     U_prop = energy_fn(x, s_prop)
+    log_ratio = -beta * (U_prop - U) + _cb_logprob(wblk, sblk) - _cb_logprob(wblk, sblk_new)
     acc = torch.log(torch.rand(B, device=x.device)) < log_ratio
     return torch.where(acc[:, None], s_prop, s), torch.where(acc, U_prop, U), acc
 

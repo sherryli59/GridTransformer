@@ -58,3 +58,38 @@ def test_masked_species_moves_keep_frozen_and_composition():
     assert torch.equal(s2[~mobile], s0[~mobile])
     assert torch.equal(s2.sum(1), s0.sum(1))
     assert torch.allclose(ka_energy(x, s2, L), U2, atol=1e-4)
+
+def test_masked_swap_exact_with_nonuniform_weight():
+    """Detailed-balance check for masked_swap with a non-uniform, s-independent weight_fn and frozen
+    same-species particles present. Density 0.2 (not the KA-liquid 1.2) is used deliberately: with only
+    4 particles, density 1.2 puts random configs deep in core-overlap (U ~ 1e7), which makes ratio_theory
+    underflow to exactly 0 (math domain error on log) regardless of kernel correctness -- an artifact of
+    the tiny particle count, not of the property under test. At density 0.2 the energy gap is O(1) so both
+    states mix, and the test is decisive: the pre-fix unmasked-normalizer bug reproducibly gives
+    |log(ratio_emp) - log(ratio_theory)| ~= 1.39 on this exact seed (mask-independent constant selection
+    bias, verified by hand), while the fix gives ~= 0.007."""
+    import math
+    from collections import Counter
+    torch.manual_seed(6)
+    L = (4 / 0.2) ** 0.5
+    x = torch.rand(1, 4, 2) * L
+    mobile = torch.tensor([[True, True, False, False]])          # 1 mobile-A(0), 1 mobile-B(1); frozen A(2),B(3)
+    w = torch.tensor([[0.8, 0.3, 0.6, 0.2]])                     # non-uniform, s-independent B-affinity
+    weight_fn = lambda xx, ss: w.expand(xx.shape[0], -1).clone()
+    efn = lambda a, b: ka_energy(a, b, L); beta = 1.5
+    s = torch.tensor([[0, 1, 0, 1]]); U = efn(x, s); cnt = Counter()
+    for _ in range(20000):
+        s, U, _ = masked_swap(x, s, U, mobile, beta, efn, weight_fn)
+        cnt[tuple(s[0].tolist())] += 1
+    ratio_theory = math.exp(-beta * float(efn(x, torch.tensor([[1,0,0,1]])) - efn(x, torch.tensor([[0,1,0,1]]))))
+    ratio_emp = cnt[(1,0,0,1)] / cnt[(0,1,0,1)]
+    assert abs(math.log(ratio_emp) - math.log(ratio_theory)) < 0.1
+
+def test_block_relabel_guards_k_gt_mobile():
+    import pytest
+    x, s, L = _setup(B=2, N=16, seed=4)
+    mobile = torch.zeros(2, 16, dtype=torch.bool); mobile[:, :3] = True   # only 3 mobile
+    efn = lambda a, b: ka_energy(a, b, L)
+    table_fn = lambda xx: torch.full((xx.shape[0], xx.shape[1]), 0.4)
+    with pytest.raises(AssertionError):
+        masked_block_relabel(x, s, efn(x, s), mobile, 2.0, efn, table_fn, k=4)

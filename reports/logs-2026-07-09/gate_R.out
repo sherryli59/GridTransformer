@@ -1,0 +1,11 @@
+[Gate R / N=2 (2D quad)] N=2 L=2.0000 beta=1.0
+   grid   <U> = 0.24100  (grid-halving err 0.00003, n_grid=600)
+   MC     <U> = 0.23998 +/- 0.00088  (acc 0.697, chains 512)
+   |diff| = 0.00102   tol = 0.00441   -> PASS
+[Gate R / N=3 (4D quad, BEDROCK)] N=3 L=2.4495 beta=1.0
+   grid   <U> = 0.32595  (grid-halving err 0.00013, n_grid=64)
+   MC     <U> = 0.32566 +/- 0.00056  (acc 0.715, chains 768)
+   |diff| = 0.00028   tol = 0.00290   -> PASS
+
+GATE R: PASS
+saved reference -> /mnt/ssd/GridTransformer/liquid_coupling_flow/ordmh/artifacts/ordmh_reference.pkl

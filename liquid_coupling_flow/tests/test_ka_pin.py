@@ -23,3 +23,20 @@ def test_pin_mask_count_and_frozen_fixed():
     # energy recomputed from x2 equals the tracked U2 (accept bookkeeping is exact)
     assert torch.allclose(ka_energy(x2, s, L), U2, atol=1e-4)
     assert 0.0 <= acc <= 1.0
+
+def test_masked_mala_multi_step_frozen_invariance():
+    """Regression test: frozen particles stay bit-for-bit fixed across repeated masked_mala calls."""
+    x0, s, L = _setup()
+    mobile = pin_mask(4, 64, c=0.25, device="cpu", generator=torch.Generator().manual_seed(1))
+    U = ka_energy(x0, s, L)
+    efn = lambda a, b: ka_energy(a, b, L); ffn = lambda a, b: ka_forces(a, b, L)
+
+    # Run 20 iterations of masked_mala, threading x and U through
+    x, U_curr = x0.clone(), U.clone()
+    for step in range(20):
+        x, U_curr, acc = masked_mala(x, s, U_curr, mobile, beta=2.0, L=L, dt=0.01, energy_fn=efn, force_fn=ffn)
+        # Acceptance rate must be in [0, 1] every step
+        assert 0.0 <= acc <= 1.0, f"Step {step}: acceptance rate {acc} out of bounds"
+
+    # After 20 steps, frozen particles must be unchanged from initial
+    assert torch.equal(x[~mobile], x0[~mobile]), "Frozen particles changed after multi-step loop"

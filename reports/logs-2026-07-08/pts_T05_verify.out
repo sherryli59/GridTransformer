@@ -1,0 +1,16 @@
+[verify] T=0.5 c=0.16 Q_rand=0.108  scramble MELT-START Q=0.466 (low=genuinely decorrelated)
+  [ref     ] it    0 Q 1.000
+  [ref     ] it  500 Q 0.578
+  [ref     ] it 1000 Q 0.572
+  [ref     ] it 1500 Q 0.571
+  [ref     ] it 2000 Q 0.555
+  [ref     ] it 2500 Q 0.587
+  [ref     ] it 3000 Q 0.569
+  [scramble] it    0 Q 0.466
+  [scramble] it  500 Q 0.567
+  [scramble] it 1000 Q 0.571
+  [scramble] it 1500 Q 0.564
+  [scramble] it 2000 Q 0.566
+  [scramble] it 2500 Q 0.578
+  [scramble] it 3000 Q 0.576
+[verify] DONE

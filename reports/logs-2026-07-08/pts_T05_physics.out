@@ -1,0 +1,4 @@
+[T05] N=256 T=0.5 c=0.16 step=0.08 Q_rand=0.108; deep glass — physics gate for direction (b)
+[T05 disp-only] ref 0.564 scr 0.565 GAP=0.001 excess(ref)~0.456 -> CONVERGED  (105s)
+[T05 disp+SWAP] ref 0.579 scr 0.566 GAP=0.013 excess(ref)~0.471 -> CONVERGED  (294s)
+[T05] DONE

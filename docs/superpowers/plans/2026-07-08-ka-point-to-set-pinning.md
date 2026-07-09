@@ -469,11 +469,12 @@ def test_xi_threshold_and_error_propagation():
     excess = np.array([0.50, 0.35, 0.22, 0.12, 0.05])           # Qinf - Qrand, monotone decreasing
     Qinf = excess + 0.108
     out = xi_threshold(lvals, Qinf, Qinf_err=np.full(5, 0.01), thr=0.2, Qrand=0.108, dQ_tol=0.02)
-    assert out["kind"] == "point" and 2.0 < out["xi"] < 2.5
-    # near-flat curve inflates dxi (loose vertical tol -> large horizontal error)
-    flat = np.array([0.30, 0.27, 0.24, 0.22, 0.205]) + 0.108
+    assert out["kind"] == "point" and abs(out["xi"] - 2.6) < 0.05   # 0.22->0.12 crosses 0.2 across l=2.5..3.0
+    # near-flat curve AT THE CROSSING inflates dxi (small slope -> large horizontal error).
+    # This curve also crosses 0.2 (last excess 0.19 < 0.2) but with a shallow final slope.
+    flat = np.array([0.30, 0.26, 0.23, 0.21, 0.19]) + 0.108
     o2 = xi_threshold(lvals, flat, np.full(5, 0.01), thr=0.2, Qrand=0.108, dQ_tol=0.02)
-    assert o2["dxi"] > out["dxi"]
+    assert o2["kind"] == "point" and o2["dxi"] > out["dxi"]
 ```
 
 - [ ] **Step 2: Run test to verify it fails**

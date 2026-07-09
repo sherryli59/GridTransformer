@@ -1,7 +1,7 @@
 """Point-to-set campaign: run the T x c ladder (random pinning), gate each cell, extract xi_pin(T).
 All learned parts N=100-trained, zero-shot at N>=256, behind exact Metropolis. Saves per-cell trajectories
 incrementally and the final xi(T) figure."""
-import os, math, torch, numpy as np
+import os, torch, numpy as np
 import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
 from liquid_coupling_flow.ka_pin import pin_mask, constrained_run
 from liquid_coupling_flow.ka_pin_extract import stretched_exp_fit, xi_threshold
@@ -9,6 +9,30 @@ from liquid_coupling_flow.ka_pin_gates import g_conv
 from liquid_coupling_flow.ka_pin_overlap import q_rand
 
 RHO = 1.2
+
+
+def _plot_xi_of_T(agg, out_path, thresholds=(0.1, 0.2, 0.3)):
+    """Plot xi_pin(T) per threshold. Handles all xi_threshold kinds: point (float) -> point+dxi bar;
+    range (tuple) -> midpoint with half-range bar; none -> skipped. Returns warning strings for range/none."""
+    import matplotlib.pyplot as plt
+    warnings = []
+    fig, ax = plt.subplots(figsize=(6, 4.4))
+    for thr, mk in zip(thresholds, ("o", "s", "^")):
+        Ts = sorted(agg[thr].keys())
+        xs, ys, yerr = [], [], []
+        for T in Ts:
+            r = agg[thr][T]
+            if r["kind"] == "point":
+                xs.append(T); ys.append(r["xi"]); yerr.append(r["dxi"] or 0.0)
+            elif r["kind"] == "range":
+                lo, hi = r["xi"]; xs.append(T); ys.append(0.5 * (lo + hi)); yerr.append(0.5 * (hi - lo))
+                warnings.append(f"T={T} thr={thr}: xi RANGE [{lo:.2f},{hi:.2f}] (non-monotone Qinf)")
+            else:
+                warnings.append(f"T={T} thr={thr}: NO crossing (xi undefined)")
+        ax.errorbar(xs, ys, yerr=yerr, marker=mk, label=f"thr={thr}", capsize=3)
+    ax.set_xlabel("T"); ax.set_ylabel(r"$\xi_{pin}$"); ax.legend(); ax.set_title("Point-to-set length vs T")
+    fig.tight_layout(); fig.savefig(out_path, dpi=130); plt.close(fig)
+    return warnings
 
 
 def run_cell(T, c, refs, n_iter, table_fn, device, out_dir, n_real=16, dt=0.01, record_every=5):
@@ -19,7 +43,8 @@ def run_cell(T, c, refs, n_iter, table_fn, device, out_dir, n_real=16, dt=0.01, 
     N = x.shape[1]; L = refs["L"]
     gen = torch.Generator(device=device); gen.manual_seed(hash((round(T, 3), round(c, 3))) % (2**31))
     mobile = pin_mask(n_real, N, c, device, generator=gen)
-    torch.manual_seed(12345); scr = torch.rand_like(x) * L
+    torch.manual_seed(hash((round(T, 3), round(c, 3), "scr")) % (2**31))
+    scr = torch.rand_like(x) * L
     ref_run = constrained_run(x, s, mobile, T, L, n_iter, table_fn, dt, record_every, arm="ref")
     scr_run = constrained_run(x, s, mobile, T, L, n_iter, table_fn, dt, record_every,
                               arm="scramble", scramble_x=scr)
@@ -70,26 +95,24 @@ def main():
     ladder = {256: [0.24, 0.16, 0.12, 0.08], 576: [0.06, 0.04]}
     temps = [0.8, 0.65, 0.5]
     cells = []
+    tables = {}
     for T in temps:
         for N, cs in ladder.items():
             if N == 576 and T == 0.5:
                 continue                                             # stretch goal (see spec §6)
             refs = get_references(T, N, 16, dev, out_dir)
-            nB = int((refs["s"] == 1).sum()) if refs["s"].dim() == 1 else int(refs["s"][0].sum())
-            table_fn = load_geometry_table(N, refs["L"], nB,
-                                           "liquid_coupling_flow/ipl44/data/jf_ka100tt_best.pt", dev)
+            if N not in tables:
+                nB = int((refs["s"] == 1).sum())
+                tables[N] = load_geometry_table(N, refs["L"], nB,
+                                                "liquid_coupling_flow/ipl44/data/jf_ka100tt_best.pt", dev)
+            table_fn = tables[N]
             for c in cs:
                 cells.append(run_cell(T, c, refs, n_iter=3000, table_fn=table_fn, device=dev, out_dir=out_dir))
     agg = aggregate(cells)
     torch.save({"cells": cells, "agg": agg}, os.path.join(out_dir, "pts_summary.pt"))
-    fig, ax = plt.subplots(figsize=(6, 4.4))
-    for thr, mk in zip((0.1, 0.2, 0.3), ("o", "s", "^")):
-        Ts = sorted(agg[thr].keys())
-        xis = [agg[thr][T]["xi"] if isinstance(agg[thr][T]["xi"], float) else np.nan for T in Ts]
-        dxis = [agg[thr][T]["dxi"] or 0 for T in Ts]
-        ax.errorbar(Ts, xis, yerr=dxis, marker=mk, label=f"thr={thr}", capsize=3)
-    ax.set_xlabel("T"); ax.set_ylabel(r"$\xi_{pin}$"); ax.legend(); ax.set_title("Point-to-set length vs T")
-    p = os.path.join(out_dir, "xi_of_T.png"); fig.tight_layout(); fig.savefig(p, dpi=130)
+    p = os.path.join(out_dir, "xi_of_T.png")
+    for w in _plot_xi_of_T(agg, p):
+        print(f"[pts] WARN {w}", flush=True)
     print(f"[pts] SAVED {os.path.abspath(p)}", flush=True)
 
 

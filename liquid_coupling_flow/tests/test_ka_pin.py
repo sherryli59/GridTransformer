@@ -256,3 +256,15 @@ def test_run_cell_and_aggregate_smoke(tmp_path):
              for lc, q in zip([1.5, 2.0, 2.5, 3.0], [0.55, 0.38, 0.22, 0.12])]
     agg = aggregate(cells, thresholds=(0.2,))
     assert 0.8 in {round(t, 3) for t in agg[0.2].keys()}
+
+def test_plot_xi_of_T_handles_all_kinds(tmp_path):
+    import os
+    from liquid_coupling_flow.ka_pin_campaign import _plot_xi_of_T
+    agg = {0.2: {
+        0.8:  {"xi": 2.3, "dxi": 0.1, "kind": "point"},
+        0.65: {"xi": (2.0, 2.6), "dxi": 0.3, "kind": "range"},
+        0.5:  {"xi": None, "dxi": None, "kind": "none"},
+    }}
+    warns = _plot_xi_of_T(agg, str(tmp_path / "xi.png"), thresholds=(0.2,))
+    assert os.path.exists(str(tmp_path / "xi.png"))
+    assert any("RANGE" in w for w in warns) and any("NO crossing" in w for w in warns)

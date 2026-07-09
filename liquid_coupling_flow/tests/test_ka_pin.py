@@ -165,3 +165,24 @@ def test_xi_threshold_and_error_propagation():
     flat = np.array([0.30, 0.26, 0.23, 0.21, 0.19]) + 0.108
     o2 = xi_threshold(lvals, flat, np.full(5, 0.01), thr=0.2, Qrand=0.108, dQ_tol=0.02)
     assert o2["kind"] == "point" and o2["dxi"] > out["dxi"]
+
+def test_xi_threshold_exact_touch_last_point():
+    lvals = np.array([1.5, 2.0, 2.5, 3.0, 3.5])
+    excess = np.array([0.50, 0.40, 0.30, 0.25, 0.20])       # last point touches thr=0.2 exactly
+    out = xi_threshold(lvals, excess + 0.108, np.full(5, 0.01), thr=0.2, Qrand=0.108, dQ_tol=0.02)
+    assert out["kind"] == "point" and abs(out["xi"] - 3.5) < 1e-9
+
+def test_xi_threshold_no_crossing_and_range():
+    lvals = np.array([1.5, 2.0, 2.5, 3.0, 3.5])
+    # never drops to thr -> none
+    o_none = xi_threshold(lvals, np.array([0.5,0.5,0.5,0.5,0.5]) + 0.108, np.full(5,0.01), thr=0.2)
+    assert o_none["kind"] == "none" and o_none["xi"] is None
+    # non-monotone: crosses thr=0.2 twice (down then up) -> range
+    o_rng = xi_threshold(lvals, np.array([0.30,0.15,0.10,0.15,0.30]) + 0.108, np.full(5,0.01), thr=0.2)
+    assert o_rng["kind"] == "range" and isinstance(o_rng["xi"], tuple) and o_rng["xi"][0] < o_rng["xi"][1]
+
+def test_stretched_exp_fit_graceful_on_short_input():
+    out = stretched_exp_fit(np.array([]), np.array([]))
+    assert out["ok"] is False
+    out2 = stretched_exp_fit(np.array([0.,1.,2.]), np.array([1.,0.8,0.6]))   # 3 < 4 params
+    assert out2["ok"] is False

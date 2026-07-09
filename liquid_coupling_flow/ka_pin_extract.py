@@ -10,6 +10,9 @@ def _sexp(t, Qinf, A, tau, beta):
 
 def stretched_exp_fit(t, Q):
     t = np.asarray(t, float); Q = np.asarray(Q, float)
+    if t.size < 4:
+        qinf = float(Q[-1]) if Q.size else float("nan")
+        return {"Qinf": qinf, "A": 0.0, "tau": 1.0, "beta": 1.0, "ok": False}
     p0 = [Q[-1], max(Q[0] - Q[-1], 1e-3), max(t[-1] / 3, 1.0), 0.7]
     bounds = ([0.0, 0.0, 1e-3, 0.2], [1.0, 1.5, 1e6, 1.5])
     try:
@@ -25,13 +28,14 @@ def xi_threshold(lvals, Qinf, Qinf_err, thr, Qrand=0.108, dQ_tol=0.02):
     l = np.asarray(lvals, float); e = np.asarray(Qinf, float) - Qrand
     err = np.asarray(Qinf_err, float)
     crossings = []
-    for i in range(len(l) - 1):
+    for i in range(len(l)):                                  # exact touches (any index, incl. last)
+        if e[i] - thr == 0.0:
+            crossings.append((float(l[i]), min(i, len(l) - 2)))   # slope index clamped to a valid interval
+    for i in range(len(l) - 1):                              # interior sign changes
         a, b = e[i] - thr, e[i + 1] - thr
-        if a == 0.0:
-            crossings.append((l[i], i))
-        if a * b < 0:                                            # sign change between i and i+1
+        if a * b < 0:
             frac = a / (a - b)
-            xi = l[i] + frac * (l[i + 1] - l[i]); crossings.append((xi, i))
+            crossings.append((float(l[i] + frac * (l[i + 1] - l[i])), i))
     if not crossings:
         return {"xi": None, "dxi": None, "kind": "none"}
     def dxi_at(i):

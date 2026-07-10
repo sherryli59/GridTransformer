@@ -28,11 +28,11 @@ This module is reused by Phase-2/3 re-gates (same g2() at later checkpoints of t
 Run: python -m liquid_coupling_flow.mw.mw_gates g2 <N> [B]
 """
 from __future__ import annotations
-import datetime, math, os, sys, torch
-from liquid_coupling_flow.mw.mw_base import UniformBase
+import datetime, math, os, sys, time, torch
+from liquid_coupling_flow.mw.mw_base import UniformBase, GeneratorBase, load_any_generator
 from liquid_coupling_flow.mw.mw_smc import smc_run
 from liquid_coupling_flow.mw.mw_reference import mc_run, g_r
-from liquid_coupling_flow.mw.mw_energy import T_STAR, RHO_STAR
+from liquid_coupling_flow.mw.mw_energy import T_STAR, RHO_STAR, mw_energy
 
 ART = os.path.join(os.path.dirname(__file__), "artifacts")
 DEV = "cuda" if torch.cuda.is_available() else "cpu"
@@ -402,10 +402,95 @@ def g3(Ns=(27, 64, 125, 216), B=256, seeds=(0, 1), ess_target=0.95, n_sweeps=10,
     return result
 
 
+def g_base(ckpt_path, tag, B=128, ess_target=0.9, n_sweeps=10, seed=0):
+    """SMC-relevant base gate for a trained generator (the mini-Task-11 that gates finetune_struct2).
+
+    The v10s2 fine-tune is judged on SMC-relevant metrics, NOT on TF g(r) alone.  This gate loads the
+    generator, wraps it in GeneratorBase, and reports (all at the ambient N=64 point,
+    beta=1/T*, L from rho*):
+
+      * one-shot   : std(logw)/N and ESS of the B init samples, where logw = -beta*U(x0) - log q0(x0)
+                     (float64 arithmetic) -- how peaked the importance weights of the raw proposal are;
+      * c-proxy    : mean(log q0(x0) + beta*U(x0))/N  (== mean(-logw)/N; relative comparisons only,
+                     logZ unknown) -- a per-particle proxy for KL(q0 || e^{-beta U}) up to -logZ;
+      * mini-SMC   : the annealed-SMC RUNG COUNT T (and evals, final weighted U/N, wall) with the
+                     GENERATOR as the base -- the head-start over the uniform-base T_trivial(N) line.
+                     NOTE mutation_sweeps calls base.log_q per site-move (LOGQ_CONST=False), one causal
+                     forward per move, so this run costs ~1-2h at B=128; that IS the measurement;
+      * TF struct  : the model's teacher_forced_structure (secondary), if present.
+
+    Saves everything to artifacts/mw_gbase_{tag}.pt (repo rule: full data, not summaries) and prints
+    one summary line.  N is fixed at 64 (the controlled v10 experiment).  Does NOT gate PASS/FAIL --
+    it reports the numbers the controller reads."""
+    t0 = time.time()
+    N = 64
+    beta = 1.0 / T_STAR
+    L = (N / RHO_STAR) ** (1.0 / 3.0)
+    model = load_any_generator(ckpt_path, DEV)
+    base = GeneratorBase(model, N, L)
+    print(f"g_base {tag}: {ckpt_path} N={N} L={L:.4f} beta={beta:.4f} B={B} "
+          f"ess_target={ess_target} n_sweeps={n_sweeps} seed={seed}", flush=True)
+
+    # --- one-shot proposal diagnostics (float64 arithmetic) ---
+    gen = torch.Generator(device=DEV).manual_seed(seed)
+    x0 = base.sample(B, gen)
+    U0 = mw_energy(x0, L).double()
+    lq0 = base.log_q(x0).double()
+    logw = -beta * U0 - lq0
+    w = torch.softmax(logw, 0)
+    ess0 = float(1.0 / (w ** 2).sum())
+    std_logw_per_N = float(logw.std() / N)
+    c_proxy = float((lq0 + beta * U0).mean() / N)               # == mean(-logw)/N
+    print(f"g_base {tag}: one-shot std(logw)/N={std_logw_per_N:.4f} ESS={ess0:.2f}/{B} "
+          f"c-proxy(mean(logq+bU)/N)={c_proxy:.4f} (logZ unknown; relative only)", flush=True)
+
+    # --- TF structural metrics (secondary) ---
+    tf_struct = None
+    if hasattr(model, "teacher_forced_structure"):
+        try:
+            tfg = torch.Generator(device=DEV).manual_seed(seed + 7)
+            st = model.teacher_forced_structure(x0[:min(64, B)], L, gen=tfg)
+            tf_struct = {k: (float(v) if torch.is_tensor(v) and v.numel() == 1
+                             else (v.cpu() if torch.is_tensor(v) else v)) for k, v in st.items()}
+            print(f"g_base {tag}: TF peak_err={float(st['peak_err']):.4f} "
+                  f"core_coord={float(st['core_coord']):.4f}", flush=True)
+        except Exception as e:                                  # secondary metric, never fatal
+            print(f"g_base {tag}: TF structure skipped ({e})", flush=True)
+
+    # --- mini-SMC with the generator base: rung count is the head-start metric ---
+    out = smc_run(base, N, L, beta, B=B, ess_target=ess_target, n_sweeps=n_sweeps,
+                  step=0.0783, seed=seed, save_tag=f"_gbase_{tag}")
+    T = sum(1 for h in out["history"] if not h.get("final", False))
+    w_smc = torch.softmax(out["logw"].double(), 0)
+    u_final = float((w_smc * (out["U"] / N).double()).sum())
+    print(f"g_base {tag}: mini-SMC T(rungs)={T} evals={out['evals']} final weighted U/N={u_final:.4f} "
+          f"logZ={out['logZ']:.4f} wall={out['wall']:.0f}s", flush=True)
+
+    result = {
+        "tag": tag, "ckpt": ckpt_path, "N": N, "L": L, "beta": beta,
+        "B": B, "ess_target": ess_target, "n_sweeps": n_sweeps, "step": 0.0783, "seed": seed,
+        "one_shot": {"x0": x0.cpu(), "U0": U0.cpu(), "logq0": lq0.cpu(), "logw": logw.cpu(),
+                     "std_logw_per_N": std_logw_per_N, "ess": ess0, "c_proxy": c_proxy},
+        "smc": {"x": out["x"], "U": out["U"], "logw": out["logw"], "logZ": out["logZ"],
+                "history": out["history"], "evals": out["evals"], "wall": out["wall"],
+                "T": T, "U_per_N": u_final},
+        "tf_struct": tf_struct,
+        "wall_total": time.time() - t0,
+    }
+    os.makedirs(ART, exist_ok=True)
+    path = os.path.join(ART, f"mw_gbase_{tag}.pt")
+    torch.save(result, path)
+    print(f"g_base {tag}: SUMMARY std(logw)/N={std_logw_per_N:.4f} ESS={ess0:.2f}/{B} "
+          f"c-proxy={c_proxy:.4f} T={T} evals={out['evals']} U/N={u_final:.4f} -> saved {path}",
+          flush=True)
+    return result
+
+
 if __name__ == "__main__":
-    if len(sys.argv) < 2 or sys.argv[1] not in ("g2", "g3"):
+    if len(sys.argv) < 2 or sys.argv[1] not in ("g2", "g3", "g_base"):
         print("usage: python -m liquid_coupling_flow.mw.mw_gates g2 <N> [B]", file=sys.stderr)
         print("       python -m liquid_coupling_flow.mw.mw_gates g3", file=sys.stderr)
+        print("       python -m liquid_coupling_flow.mw.mw_gates g_base <ckpt> <tag>", file=sys.stderr)
         sys.exit(1)
     if sys.argv[1] == "g2":
         if len(sys.argv) < 3:
@@ -414,5 +499,11 @@ if __name__ == "__main__":
         N_arg = int(sys.argv[2])
         B_arg = int(sys.argv[3]) if len(sys.argv) > 3 else 512
         g2(N_arg, B=B_arg)
+    elif sys.argv[1] == "g_base":
+        if len(sys.argv) < 4:
+            print("usage: python -m liquid_coupling_flow.mw.mw_gates g_base <ckpt> <tag>",
+                  file=sys.stderr)
+            sys.exit(1)
+        g_base(sys.argv[2], sys.argv[3])
     else:
         g3()

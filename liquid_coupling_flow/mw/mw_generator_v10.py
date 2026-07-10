@@ -39,7 +39,7 @@ from liquid_coupling_flow.transforms_spline import (
     CircularRQSplineElementwise, DEFAULT_MIN_DERIVATIVE,
 )
 from liquid_coupling_flow.mw.mw_energy import (
-    A_CUT, COS0, GAMMA, LAMBDA3, RHO_STAR, _phi2,
+    A_CUT, COS0, GAMMA, LAMBDA3, RHO_STAR, T_STAR, _phi2,
 )
 from liquid_coupling_flow.mw.mw_generator import (
     ART, DEV, R_SHELL1, _augment_batch, canonical_order, load_training_bank,
@@ -374,14 +374,18 @@ def _evaluate_struct(model, xva, L, N, gen):
     model.train(); return val, struct
 
 
-def _checkpoint_struct(model, step, val_nll, struct, L, warm):
-    return {"state_dict": model.state_dict(), "step": step, "val_nll": val_nll,
-            "struct": {k: (float(v) if torch.is_tensor(v) and v.numel() == 1
-                           else (v.cpu() if torch.is_tensor(v) else v))
-                       for k, v in struct.items()},
-            "train_N": round(RHO_STAR * L ** 3), "phase": "struct-finetune", "warm": warm,
-            "architecture": "v10_struct_finetune",
-            **{k: getattr(model, k) for k in _MODEL_KEYS}}
+def _checkpoint_struct(model, step, val_nll, struct, L, warm,
+                       arch="v10_struct_finetune", baseline=None):
+    ck = {"state_dict": model.state_dict(), "step": step, "val_nll": val_nll,
+          "struct": {k: (float(v) if torch.is_tensor(v) and v.numel() == 1
+                         else (v.cpu() if torch.is_tensor(v) else v))
+                     for k, v in struct.items()},
+          "train_N": round(RHO_STAR * L ** 3), "phase": "struct-finetune", "warm": warm,
+          "architecture": arch,
+          **{k: getattr(model, k) for k in _MODEL_KEYS}}
+    if baseline is not None:
+        ck["baseline_state_dict"] = baseline.state_dict()   # auxiliary REINFORCE baseline (v10s2)
+    return ck
 
 
 def finetune_struct(steps=20_000, batch=24, lr=1e-4, lam=0.05, lam_warmup=1_000, clip_e=10.0,
@@ -447,11 +451,193 @@ def finetune_struct(steps=20_000, batch=24, lr=1e-4, lam=0.05, lam_warmup=1_000,
     return {**paths, "best_nll": best_nll, "best_struct": best_struct}
 
 
+# ---------------------------------------------------------------------------
+# v10s2: corrected structure fine-tune -- HYBRID (REINFORCE + pathwise) free-energy estimator.
+#
+# finetune_struct's blind spot: FullCovTanhMDN.sample draws the mixture component with a DETACHED
+# multinomial and its returned sample-density is discarded, so the mixture LOGITS receive EXACTLY
+# ZERO gradient from the structure term -- the energy can sharpen a component but never REALLOCATE
+# mass across components (user-verified: logit grad 0.0, mean 117.4, chol 148.3).  v10s2 fixes this
+# with the standard hybrid estimator: score-function (REINFORCE, learned baseline) for the discrete
+# component choice + pathwise (reparameterization) for the continuous draw / transport / body.
+# ---------------------------------------------------------------------------
+
+
+class StructBaseline(nn.Module):
+    """Per-context REINFORCE baseline b_phi(h): a small MLP on stopgrad(h), trained by MSE to
+    stopgrad(F).  It de-noises the score-function (logit) gradient and NEVER backpropagates into the
+    generator (its input h is detached at the call site).  Not part of the density model."""
+
+    def __init__(self, d_model, hidden=64):
+        super().__init__()
+        self.net = nn.Sequential(nn.Linear(d_model, hidden), nn.GELU(), nn.Linear(hidden, 1))
+
+    def forward(self, h):
+        return self.net(h).squeeze(-1)
+
+
+def _hard_component_sample(logits, gen):
+    """Detached hard component index c ~ Categorical(softmax(logits)); mirrors FullCovTanhMDN.sample's
+    discrete draw but keeps the [B,N] leading shape.  Detached BY DESIGN -- the discrete choice's
+    gradient is supplied by the score-function term, not by relaxing the sample."""
+    K = logits.shape[-1]
+    flat = torch.softmax(logits.detach().reshape(-1, K), -1)
+    comp = torch.multinomial(flat, 1, generator=gen).squeeze(-1)
+    return comp.reshape(logits.shape[:-1])
+
+
+def _struct_free_energy(model, h, xo, t, s, bound, L, beta, clip_e=25.0, three_body=True, gen=None):
+    """HYBRID-estimator per-step teacher-forced free-energy pieces (the finetune_struct2 core).
+
+    At every step j (shared teacher-forced hidden ``h``):
+      * HARD-sample a component c ~ Categorical(pi_theta(h)) (detached draw) and keep
+        ``log pi_theta(c | h)`` ON THE TAPE -- the score-function pathway to the LOGITS;
+      * draw the within-component point by REPARAMETERIZATION z = mu_c + L_c eps, u = bound*tanh(z),
+        then the toroidal transport y = T(u; h) -- pathwise to means / chol / transport / body;
+      * F_j = log q_theta(x_hat_j | h_j)  [the FULL mixture density at the sampled point, on the tape]
+              + clip_e * tanh(beta * U_ins / clip_e)  [tanh-clipped SW insertion free energy; the clip
+              is applied to beta*U_ins JOINTLY, clip_e measured in beta-units so a core blow-up is
+              bounded yet still steers the placement (tanh, not clamp, preserves the gradient)].
+
+    Returns F [B,N] (the pathwise term), log_pi_c [B,N] (the score-function term), U_ins.detach()
+    [B,N] (diagnostics).  The full-mixture log q is base.log_prob(u) - forward_transport log|dy/du|,
+    identical to ToroidalResidualHead.log_prob(y) up to the inverse-vs-forward transport round-trip
+    but reusing the already-drawn u (no extra spline inverse).  The density code is untouched."""
+    logits, mean, Lchol = model.head.base._params(h)             # [B,N,K],[B,N,K,3],[B,N,K,3,3]
+    log_pi = torch.log_softmax(logits, -1)
+    comp = _hard_component_sample(logits, gen)                   # [B,N] detached component index
+    log_pi_c = torch.gather(log_pi, -1, comp.unsqueeze(-1)).squeeze(-1)      # on tape -> LOGITS
+    shp = comp.shape
+    mean_c = torch.gather(mean, 2, comp[..., None, None].expand(*shp, 1, 3)).squeeze(-2)          # [B,N,3]
+    L_c = torch.gather(Lchol, 2, comp[..., None, None, None].expand(*shp, 1, 3, 3)).squeeze(-3)   # [B,N,3,3]
+    eps = torch.randn(*shp, 3, device=h.device, dtype=h.dtype, generator=gen)
+    z = mean_c + torch.einsum("bnij,bnj->bni", L_c, eps)         # reparam (pathwise -> mu / chol)
+    u = bound * torch.tanh(z)
+    base_lp = model.head.base.log_prob(h, u, bound)             # FULL mixture density at the base pt
+    y, forward_ld = model.head.forward_transport(h, u, bound)    # transport (pathwise -> spline / body)
+    log_q = base_lp - forward_ld                                # full head density at x_hat (on tape)
+    placed = torch.remainder(t[None] + s * y, L)               # chart -> Cartesian (differentiable)
+    u_ins = _insertion_energy(placed, xo, L, three_body=three_body)
+    F = log_q + _smooth_clip(beta * u_ins, clip_e)             # free-energy surrogate, on the tape
+    return F, log_pi_c, u_ins.detach()
+
+
+def _set_body_frozen(model, frozen):
+    """Freeze/unfreeze the global body (everything NOT under ``head.*``: blocks, rail, geo, prev_proj,
+    phase_proj, bos, final_ln).  The MDN heads + mixture logits (head.base.*) and the toroidal
+    transport (head.transforms.*) always stay trainable, so the heads still learn while the body is
+    frozen (h is then a constant w.r.t. the optimizer but the head/transport paths keep their grad)."""
+    for name, p in model.named_parameters():
+        p.requires_grad_(True if name.startswith("head.") else not frozen)
+
+
+def finetune_struct2(steps=20_000, batch=24, lr=1e-4, lam=0.03, lam_warmup=1_000, clip_e=25.0,
+                     freeze_body_steps=4_000, baseline_lr=1e-3, nll_guard=0.40, three_body=True,
+                     val_every=500, warm="mw_gen_N64_v10_last.pt", out="mw_gen_N64_v10s2.pt",
+                     seed=73, primary_thin=2, val_frac=0.1, extension="mw_ref_N64_ext.pt",
+                     device=None, art_path=None, extra_banks=None):
+    """v10s2: corrected structure-aware fine-tune with a HYBRID (REINFORCE + pathwise) estimator.
+
+    L = NLL/N + lam_t * [ mean_j F_j                                 (PATHWISE: means / chol /
+                                                                      transport / body-when-unfrozen)
+                        + mean_j stopgrad(F_j - b_phi(h_j)) * log pi_theta(c_j | h_j)  (SCORE-FUNCTION:
+                                                                      the mixture LOGITS) ]
+    with F_j the per-step teacher-forced free-energy surrogate log q(x_hat_j) + clip_e*tanh(beta*U_ins/
+    clip_e) (see ``_struct_free_energy``).  A small learned baseline b_phi(stopgrad h) (trained by MSE
+    to stopgrad(F), its OWN optimizer) de-noises the logit score-function gradient without perturbing
+    the generator.  The global body (blocks/rail/geo/prev/phase) is FROZEN for the first
+    ``freeze_body_steps`` (only MDN heads + transport + logits + baseline train), then unfrozen.  lam
+    ramps 0 -> lam over ``lam_warmup`` steps; the ADAPTIVE NLL guard halves the base lam (and prints)
+    whenever val NLL exceeds ``nll_guard`` (calibration, never crash).  Warm from a v10 checkpoint.
+    The density code (log_prob/sample/head) is untouched, so sample<->log_prob exactness is preserved
+    by construction.  Checkpoint discipline mirrors finetune_struct (best_nll / best_struct / last,
+    shell2 tracked) plus the baseline state; architecture tag ``v10_struct_finetune2_reinforce``."""
+    torch.manual_seed(seed); device = device or DEV
+    beta = 1.0 / T_STAR
+    warm_path = warm if os.path.exists(warm) else os.path.join(ART, warm)
+    model = load_generator_v10(warm_path, device=device); model.train()
+    baseline = StructBaseline(model.d_model).to(device)
+    if extra_banks is None:
+        ext = extension if os.path.exists(extension) else os.path.join(ART, extension)
+        extra_banks = [(ext, 32, 1)]
+    xtr, xva, L = load_training_bank(art_path=art_path, thin_events=primary_thin,
+                                     val_frac=val_frac, extra_banks=extra_banks)
+    xtr, xva = xtr.to(device), xva.to(device); N = xtr.shape[1]
+    if N != 64: raise ValueError("v10 structure fine-tune is the controlled N=64 experiment")
+    t, rank, R = mw_scaffold(N, L, device)
+    s, bound = (L / R) / 2.0, float(R)
+    opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
+    opt_b = torch.optim.AdamW(baseline.parameters(), lr=baseline_lr)
+    aug_gen = torch.Generator(device=device).manual_seed(seed + 1)
+    eval_gen = torch.Generator(device=device).manual_seed(seed + 2)
+    draw_gen = torch.Generator(device=device).manual_seed(seed + 3)
+    out = out if os.path.isabs(out) else os.path.join(ART, out)
+    stem = out[:-3] if out.endswith(".pt") else out
+    paths = {"nll": stem + "_best_nll.pt", "struct": stem + "_best_struct.pt", "last": stem + "_last.pt"}
+    ARCH = "v10_struct_finetune2_reinforce"
+
+    _set_body_frozen(model, frozen=freeze_body_steps > 0)
+
+    # Warm baseline BEFORE any update: the no-regression anchor.
+    eval_gen.manual_seed(seed + 2)
+    best_nll, struct0 = _evaluate_struct(model, xva, L, N, eval_gen)
+    best_struct = float(struct0["composite"])
+    base_ck = _checkpoint_struct(model, -1, best_nll, struct0, L, warm_path, arch=ARCH, baseline=baseline)
+    for path in paths.values(): torch.save(base_ck, path)
+    lam_eff = float(lam)
+    print(f"v10s2 warm baseline from {warm_path}: val {best_nll:.4f} TF peak_err "
+          f"{float(struct0['peak_err']):.4f} shell2 {float(struct0['shell2']):.4f} core "
+          f"{float(struct0['core_coord']):.4f} (beta={beta:.4f} clip_e={clip_e} lam={lam} "
+          f"freeze_body={freeze_body_steps} three_body={three_body})", flush=True)
+
+    for step in range(steps):
+        if step == freeze_body_steps and freeze_body_steps > 0:
+            _set_body_frozen(model, frozen=False)
+            print(f"v10s2 step {step}: body UNFROZEN (blocks/rail/geo/prev/phase now train)", flush=True)
+        idx = torch.randint(len(xtr), (batch,), device=device)
+        xb = _augment_batch(xtr[idx], L, aug_gen)
+        x = torch.remainder(xb, L)
+        perm = canonical_order(x, L, R, rank)
+        xo = torch.gather(x, 1, perm[..., None].expand(-1, -1, 3))
+        u = wrap_pm(xo - t[None], L) / s
+        h = model._hidden(u, xo, t, L)                            # ONE teacher-forced pass, shared
+        nll = -(model.head.log_prob(h, u, bound).sum(-1) - 3 * N * math.log(s)).mean() / N
+        F, log_pi_c, u_ins = _struct_free_energy(model, h, xo, t, s, bound, L, beta,
+                                                 clip_e=clip_e, three_body=three_body, gen=draw_gen)
+        b = baseline(h.detach())                                  # per-context baseline b_phi(stopgrad h)
+        pathwise = F.mean()                                       # pathwise term
+        score = ((F.detach() - b.detach()) * log_pi_c).mean()     # REINFORCE with baseline -> LOGITS
+        lam_t = lam_eff * min(1.0, step / max(1, lam_warmup))
+        baseline_mse = (b - F.detach()).square().mean()           # trains baseline only (h/F detached)
+        total = nll + lam_t * (pathwise + score) + baseline_mse
+        if not torch.isfinite(total): raise FloatingPointError(f"nonfinite v10s2 loss at {step}")
+        opt.zero_grad(); opt_b.zero_grad(); total.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0); opt.step(); opt_b.step()
+        if step % val_every == 0 or step == steps - 1:
+            eval_gen.manual_seed(seed + 2); val, st = _evaluate_struct(model, xva, L, N, eval_gen)
+            if val > nll_guard:
+                lam_eff *= 0.5
+                print(f"v10s2 step {step}: NLL guard (val {val:.4f} > {nll_guard}) -> base lam "
+                      f"HALVED to {lam_eff:.5f}", flush=True)
+            ck = _checkpoint_struct(model, step, val, st, L, warm_path, arch=ARCH, baseline=baseline)
+            torch.save(ck, paths["last"])
+            if val < best_nll: best_nll = val; torch.save(ck, paths["nll"])
+            score_c = float(st["composite"])
+            if score_c < best_struct: best_struct = score_c; torch.save(ck, paths["struct"])
+            print(f"v10s2 step {step}: nll {float(nll):.4f} F {float(pathwise):.4f} score "
+                  f"{float(score):.4f} b_mse {float(baseline_mse):.4f} (lam_t {lam_t:.5f}) val "
+                  f"{val:.4f} TF peak_err {float(st['peak_err']):.4f} shell2 {float(st['shell2']):.4f} "
+                  f"core {float(st['core_coord']):.4f} composite {score_c:.4f}", flush=True)
+    return {**paths, "best_nll": best_nll, "best_struct": best_struct}
+
+
 if __name__ == "__main__":
     import argparse
     p = argparse.ArgumentParser(description="v10 toroidal residual: identity pretrain + structure fine-tune")
     p.add_argument("--finetune", action="store_true",
                    help="run the structure-aware fine-tune (finetune_struct) instead of train()")
+    p.add_argument("--finetune2", action="store_true",
+                   help="run the corrected hybrid-estimator fine-tune (finetune_struct2)")
     p.add_argument("--steps", type=int, default=None)
     p.add_argument("--correction-only-steps", type=int, default=5_000)
     p.add_argument("--bins", type=int, default=16)
@@ -460,15 +646,28 @@ if __name__ == "__main__":
     # finetune-only knobs
     p.add_argument("--batch", type=int, default=24)
     p.add_argument("--lr", type=float, default=1e-4)
-    p.add_argument("--lam", type=float, default=0.05)
+    p.add_argument("--lam", type=float, default=None)          # default resolved per-mode
     p.add_argument("--lam-warmup", type=int, default=1_000)
-    p.add_argument("--clip-e", type=float, default=10.0)
+    p.add_argument("--clip-e", type=float, default=None)       # default resolved per-mode
     p.add_argument("--no-three-body", action="store_true")
     p.add_argument("--warm", default="mw_gen_N64_v10_last.pt")
+    # finetune2-only knobs
+    p.add_argument("--freeze-body-steps", type=int, default=4_000)
+    p.add_argument("--baseline-lr", type=float, default=1e-3)
+    p.add_argument("--nll-guard", type=float, default=0.40)
     a = p.parse_args()
-    if a.finetune:
-        finetune_struct(steps=a.steps or 20_000, batch=a.batch, lr=a.lr, lam=a.lam,
-                        lam_warmup=a.lam_warmup, clip_e=a.clip_e, three_body=not a.no_three_body,
+    if a.finetune2:
+        finetune_struct2(steps=a.steps or 20_000, batch=a.batch, lr=a.lr,
+                         lam=a.lam if a.lam is not None else 0.03, lam_warmup=a.lam_warmup,
+                         clip_e=a.clip_e if a.clip_e is not None else 25.0,
+                         freeze_body_steps=a.freeze_body_steps, baseline_lr=a.baseline_lr,
+                         nll_guard=a.nll_guard, three_body=not a.no_three_body, warm=a.warm,
+                         out=a.out or "mw_gen_N64_v10s2.pt", seed=a.seed or 73)
+    elif a.finetune:
+        finetune_struct(steps=a.steps or 20_000, batch=a.batch, lr=a.lr,
+                        lam=a.lam if a.lam is not None else 0.05, lam_warmup=a.lam_warmup,
+                        clip_e=a.clip_e if a.clip_e is not None else 10.0,
+                        three_body=not a.no_three_body,
                         warm=a.warm, out=a.out or "mw_gen_N64_v10s.pt", seed=a.seed or 71)
     else:
         train(steps=a.steps or 30_000, correction_only_steps=a.correction_only_steps,

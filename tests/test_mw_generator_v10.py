@@ -2,12 +2,13 @@ import os
 
 import torch
 
-from liquid_coupling_flow.mw.mw_energy import RHO_STAR, mw_energy
+from liquid_coupling_flow.mw.mw_energy import RHO_STAR, T_STAR, mw_energy
 from liquid_coupling_flow.mw.mw_generator import canonical_order, mw_scaffold, wrap_pm
 from liquid_coupling_flow.mw.mw_generator_v4 import MWGlobalAR
 from liquid_coupling_flow.mw.mw_generator_v10 import (
-    MWV4ToroidalResidual, ToroidalResidualHead, _MODEL_KEYS, _insertion_energy,
-    _smooth_clip, _struct_loss, finetune_struct, load_generator_v10, load_v4_exact,
+    MWV4ToroidalResidual, StructBaseline, ToroidalResidualHead, _MODEL_KEYS, _insertion_energy,
+    _smooth_clip, _struct_free_energy, _struct_loss, finetune_struct, finetune_struct2,
+    load_generator_v10, load_v4_exact,
 )
 
 
@@ -169,6 +170,115 @@ def test_finetune_smoke(tmp_path):
         ck = torch.load(result[key], map_location="cpu", weights_only=False)
         assert ck["architecture"] == "v10_struct_finetune"
         assert "shell2" in ck["struct"]
+    # Density UNTOUCHED by the objective: sample() log q still mirrors log_prob(preordered).
+    m = load_generator_v10(result["last"], device="cpu")
+    x, lq = m.sample(3, N, L, gen=torch.Generator().manual_seed(1))
+    lp = m.log_prob(x, L, preordered=True)
+    assert torch.allclose(lq, lp, atol=3e-4), float((lq - lp).abs().max())
+
+
+# ---------------------------------------------------------------------------
+# finetune_struct2: corrected hybrid (REINFORCE + pathwise) free-energy estimator.
+# ---------------------------------------------------------------------------
+
+def _tf_context(m, seed, B=3):
+    """Shared teacher-forced hidden h + the ordered prefix / chart, the way finetune_struct2 does."""
+    N = 64
+    L = (N / RHO_STAR) ** (1.0 / 3.0)
+    torch.manual_seed(seed)
+    x = torch.remainder(torch.rand(B, N, 3) * L, L)
+    xo, t, R = _ordered(x, L)
+    s, bound = (L / R) / 2.0, float(R)
+    u = wrap_pm(xo - t[None], L) / s
+    h = m._hidden(u, xo, t, L)
+    return h, xo, t, s, bound, L
+
+
+def test_logit_grads_nonzero_v2():
+    # THE test of the fix. finetune_struct's detached-multinomial path gave the mixture LOGITS EXACTLY
+    # zero structure-gradient; the hybrid estimator (score-function + pathwise) must give the logits a
+    # NONZERO gradient -- and means/chol too. Isolate L_struct (no NLL, lam folded into the two terms).
+    m = _tiny_v10(); m.train()
+    h, xo, t, s, bound, L = _tf_context(m, seed=11)
+    beta = 1.0 / T_STAR
+    baseline = StructBaseline(m.d_model)
+    F, log_pi_c, u_ins = _struct_free_energy(m, h, xo, t, s, bound, L, beta, clip_e=25.0,
+                                             three_body=True, gen=torch.Generator().manual_seed(5))
+    assert float(u_ins.abs().sum()) > 0, "insertion energy identically zero -> nothing to learn from"
+    b = baseline(h.detach())
+    loss = F.mean() + ((F.detach() - b.detach()) * log_pi_c).mean()   # pathwise + score-function
+    m.zero_grad(); loss.backward()
+    out_w = m.head.base.out.weight.grad
+    assert out_w is not None and float(out_w.abs().sum()) > 0
+    # split the MDN output rows into logit / mean / chol blocks (FullCovTanhMDN._params slicing:
+    # per-component vector = [logit(1), mean(dim), chol(n_tril)] contiguous)
+    n_mix, dim, n_tril = m.head.base.n_mix, m.head.base.dim, m.head.base.n_tril
+    gw = out_w.reshape(n_mix, 1 + dim + n_tril, -1)
+    logit_g = float(gw[:, 0, :].abs().sum())
+    mean_g = float(gw[:, 1:1 + dim, :].abs().sum())
+    chol_g = float(gw[:, 1 + dim:, :].abs().sum())
+    tr_g = [float(p.grad.abs().sum()) for p in m.head.transforms.parameters() if p.grad is not None]
+    print(f"logit-grad={logit_g:.4e} mean-grad={mean_g:.4e} chol-grad={chol_g:.4e} "
+          f"transport-grad(sum)={sum(tr_g):.4e}")
+    assert logit_g > 0, "mixture-LOGIT gradient is zero -- the v1 blind spot is not fixed"
+    assert mean_g > 0, "no gradient to the component means"
+    assert chol_g > 0, "no gradient to the component chol"
+    assert tr_g and sum(tr_g) > 0, "no gradient to the toroidal transport"
+
+
+def test_baseline_reduces_scorefn_variance():
+    # The learned baseline is a control variate: over M repeated draws at a FIXED context, the variance
+    # of the score-function estimator stopgrad(F - b) * grad log pi(c) must be LOWER with a fitted
+    # baseline b = E[F] (the closed-form least-squares constant per context) than with b = 0.
+    m = _tiny_v10(); m.eval()
+    h, xo, t, s, bound, L = _tf_context(m, seed=21, B=1)
+    h = h.detach()                                          # fix the context
+    beta = 1.0 / T_STAR
+    M = 64
+
+    def draw(k):
+        return _struct_free_energy(m, h, xo, t, s, bound, L, beta, clip_e=25.0, three_body=True,
+                                   gen=torch.Generator().manual_seed(100 + k))
+
+    # closed-form least-squares per-context baseline b_j = mean_k F_k[.,j]  (fit b to mean F first)
+    b_vec = torch.stack([draw(k)[0].detach() for k in range(M)]).mean(0)   # [1,N]
+
+    def scorefn_var(b):
+        grads = []
+        for k in range(M):
+            F, log_pi_c, _ = draw(k)
+            m.zero_grad()
+            ((F.detach() - b) * log_pi_c).sum().backward()
+            grads.append(m.head.base.out.weight.grad.reshape(-1).clone())
+        return float(torch.stack(grads).var(0).mean())
+
+    v0 = scorefn_var(torch.zeros_like(b_vec))
+    vf = scorefn_var(b_vec)
+    print(f"score-fn estimator var: b=0 -> {v0:.4e}, b=E[F] -> {vf:.4e}")
+    assert vf < v0, f"baseline did not reduce score-fn variance: b=E[F] {vf} vs b=0 {v0}"
+
+
+def test_finetune2_smoke(tmp_path):
+    N = 64; L = (N / RHO_STAR) ** (1.0 / 3.0)
+    cfgs = torch.rand(32, N, 3, generator=torch.Generator().manual_seed(9)) * L
+    bank = tmp_path / "bank.pt"
+    torch.save({"cfgs": cfgs}, bank)
+    warm_model = _tiny_v10(seed=3, d_model=16, num_bins=4)
+    warm = tmp_path / "warm.pt"
+    torch.save({"state_dict": warm_model.state_dict(),
+                **{k: getattr(warm_model, k) for k in _MODEL_KEYS}}, warm)
+    # freeze_body_steps=3 exercises BOTH the frozen and the unfrozen path within 5 steps.
+    result = finetune_struct2(steps=5, batch=2, lr=1e-4, lam=0.03, lam_warmup=2, clip_e=25.0,
+                              freeze_body_steps=3, baseline_lr=1e-3, nll_guard=0.40, three_body=True,
+                              val_every=2, warm=str(warm), out=str(tmp_path / "v10s2.pt"), seed=7,
+                              primary_thin=1, val_frac=0.5, art_path=str(bank), extra_banks=[],
+                              device="cpu")
+    for key in ("nll", "struct", "last"):
+        assert os.path.exists(result[key])
+        ck = torch.load(result[key], map_location="cpu", weights_only=False)
+        assert ck["architecture"] == "v10_struct_finetune2_reinforce"
+        assert "shell2" in ck["struct"]
+        assert "baseline_state_dict" in ck                 # auxiliary baseline persisted
     # Density UNTOUCHED by the objective: sample() log q still mirrors log_prob(preordered).
     m = load_generator_v10(result["last"], device="cpu")
     x, lq = m.sample(3, N, L, gen=torch.Generator().manual_seed(1))

@@ -1,7 +1,7 @@
 import math, os, torch
-from liquid_coupling_flow.mw.mw_base import UniformBase
+from liquid_coupling_flow.mw.mw_base import UniformBase, GeneratorBase
 from liquid_coupling_flow.mw.mw_smc import ess, next_lambda, smc_run, mutation_sweeps
-from liquid_coupling_flow.mw.mw_energy import mw_energy
+from liquid_coupling_flow.mw.mw_energy import mw_energy, RHO_STAR
 
 def test_ess_bounds():
     assert abs(ess(torch.zeros(100)) - 100.0) < 1e-6
@@ -96,6 +96,34 @@ def test_g3_smoke(tmp_path):
     assert u["T"] > 0 and math.isfinite(u["evals"]) and math.isfinite(u["logZ"])
     assert os.path.exists(art_path)
     assert os.path.exists(plot_path)
+
+def test_generator_base_interface():
+    # GeneratorBase wraps a v10 model for mw_smc. smc_run has no max_rungs bound and a random-init
+    # model at the hard ambient beta could stall or run long, so this smokes ONLY the base<->smc
+    # contract (the explicitly sanctioned fallback): sample shapes, finite preordered log_q, exactness
+    # on a freshly sampled (canonical) config, and ONE non-const-base mutation sweep (the LOGQ_CONST
+    # =False path -- base.log_q is called per site-move, the whole point of the generator base).
+    from liquid_coupling_flow.mw.mw_generator_v10 import MWV4ToroidalResidual
+    torch.manual_seed(0)
+    N = 64
+    L = (N / RHO_STAR) ** (1.0 / 3.0)
+    model = MWV4ToroidalResidual(d_model=24, n_layers=1, n_heads=2, n_mix=6, rail_k=4,
+                                 num_bins=7).eval()
+    base = GeneratorBase(model, N, L)
+    assert base.LOGQ_CONST is False
+    x = base.sample(16, torch.Generator().manual_seed(1))
+    assert x.shape == (16, N, 3)
+    lq = base.log_q(x)
+    assert lq.shape == (16,) and torch.isfinite(lq).all()
+    # exactness: sample()'s own log q equals log_q(preordered=True) on the freshly (canonically) drawn x
+    xs, logq = model.sample(16, N, L, gen=torch.Generator().manual_seed(2))
+    assert torch.allclose(base.log_q(xs), model.log_prob(xs, L, preordered=True), atol=3e-4)
+    # one mutation sweep through the non-const base must stay finite and report a valid acceptance rate
+    x2, U, lq2, info = mutation_sweeps(x, base, lam=0.5, beta=1.0, L=L, n_sweeps=1, step=0.08,
+                                       gen=torch.Generator().manual_seed(3))
+    assert torch.isfinite(U).all() and torch.isfinite(lq2).all()
+    assert 0.0 <= info["acc"] <= 1.0 and info["evals"] == N * 16
+
 
 def test_g3_protocol_mismatch(tmp_path):
     # protocol purity: a banked unit may only be reused under the IDENTICAL protocol -- a second

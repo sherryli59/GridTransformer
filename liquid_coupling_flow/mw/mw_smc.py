@@ -132,8 +132,14 @@ def smc_run(base, N, L, beta, B=256, ess_target=0.6, n_sweeps=3, step=None, seed
         # (O(1)-per-move errors), not float32 rounding on clash-scale energies — uniform init at
         # ambient density gives U ~ 1e2+ where an absolute 1e-4 sits below fp32 resolution (float64
         # control: drift 7e-13, pure rounding). lq guard stays absolute (log-densities are O(N)).
-        lq_fresh = base.log_q(x[:8])
-        assert float((lq[:8] - lq_fresh).abs().max()) < 1e-3, "carried log_q drifted from fresh re-eval"
+        # lq is re-evaluated on the FULL population, not x[:8]: a NEURAL base (GeneratorBase) is
+        # batch-coupled — CuBLAS picks different GEMM reduction orders per batch size, so a fresh
+        # eval of x[:8] differs from the carried value (produced at full B) by ~2e-4 with a tail
+        # crossing 1e-3 (measured), a spurious trip. At matched batch size the drift is exactly 0.0.
+        # UniformBase is unaffected (log_q constant regardless of batch). U stays [:8] (mw_energy is
+        # batch-independent + cheap).
+        lq_fresh = base.log_q(x)
+        assert float((lq - lq_fresh).abs().max()) < 1e-3, "carried log_q drifted from fresh re-eval"
         U_fresh = mw_energy(x[:8], L)
         assert float((U[:8] - U_fresh).abs().max()) < 1e-4 * max(1.0, float(U_fresh.abs().max())), \
             "carried U drifted from fresh re-eval"

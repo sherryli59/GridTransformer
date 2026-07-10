@@ -10,7 +10,14 @@ def cavity_inside(x: torch.Tensor, center: torch.Tensor, radius: float, L: float
     ``x`` may have any leading shape as long as its last dimension is the
     coordinate dimension.  The strict inequality makes a proposed move onto
     the wall a rejection, which is the usual hard-wall convention.
+
+    ``center`` may be a single shared point ``[D]`` or one point per batch
+    row ``[B, D]``.  When it carries exactly one fewer dim than ``x`` (i.e.
+    a per-row center against a full ``[B, N, D]`` config), the particle axis
+    is inserted so it broadcasts over particles rather than colliding with N.
     """
+    if center.ndim + 1 == x.ndim:
+        center = center.unsqueeze(-2)
     delta = x - center
     delta = delta - L * torch.round(delta / L)
     return delta.square().sum(dim=-1) < radius * radius

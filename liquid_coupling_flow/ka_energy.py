@@ -1,4 +1,4 @@
-"""2D Kob-Andersen binary LJ energy (species-dependent sigma/eps, shifted, min-image)."""
+"""Dimension-generic Kob-Andersen binary LJ energy (shifted, minimum image)."""
 from __future__ import annotations
 import torch
 
@@ -20,7 +20,7 @@ def _matrix(s, table, device, dtype):
 
 
 def ka_energy(x, s, L, per_particle: bool = False):
-    """x: [B,N,2] in [0,L)^2; s: [N] in {0,1}. Returns [B] (or [B,N] if per_particle)."""
+    """x: [B,N,D] in [0,L)^D; s: [N] or [B,N] in {0,1}. Returns [B] (or [B,N] if per_particle)."""
     B, N, d = x.shape
     dtype = x.dtype
     sig = _matrix(s, SIGMA, x.device, dtype)                  # [N,N]

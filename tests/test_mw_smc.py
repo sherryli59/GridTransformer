@@ -67,13 +67,17 @@ def test_final_sweeps_bookkeeping():
 def test_g2_smoke():
     # tiny budgets -> not a PASS/FAIL exactness check (both arms are far too short to converge),
     # just proves g2() runs end-to-end and returns the three non-vacuous metric entries.
-    # n_sweeps=3/final_sweeps=0 keep it fast (the real-gate defaults 10/300 are the controller's).
+    # n_sweeps=3/final_sweeps=0/null_M=20 keep it fast (real-gate defaults are the controller's).
     from liquid_coupling_flow.mw.mw_gates import g2
     out = g2(8, B=64, n_ref_equil=300, n_ref_collect=200, save_tag="_g2smoke",
-             n_sweeps=3, final_sweeps=0)
+             n_sweeps=3, final_sweeps=0, null_M=20)
     for key in ("mean_U_per_N", "tv_U_per_N", "g_r"):
         assert key in out
     assert math.isfinite(out["mean_U_per_N"]["diff"])
     assert math.isfinite(out["mean_U_per_N"]["tol"])
     assert math.isfinite(out["tv_U_per_N"]["tv"])
     assert math.isfinite(out["g_r"]["max_dg"])
+    # null calibration present: all M values of both distributional metrics (full-data rule)
+    assert out["null"]["tv"].shape == (20,) and torch.isfinite(out["null"]["tv"]).all()
+    assert out["null"]["max_dg"].shape == (20,) and torch.isfinite(out["null"]["max_dg"]).all()
+    assert math.isfinite(out["tv_U_per_N"]["null95"]) and math.isfinite(out["g_r"]["null95"])

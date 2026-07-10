@@ -8,10 +8,20 @@ weighted, not as an equal-weight sample):
                never interact -> B chain-means are iid). PASS |diff| < 3*(SE_smc+SE_ref).
   2. P(U/N)  : total variation on bins spanning the UNION of both samples' ranges (shared support
                so a systematic shift can't hide in disjoint binning); SMC histogram weighted by w,
-               reference unweighted. PASS TV < 0.05.
+               reference unweighted. PASS TV <= max(0.05, null_95).
   3. g(r)    : reference g(r) vs g(r) of the SMC population RESAMPLED by weight (multinomial B
                draws ~ w) — g_r itself takes no weights, so the weighting has to happen upstream
-               of it. PASS max|dg| < 0.1 (g_r's default rmax=L/2 already restricts to r < L/2).
+               of it. PASS max|dg| <= max(0.10, null_95) (g_r's default rmax=L/2 restricts r<L/2).
+
+NULL-CALIBRATED TOLERANCES (third G2 iteration, 2026-07-09): the fixed 0.05/0.10 thresholds sit
+BELOW the finite-B noise floor — two iid B=512 populations of the SAME distribution differ by
+TV ~ 0.5*40*sqrt(p(1-p)/512) ~ 0.1 on 40 bins, and the g(r) arm has only ~450 effective configs
+(~14k pairs over 120 bins -> ~0.2-0.3 noise near g~2.5 peaks); a PERFECT sampler cannot pass the
+raw floors at B=512. So the distributional metrics self-calibrate: M times, draw B reference
+configs without replacement, give them the SMC run's ACTUAL logw (randomly permuted), push them
+through the IDENTICAL SMC-side estimator pipeline, compare against the REMAINING reference — the
+null distribution of each metric under "SMC == reference". PASS = observed <= max(floor, null_95).
+The <U>/N gate stays SE-calibrated as before (a matching null line is printed, informational only).
 
 This module is reused by Phase-2/3 re-gates (same g2() at later checkpoints of the base).
 
@@ -63,18 +73,73 @@ def _tv_shared_bins(u_smc, w, u_ref, nbins=40):
     return tv, edges, p_smc, p_ref
 
 
+def _null_calibration(ref_cfgs, u_ref, logw, L, B, M, g_all, seed=0):
+    """Finite-B noise floor of the distributional metrics under the null 'SMC == reference'.
+
+    M times: draw B reference configs uniformly WITHOUT replacement, assign them the SMC run's
+    ACTUAL logw values randomly permuted (so the weight multiset — and hence the ESS the real
+    estimators live with — is reproduced, just decoupled from the samples, which is exactly the
+    null), push them through the IDENTICAL SMC-side estimator pipeline (weighted union-range TV
+    histogram; multinomial weight-resample then g_r), and compare against the REMAINING reference
+    with the same reference-side estimator as the real comparison. Also collects |d mean(U/N)|
+    with the same machinery (informational — the mean gate is already SE-calibrated).
+
+    Remaining-side g(r) needs no fresh full pass: g_r's counts are additive over configs and its
+    ideal-gas norm is LINEAR in n_cfg, so g_remaining = (n_all*g_all - B*g_subset)/(n_all - B)
+    exactly (checked against a direct g_r call at build time, max|d| ~ 1e-6 float rounding)."""
+    n_all = ref_cfgs.shape[0]
+    assert n_all > B, f"null calibration needs n_ref ({n_all}) > B ({B})"
+    gen = torch.Generator().manual_seed(seed)
+    lw = logw.double().cpu()
+    u_ref = u_ref.cpu()
+    g_all64 = g_all.double()
+    tvs, dgs, dmeans = [], [], []
+    for _ in range(M):
+        idx = torch.randperm(n_all, generator=gen)[:B]
+        mask = torch.ones(n_all, dtype=torch.bool)
+        mask[idx] = False
+        u_sub, u_rem = u_ref[idx], u_ref[mask]
+        w_null = torch.softmax(lw[torch.randperm(B, generator=gen)], 0)
+        # TV: same pipeline as the real comparison (weighted vs unweighted, union-range bins)
+        tvs.append(_tv_shared_bins(u_sub, w_null, u_rem)[0])
+        # <U>/N: weighted null-SMC mean vs remaining-ref plain mean (informational)
+        dmeans.append(abs(float((w_null * u_sub.double()).sum()) - float(u_rem.double().mean())))
+        # g(r): weight-resample the subset (the real SMC arm's estimator, duplicates included)
+        sub = ref_cfgs[idx]
+        ridx = torch.multinomial(w_null, B, replacement=True, generator=gen)
+        _, g_sub_re = g_r(sub[ridx], L)
+        _, g_sub = g_r(sub, L)
+        g_rem = (n_all * g_all64 - B * g_sub.double()) / (n_all - B)
+        dgs.append(float((g_sub_re.double() - g_rem).abs().max()))
+    tvs = torch.tensor(tvs, dtype=torch.float64)
+    dgs = torch.tensor(dgs, dtype=torch.float64)
+    dmeans = torch.tensor(dmeans, dtype=torch.float64)
+    return {"M": M, "seed": seed, "tv": tvs, "max_dg": dgs, "dmean": dmeans,
+            "tv_95": float(torch.quantile(tvs, 0.95)),
+            "dg_95": float(torch.quantile(dgs, 0.95)),
+            "dmean_95": float(torch.quantile(dmeans, 0.95))}
+
+
 def g2(N, B=512, n_ref_equil=None, n_ref_collect=None, save_tag="_g2", n_sweeps=10,
-       final_sweeps=300):
+       final_sweeps=300, ess_target=0.9, null_M=200):
     """G2 gate at size N: independent displacement-MC reference vs annealed-SMC final population,
     both at the ambient point (beta=1/T*, L from rho*). Saves full populations (both arms) + all
-    metrics to artifacts/mw_g2_N{N}.pt (repo rule: full data, never summaries-only) and returns
-    that same dict.
+    metrics + the null distributions to artifacts/mw_g2_N{N}.pt (repo rule: full data, never
+    summaries-only) and returns that same dict.
 
-    Mutation budget (the first real N=8 run FAILED all three metrics on mutation-limited depth):
-    the SMC arm's MH step is the REFERENCE's frozen adapted step (spec section 2 — the lam=1-tuned
-    step; letting it default to 0.15 vs the adapted 0.0666 at beta*=10.38 was a real mismatch),
-    n_sweeps=10 per rung, plus a final_sweeps=300 lam=1 finisher (pi_1-invariant, weight path
-    untouched -> exactness preserved).
+    Distributional tolerances are NULL-CALIBRATED (see module docstring): TV and max|dg| pass at
+    observed <= max(floor, null_95) where the null replays the exact estimator pipeline on null_M
+    weight-matched reference subsamples — the fixed floors (0.05/0.10) alone sit below the
+    finite-B noise at B=512, so a perfect sampler could not pass them.
+
+    Mutation budget (the first two real N=8 runs FAILED all three metrics on mutation-limited
+    depth): the SMC arm's MH step is the REFERENCE's frozen adapted step (spec section 2 — the
+    lam=1-tuned step; the 0.15 default vs adapted 0.0666 at beta*=10.38 was a real mismatch), and
+    — the load-bearing fix, measured 2026-07-09 — a SLOW ladder: ess_target=0.9. At the old 0.6,
+    per-rung target shifts outran 10 sweeps of mutation and the population lagged uniformly
+    shallow with ESS blind to it (-1.75 vs ref -1.8631); at 0.9 the ladder tracks with NO finisher
+    (N=8: -1.8662, gap 3e-3, 68 rungs/23s vs plain-MC ~10k sweeps). final_sweeps=300 lam=1
+    finisher kept as margin (pi_1-invariant, weight path untouched -> exactness preserved).
 
     Reference cache: if the CANONICAL artifact mw_g2_N{N}.pt exists and its saved ref budgets
     exactly match the requested ones, its ref dict is reused instead of re-running mc_run (the
@@ -111,12 +176,13 @@ def g2(N, B=512, n_ref_equil=None, n_ref_collect=None, save_tag="_g2", n_sweeps=
         ref = mc_run(N, L, beta, n_ref_equil, n_ref_collect, every=4, seed=0, B=REF_B)
 
     print(f"G2 N={N}: smc step = ref frozen adapted step {ref['step']:.4f}", flush=True)
-    out = smc_run(UniformBase(N, L), N, L, beta, B=B, n_sweeps=n_sweeps, step=ref["step"],
-                  seed=0, save_tag=save_tag, final_sweeps=final_sweeps)
+    out = smc_run(UniformBase(N, L), N, L, beta, B=B, ess_target=ess_target, n_sweeps=n_sweeps,
+                  step=ref["step"], seed=0, save_tag=save_tag, final_sweeps=final_sweeps)
 
     w = torch.softmax(out["logw"].double(), 0)      # double precision softmax (ess()'s reasoning)
 
-    # --- 1: <U>/N ---
+    # --- observed metrics ---
+    # 1: <U>/N (SE-calibrated gate, unchanged)
     u_smc = out["U"] / N
     u_ref = ref["U"] / N
     mean_smc = float((w * u_smc.double()).sum())
@@ -127,23 +193,34 @@ def g2(N, B=512, n_ref_equil=None, n_ref_collect=None, save_tag="_g2", n_sweeps=
     diff1 = abs(mean_smc - mean_ref)
     tol1 = 3.0 * (se_smc + se_ref)
     pass1 = diff1 < tol1
-    print(f"G2 N={N} <U>/N: SMC {mean_smc:.4f}+/-{se_smc:.4f} vs ref {mean_ref:.4f}+/-{se_ref:.4f} "
-          f"| |diff| {diff1:.4f} < tol {tol1:.4f} -> {'PASS' if pass1 else 'FAIL'}", flush=True)
 
-    # --- 2: P(U/N) TV ---
+    # 2: P(U/N) TV
     tv, edges, p_smc, p_ref = _tv_shared_bins(u_smc, w, u_ref, nbins=40)
-    pass2 = tv < 0.05
-    print(f"G2 N={N} P(U/N) TV: {tv:.4f} < 0.05 -> {'PASS' if pass2 else 'FAIL'}", flush=True)
 
-    # --- 3: g(r) ---
+    # 3: g(r)
     gen = torch.Generator(device=out["x"].device).manual_seed(0)
     idx = torch.multinomial(w.to(torch.float64), out["x"].shape[0], replacement=True, generator=gen)
     x_resampled = out["x"][idx]
     r_ref, g_ref_arr = g_r(ref["cfgs"], L)
     r_smc, g_smc_arr = g_r(x_resampled.cpu(), L)
     max_dg = float((g_smc_arr - g_ref_arr).abs().max())
-    pass3 = max_dg < 0.1
-    print(f"G2 N={N} g(r): max|dg| {max_dg:.4f} < 0.10 -> {'PASS' if pass3 else 'FAIL'}", flush=True)
+
+    # --- null calibration of the distributional metrics (finite-B noise floor) ---
+    null = _null_calibration(ref["cfgs"], u_ref, out["logw"], L, B, null_M, g_ref_arr, seed=0)
+    tol2 = max(0.05, null["tv_95"])
+    pass2 = tv <= tol2
+    tol3 = max(0.10, null["dg_95"])
+    pass3 = max_dg <= tol3
+
+    # --- verdicts ---
+    print(f"G2 N={N} <U>/N: SMC {mean_smc:.4f}+/-{se_smc:.4f} vs ref {mean_ref:.4f}+/-{se_ref:.4f} "
+          f"| |diff| {diff1:.4f} < tol {tol1:.4f} -> {'PASS' if pass1 else 'FAIL'}", flush=True)
+    print(f"G2 N={N} <U>/N null check (informational): |diff| {diff1:.4f} vs null95 "
+          f"{null['dmean_95']:.4f}", flush=True)
+    print(f"G2 N={N} P(U/N) TV: {tv:.4f} vs null95 {null['tv_95']:.4f} (floor 0.05) -> "
+          f"{'PASS' if pass2 else 'FAIL'}", flush=True)
+    print(f"G2 N={N} g(r): max|dg| {max_dg:.4f} vs null95 {null['dg_95']:.4f} (floor 0.10) -> "
+          f"{'PASS' if pass3 else 'FAIL'}", flush=True)
 
     overall = pass1 and pass2 and pass3
     print(f"G2 N={N} OVERALL -> {'PASS' if overall else 'FAIL'}", flush=True)
@@ -155,12 +232,16 @@ def g2(N, B=512, n_ref_equil=None, n_ref_collect=None, save_tag="_g2", n_sweeps=
                 "flat_budget": ref["flat_budget"], "coll_drift": ref["coll_drift"], "traj": ref["traj"]},
         "smc": {"x": out["x"], "U": out["U"], "logw": out["logw"], "logZ": out["logZ"],
                 "history": out["history"], "evals": out["evals"], "wall": out["wall"],
-                "B": B, "n_sweeps": n_sweeps, "final_sweeps": final_sweeps, "step": ref["step"]},
+                "B": B, "n_sweeps": n_sweeps, "final_sweeps": final_sweeps, "step": ref["step"],
+                "ess_target": ess_target},
         "mean_U_per_N": {"smc": mean_smc, "se_smc": se_smc, "ref": mean_ref, "se_ref": se_ref,
-                          "diff": diff1, "tol": tol1, "pass": pass1},
+                          "diff": diff1, "tol": tol1, "pass": pass1,
+                          "null95": null["dmean_95"]},        # informational, not the gate
         "tv_U_per_N": {"tv": tv, "nbins": 40, "edges": edges, "p_smc": p_smc, "p_ref": p_ref,
-                        "pass": pass2},
-        "g_r": {"r": r_ref, "g_ref": g_ref_arr, "g_smc": g_smc_arr, "max_dg": max_dg, "pass": pass3},
+                        "null95": null["tv_95"], "tol": tol2, "pass": pass2},
+        "g_r": {"r": r_ref, "g_ref": g_ref_arr, "g_smc": g_smc_arr, "max_dg": max_dg,
+                "null95": null["dg_95"], "tol": tol3, "pass": pass3},
+        "null": null,                                          # all M values, both metrics + dmean
         "overall_pass": overall,
     }
     os.makedirs(ART, exist_ok=True)

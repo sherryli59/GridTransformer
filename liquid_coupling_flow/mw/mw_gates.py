@@ -121,7 +121,7 @@ def _null_calibration(ref_cfgs, u_ref, logw, L, B, M, g_all, seed=0):
 
 
 def g2(N, B=512, n_ref_equil=None, n_ref_collect=None, save_tag="_g2", n_sweeps=10,
-       final_sweeps=300, ess_target=0.9, null_M=200):
+       final_sweeps=0, ess_target=0.95, null_M=200, seed=0):
     """G2 gate at size N: independent displacement-MC reference vs annealed-SMC final population,
     both at the ambient point (beta=1/T*, L from rho*). Saves full populations (both arms) + all
     metrics + the null distributions to artifacts/mw_g2_N{N}.pt (repo rule: full data, never
@@ -156,7 +156,8 @@ def g2(N, B=512, n_ref_equil=None, n_ref_collect=None, save_tag="_g2", n_sweeps=
     L = (N / RHO_STAR) ** (1.0 / 3.0)
 
     print(f"G2 N={N}: L={L:.4f} beta={beta:.4f} ref(equil={n_ref_equil},collect={n_ref_collect},"
-          f"every=4,B={REF_B}) smc(B={B},n_sweeps={n_sweeps},final_sweeps={final_sweeps})",
+          f"every=4,B={REF_B}) smc(B={B},n_sweeps={n_sweeps},final_sweeps={final_sweeps},"
+          f"ess_target={ess_target},seed={seed})",
           flush=True)
 
     # reference cache: exact budget match against the CANONICAL artifact only (keep it simple);
@@ -177,7 +178,8 @@ def g2(N, B=512, n_ref_equil=None, n_ref_collect=None, save_tag="_g2", n_sweeps=
 
     print(f"G2 N={N}: smc step = ref frozen adapted step {ref['step']:.4f}", flush=True)
     out = smc_run(UniformBase(N, L), N, L, beta, B=B, ess_target=ess_target, n_sweeps=n_sweeps,
-                  step=ref["step"], seed=0, save_tag=save_tag, final_sweeps=final_sweeps)
+                  step=ref["step"], seed=seed, save_tag=f"{save_tag}_s{seed}",
+                  final_sweeps=final_sweeps)
 
     w = torch.softmax(out["logw"].double(), 0)      # double precision softmax (ess()'s reasoning)
 
@@ -249,7 +251,8 @@ def g2(N, B=512, n_ref_equil=None, n_ref_collect=None, save_tag="_g2", n_sweeps=
     # test's "_g2smoke") gets folded in so a fast/tiny run can never silently clobber a real,
     # hours-long gate result at the same N.
     tag_suffix = "" if save_tag == "_g2" else save_tag
-    path = os.path.join(ART, f"mw_g2{tag_suffix}_N{N}.pt")
+    seed_suffix = "" if seed == 0 else f"_s{seed}"      # seed 0 = canonical (the ref-cache path)
+    path = os.path.join(ART, f"mw_g2{tag_suffix}{seed_suffix}_N{N}.pt")
     torch.save(result, path)
     print(f"G2 N={N}: saved -> {path}", flush=True)
     return result

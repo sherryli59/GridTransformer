@@ -284,7 +284,13 @@ def g3(Ns=(27, 64, 125, 216), B=256, seeds=(0, 1), ess_target=0.95, n_sweeps=10,
     Per-unit checkpointing + resume: after EVERY (N, seed) unit the running results dict is
     torch.save'd to art_path (default artifacts/mw_g3.pt); on startup, units already present in
     that file are loaded and skipped (printed "SKIP (banked)"), so a killed/resumed campaign never
-    redoes finished (N, seed) pairs -- same discipline as ka_finite_size.run_unit.
+    redoes finished (N, seed) pairs -- same discipline as ka_finite_size.run_unit. PROTOCOL
+    PURITY: every unit stores its {ess_target, n_sweeps, step, B}, and at load time EVERY banked
+    unit's stored protocol is checked against the current call's (all units, not just the current
+    grid -- the fit is over all units) -- any mismatch (including a pre-protocol-tag legacy
+    artifact, whose units read as protocol None) raises ValueError with both protocols in the
+    message. This harness produces THE baseline fit, so heterogeneous-protocol T values must
+    never be spliced into one fit silently.
 
     After all units (banked + freshly run) a least-squares fit T = c*N THROUGH THE ORIGIN is
     computed (c = sum(N*T)/sum(N*N)); R^2 uses the uncentered total sum-of-squares sum(T^2), the
@@ -310,11 +316,23 @@ def g3(Ns=(27, 64, 125, 216), B=256, seeds=(0, 1), ess_target=0.95, n_sweeps=10,
         step = float(torch.load(step_src, map_location="cpu", weights_only=False)["ref"]["step"])
         print(f"G3: step={step:.4f} loaded from {step_src} (N=64 frozen adapted step)", flush=True)
 
+    protocol = {"ess_target": ess_target, "n_sweeps": n_sweeps, "step": step, "B": B}
     units = {}
     if os.path.exists(art_path):
         prev = torch.load(art_path, map_location="cpu", weights_only=False)
         units = prev.get("units", {})
+        # protocol-purity gate on EVERY banked unit (not just the ones in the current Ns x seeds
+        # grid -- the final fit is over ALL units, so a stale off-grid unit would splice in too)
+        for key, u in units.items():
+            banked = {k: u.get(k) for k in protocol}
+            if banked != protocol:
+                raise ValueError(
+                    f"g3: banked unit {key} in {art_path} was run under a DIFFERENT protocol -- "
+                    f"banked {banked} vs current {protocol}. Mixing protocols in one fit would "
+                    f"corrupt the T_trivial(N) baseline; use a fresh art_path (or delete the "
+                    f"stale artifact) instead.")
 
+    os.makedirs(os.path.dirname(art_path) or ".", exist_ok=True)
     beta = 1.0 / T_STAR
     for N in Ns:
         L = (N / RHO_STAR) ** (1.0 / 3.0)
@@ -331,11 +349,10 @@ def g3(Ns=(27, 64, 125, 216), B=256, seeds=(0, 1), ess_target=0.95, n_sweeps=10,
             w = torch.softmax(out["logw"].double(), 0)
             um = float((w * (out["U"] / N).double()).sum())
             unit = {"N": N, "seed": seed, "L": L, "T": T, "evals": out["evals"],
-                    "logZ": out["logZ"], "U_per_N": um, "wall": out["wall"]}
+                    "logZ": out["logZ"], "U_per_N": um, "wall": out["wall"], **protocol}
             units[key] = unit
             print(f"G3 N={N} s={seed}: T={T} evals={out['evals']} U/N={um:.4f} "
                   f"wall={out['wall']:.0f}s", flush=True)
-            os.makedirs(os.path.dirname(art_path), exist_ok=True)
             torch.save({"units": units, "Ns": Ns, "B": B, "seeds": seeds,
                         "ess_target": ess_target, "n_sweeps": n_sweeps, "step": step}, art_path)
 
@@ -357,7 +374,6 @@ def g3(Ns=(27, 64, 125, 216), B=256, seeds=(0, 1), ess_target=0.95, n_sweeps=10,
 
     result = {"units": units, "Ns": Ns, "B": B, "seeds": seeds, "ess_target": ess_target,
               "n_sweeps": n_sweeps, "step": step, "fit": {"c": c, "r2": r2}}
-    os.makedirs(os.path.dirname(art_path), exist_ok=True)
     torch.save(result, art_path)
     print(f"G3: saved -> {art_path}", flush=True)
 

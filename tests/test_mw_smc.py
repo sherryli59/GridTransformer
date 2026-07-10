@@ -96,3 +96,18 @@ def test_g3_smoke(tmp_path):
     assert u["T"] > 0 and math.isfinite(u["evals"]) and math.isfinite(u["logZ"])
     assert os.path.exists(art_path)
     assert os.path.exists(plot_path)
+
+def test_g3_protocol_mismatch(tmp_path):
+    # protocol purity: a banked unit may only be reused under the IDENTICAL protocol -- a second
+    # call against the same art_path with a different ess_target must raise loudly (ValueError),
+    # never silently splice heterogeneous-protocol T values into the baseline fit. B=32 keeps the
+    # single real unit cheap; the second call must fail BEFORE running any SMC.
+    import pytest
+    from liquid_coupling_flow.mw.mw_gates import g3
+    art_path = str(tmp_path / "mw_g3_pp.pt")
+    plot_path = str(tmp_path / "mw_g3_pp.png")
+    g3(Ns=(8,), seeds=(0,), B=32, ess_target=0.8, step=0.0666,
+       art_path=art_path, plot_path=plot_path)
+    with pytest.raises(ValueError, match="DIFFERENT protocol"):
+        g3(Ns=(8,), seeds=(0,), B=32, ess_target=0.9, step=0.0666,
+           art_path=art_path, plot_path=plot_path)

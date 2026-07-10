@@ -122,37 +122,48 @@ def cavity_move(x, s, U, mobile, center, R, L, beta, lam, step):
 
 
 def replica_exchange(x, s, mobile, center, R, L, betas, lams):
-    """One sweep of adjacent-pair replica exchange over a shrinkage/temperature ladder of `n_rep`
-    replicas sharing one cavity (`center`, `R`). For every adjacent pair (a, a+1) the exact log
+    """One even/odd-parity sweep of adjacent-replica exchange over a shrinkage/temperature ladder of
+    `n_rep` replicas sharing ONE cavity (`center`, `R`). For an adjacent pair (a, a+1) the exact log
     Metropolis ratio for swapping the two replicas' full configs (positions AND species) is:
 
         log A = -beta_a*[H_a(x_b) - H_a(x_a)] - beta_b*[H_b(x_a) - H_b(x_b)]
 
-    where H_r(cfg) = 0.5*shrink_particle_energy(cfg_x, cfg_s, L, lam_r, mobile_r).sum(1) — the
-    Hamiltonian (lam, mobile) stays with the replica slot `r`; the swapped quantity is the config
-    (x together with its species s). `log_acc` is computed once, deterministically, from the configs
-    passed in — independent of the random accept coin, which is drawn separately per pair so the
-    returned ratio is directly testable. All pairwise ratios are computed from the ORIGINAL input
-    configs before any swap is applied (so `log_acc` never depends on another pair's accept coin);
-    swaps are then applied sequentially in ascending pair order. Species channel only moves here as
-    part of a whole-config swap (no A/B identity exchange). `center`/`R` are accepted for interface
-    symmetry with the shared cavity the ladder lives in, but the swap ratio depends only on `mobile`
-    (already encodes the pinned/mobile partition) — this function does not itself enforce the hard
-    wall (that is `cavity_move`'s job on each site update); it is valid to call on any pair of configs.
-    Returns (x, s, log_acc[n_rep-1])."""
+    where H_r(cfg) = 0.5*shrink_particle_energy(cfg_x, cfg_s, L, lam_r, mobile).sum(1) — the
+    Hamiltonian (lam) stays with the replica slot `r`; the swapped quantity is the config (x together
+    with its species s). Species only moves here as part of a whole-config swap (no A/B identity swap).
+
+    Sweep order is the standard PT even/odd parity: parity 0 does the non-overlapping pairs
+    (0,1),(2,3),... then parity 1 does (1,2),(3,4),.... Within a parity the pairs share no slot, so
+    each pair's `log_acc[rung]` is computed from — and its accepted swap applied to — the CURRENT x/s
+    state with no interference; between parities the state legitimately evolves and the next parity's
+    ratios are computed against that evolved state. This is what preserves detailed balance for
+    n_rep>=3: an accepted swap is always scored by the exact two configs it exchanges (an ascending
+    pre-snapshot sweep would score the (1,2) swap with the stale pre-swap slot-1 config that a prior
+    (0,1) swap already moved out). For n_rep=2 this reduces to the single pair (0,1). The accept coin
+    is drawn per pair separately from `log_acc[rung]`, which is returned (indexed per pair `rung`) so
+    the deterministic weight ratio stays testable.
+
+    `mobile` is the shared pinned/mobile partition of the one cavity; every replica must carry the
+    SAME mask (asserted — a caller passing differing per-replica masks errors loudly rather than
+    silently computing an unvalidated ratio). `center`/`R` are accepted for interface symmetry but the
+    ratio depends only on `mobile`; this function does not itself enforce the hard wall (that is
+    `cavity_move`'s job on each site update). Returns (x, s, log_acc[n_rep-1])."""
     n_rep = x.shape[0]
+    for rung in range(n_rep - 1):
+        if not torch.equal(mobile[rung], mobile[rung + 1]):
+            raise ValueError("replica_exchange requires one shared cavity: every replica must carry the "
+                             f"same mobile mask, but replicas {rung} and {rung + 1} differ")
     log_acc = x.new_zeros(n_rep - 1)
-    for a in range(n_rep - 1):
-        b = a + 1
-        lam_a, lam_b = float(lams[a]), float(lams[b])
-        Ha_xa = 0.5 * shrink_particle_energy(x[a:a + 1], s[a:a + 1], L, lam_a, mobile[a:a + 1]).sum(1)
-        Ha_xb = 0.5 * shrink_particle_energy(x[b:b + 1], s[b:b + 1], L, lam_a, mobile[a:a + 1]).sum(1)
-        Hb_xb = 0.5 * shrink_particle_energy(x[b:b + 1], s[b:b + 1], L, lam_b, mobile[b:b + 1]).sum(1)
-        Hb_xa = 0.5 * shrink_particle_energy(x[a:a + 1], s[a:a + 1], L, lam_b, mobile[b:b + 1]).sum(1)
-        log_acc[a] = -(betas[a] * (Ha_xb - Ha_xa) + betas[b] * (Hb_xa - Hb_xb))
-    for a in range(n_rep - 1):
-        b = a + 1
-        if torch.log(torch.rand((), device=x.device, dtype=x.dtype)) < log_acc[a]:
-            x[a], x[b] = x[b].clone(), x[a].clone()
-            s[a], s[b] = s[b].clone(), s[a].clone()
+    for parity in (0, 1):
+        for rung in range(parity, n_rep - 1, 2):
+            a, b = rung, rung + 1
+            lam_a, lam_b = float(lams[a]), float(lams[b])
+            Ha_xa = 0.5 * shrink_particle_energy(x[a:a + 1], s[a:a + 1], L, lam_a, mobile[a:a + 1]).sum(1)
+            Ha_xb = 0.5 * shrink_particle_energy(x[b:b + 1], s[b:b + 1], L, lam_a, mobile[a:a + 1]).sum(1)
+            Hb_xb = 0.5 * shrink_particle_energy(x[b:b + 1], s[b:b + 1], L, lam_b, mobile[b:b + 1]).sum(1)
+            Hb_xa = 0.5 * shrink_particle_energy(x[a:a + 1], s[a:a + 1], L, lam_b, mobile[b:b + 1]).sum(1)
+            log_acc[rung] = -(betas[a] * (Ha_xb - Ha_xa) + betas[b] * (Hb_xa - Hb_xb))
+            if torch.log(torch.rand((), device=x.device, dtype=x.dtype)) < log_acc[rung]:
+                x[a], x[b] = x[b].clone(), x[a].clone()
+                s[a], s[b] = s[b].clone(), s[a].clone()
     return x, s, log_acc

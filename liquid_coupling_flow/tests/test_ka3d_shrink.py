@@ -1,4 +1,7 @@
 import math
+import unittest.mock
+
+import pytest
 import torch
 from liquid_coupling_flow.ka3d_shrink import lambda_tilde, shrink_particle_energy, shrink_pair_row, cavity_move, replica_exchange
 from liquid_coupling_flow.ka_pmc_3d import particle_energies
@@ -99,3 +102,43 @@ def test_replica_exchange_weight_ratio_explicit():
     _,_,la=replica_exchange(x.clone(), s.clone(), mob, center, R, L, betas, lams)
     assert abs(float(la[0]) - logA) < 1e-4
     assert abs(acc_prob(float(la[0])) - expected) < 1e-4
+
+
+def test_replica_exchange_n3_parity_no_corruption():
+    # n_rep=3, every swap force-accepted (coin=0 -> log 0 = -inf < any finite log_acc). The even/odd
+    # parity sweep must (a) leave the configs a VALID permutation of the originals (each present
+    # exactly once) and (b) score the parity-1 pair (1,2) with the configs ACTUALLY occupying those
+    # slots when it runs -- i.e. after parity-0 swapped rung 0, slot 1 holds original config 0, not
+    # config 1. An ascending pre-snapshot sweep would return log_acc[1] computed for config 1 (stale),
+    # so assertion (b) is exactly what distinguishes the parity fix from the buggy scheme.
+    torch.manual_seed(7); N=24; L=(N/1.2)**(1/3); center=torch.tensor([L/2]*3, dtype=torch.double); R=1.6
+    x=(torch.rand(3,N,3)*L).double(); s=torch.tensor([[0]*19+[1]*5]*3); mob=torch.ones(3,N,dtype=torch.bool)
+    betas=torch.tensor([2.0,1.5,1.0], dtype=torch.double); lams=torch.tensor([1.0,0.9,0.8], dtype=torch.double)
+    x0=x.clone(); s0=s.clone()
+    def H(cfg_x, lam): return float(0.5*shrink_particle_energy(cfg_x[None],s0[:1],L,float(lam),mob[:1]).sum(1))
+    with unittest.mock.patch("torch.rand", return_value=torch.zeros((), dtype=torch.double)):
+        xo,so,la=replica_exchange(x.clone(), s.clone(), mob, center, R, L, betas, lams)
+    assert tuple(la.shape)==(2,)
+    # (a) valid permutation: each output config equals exactly one distinct original config
+    matched=set()
+    for i in range(3):
+        hits=[j for j in range(3) if torch.equal(xo[i],x0[j]) and torch.equal(so[i],s0[j])]
+        assert len(hits)==1, f"output replica {i} matches {len(hits)} originals (corruption)"
+        matched.add(hits[0])
+    assert matched=={0,1,2}
+    # (b) detailed-balance consistency: parity-1 pair (1,2) is scored AFTER parity-0's rung-0 swap,
+    # so slot 1 = original config 0, slot 2 = original config 2 (betas/lams indices 1,2).
+    Ha_xa=H(x0[0],0.9); Ha_xb=H(x0[2],0.9); Hb_xb=H(x0[2],0.8); Hb_xa=H(x0[0],0.8)
+    logA1=-(1.5*(Ha_xb-Ha_xa)) - (1.0*(Hb_xa-Hb_xb))
+    assert abs(float(la[1]) - logA1) < 1e-4
+
+
+def test_replica_exchange_requires_shared_mobile_mask():
+    # One shared cavity => identical mobile mask on every replica; differing per-replica masks must
+    # error loudly rather than silently compute an unvalidated ratio.
+    torch.manual_seed(5); N=24; L=(N/1.2)**(1/3); center=torch.tensor([L/2]*3, dtype=torch.double); R=1.6
+    x=(torch.rand(2,N,3)*L).double(); s=torch.tensor([[0]*19+[1]*5]*2)
+    mob=torch.ones(2,N,dtype=torch.bool); mob[1,0]=False                  # replica 1 differs by one site
+    betas=torch.tensor([2.0,1.3], dtype=torch.double); lams=torch.tensor([1.0,0.8], dtype=torch.double)
+    with pytest.raises(ValueError):
+        replica_exchange(x, s, mob, center, R, L, betas, lams)

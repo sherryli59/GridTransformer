@@ -49,3 +49,15 @@ def test_smc_runs_and_saves(tmp_path):
     # float per the contract and torch.isfinite requires a Tensor — math.isfinite is the right check.
     assert out["history"][-1]["lam"] == 1.0 and math.isfinite(out["logZ"])
     assert out["evals"] > 0
+
+def test_g2_smoke():
+    # tiny budgets -> not a PASS/FAIL exactness check (both arms are far too short to converge),
+    # just proves g2() runs end-to-end and returns the three non-vacuous metric entries.
+    from liquid_coupling_flow.mw.mw_gates import g2
+    out = g2(8, B=64, n_ref_equil=300, n_ref_collect=200, save_tag="_g2smoke")
+    for key in ("mean_U_per_N", "tv_U_per_N", "g_r"):
+        assert key in out
+    assert math.isfinite(out["mean_U_per_N"]["diff"])
+    assert math.isfinite(out["mean_U_per_N"]["tol"])
+    assert math.isfinite(out["tv_U_per_N"]["tv"])
+    assert math.isfinite(out["g_r"]["max_dg"])

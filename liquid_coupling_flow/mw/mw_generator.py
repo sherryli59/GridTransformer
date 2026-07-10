@@ -45,7 +45,9 @@ def canonical_order(x, L, R, rank):
     configuration only (independent of storage order and of RNG).
 
     Args:
-        x: [B,N,3] positions in [0, L).
+        x: [B,N,3] positions, REQUIRED in [0, L) (wrap upstream; asserted —
+            .long() truncates toward zero, so e.g. x = -1e-7 would silently
+            misclassify into cell 0, and this function defines q0).
         L: box length.
         R: grid side length (from mw_scaffold).
         rank: [R,R,R] int64 curve rank per cell (from mw_scaffold).
@@ -53,6 +55,7 @@ def canonical_order(x, L, R, rank):
     Returns:
         perm: [B,N] int64, perm[b] is a permutation of range(N).
     """
+    assert bool((x >= 0).all() and (x < L).all()), "canonical_order requires x in [0,L) (wrap upstream)"
     B, N, _ = x.shape
     w = L / R
     cell = (x / w).long().clamp(0, R - 1)
@@ -69,6 +72,8 @@ def build_frames(nbr_rel, n_valid, col_tol=0.99):
     Args:
         nbr_rel: [.,k,3] displacement vectors sorted nearest-first (rows
             beyond n_valid are arbitrary/invalid, including all-zero).
+            Nominally-valid rows with zero norm (<= 1e-9) are also treated
+            as invalid — they fall through to the same fallback hierarchy.
         n_valid: [.] int count of valid rows per batch element.
         col_tol: |cos| threshold above which a candidate second vector is
             treated as collinear with e1 and rejected.
@@ -89,11 +94,15 @@ def build_frames(nbr_rel, n_valid, col_tol=0.99):
     """
     B, k, _ = nbr_rel.shape
     d1 = nbr_rel[:, 0]
-    e1 = F.normalize(torch.where((n_valid >= 1)[:, None], d1,
+    # Degenerate-"valid" guard: an exactly-zero row passes F.normalize silently as
+    # [0,0,0] (and its cos vs e1 is 0 <= col_tol, so the ok-mask would even SELECT
+    # it as d2) -> treat zero-norm rows as invalid in both the e1 and d2 paths.
+    nz = nbr_rel.norm(dim=-1) > 1e-9                                          # [B,k]
+    e1 = F.normalize(torch.where(((n_valid >= 1) & nz[:, 0])[:, None], d1,
          torch.tensor([1., 0., 0.], device=d1.device).expand_as(d1)), dim=-1)
-    # second vector: first neighbor with |cos| <= col_tol among indices 1..k-1, else axis fallback
+    # second vector: first nonzero neighbor with |cos| <= col_tol among indices 1..k-1, else axis fallback
     cos = torch.einsum("bkd,bd->bk", F.normalize(nbr_rel, dim=-1), e1).abs()
-    ok = (cos <= col_tol) & (torch.arange(k, device=d1.device)[None] < n_valid[:, None]) \
+    ok = (cos <= col_tol) & nz & (torch.arange(k, device=d1.device)[None] < n_valid[:, None]) \
          & (torch.arange(k, device=d1.device)[None] >= 1)
     idx2 = torch.where(ok.any(1), ok.float().argmax(1), torch.zeros_like(n_valid))
     d2 = torch.gather(nbr_rel, 1, idx2[:, None, None].expand(-1, 1, 3)).squeeze(1)

@@ -92,22 +92,31 @@ def _model():
     from liquid_coupling_flow.mw.mw_generator import MWGenerator
     return MWGenerator(knn=6, d_model=32, n_layers=1, n_heads=2)
 
-def test_sample_logprob_consistency():
-    # Whole-config exactness needs canonical_order(sampled) == arange(N): every particle must land back
-    # inside the cell targeted by its own generation step, so log_prob's slot-indexed anchor t[slot]
-    # recovers the SAME anchor sample() used for that particle (log_prob has no other way to know which
-    # anchor a given physical particle was generated against -- it re-derives order from geometry alone).
-    # At identity-init the per-step offset is u~N(0,1) (spline==identity exactly, verified: head.log_prob
-    # is bit-identical for any h, since all Linear weights are zero -- see Spline3Head._identity_init), so
-    # a step's physical offset has std = s = HALF a cell width. P(a particle stays inside its own cell) =
-    # P(|N(0,1)|<1)^3 ~ 0.32, so P(all N stay) ~ 0.32^N: astronomically small at N=64 (never observed in
-    # 8 trials, confirmed empirically), but a real, checkable event at small N with a wide-enough batch.
-    # We therefore test at N=8, drop to a subset that IS canonical (found empirically: ~2/256 at this
-    # seed), and require the subset be non-empty -- this instantiates verbatim the brief's own prescribed
-    # debugging procedure ("check canonical_order(sampled)==arange first ... compare on canonical ones").
-    # Verified (scratch diagnostic, see task-9-report.md): on the canonical subset the two sides agree to
-    # 1.9e-6 (three orders of magnitude inside the 1e-3 gate); on non-canonical entries the gap reaches
-    # ~20 nats/config, entirely attributable to the anchor mismatch above, not a bug in the formula.
+def test_sample_logprob_consistency_preordered():
+    # THE exactness gate for the SMC-base role: a sample's true density is the AR density in GENERATION
+    # order, and sample() returns x with storage slot j == generation step j. preordered=True scores
+    # exactly that factorization (slot j = step j, anchor t_j, causal prefix = slots < j), so it must
+    # match the accumulated sample logq for EVERY config -- no canonical-subset gating. (Canonical-lift
+    # evaluation of samples mis-states their density on noncanonical configs; see the renamed diagnostic
+    # test below.) Only wrapping is a legitimate out: an |off| component > L/2 makes wrap_pm(x_j - t_j)
+    # differ from the generated offset -- a separate, counted effect, hence the nwrap==0 gate.
+    m = _model(); L = 5.198
+    g = torch.Generator().manual_seed(0)
+    x, lq_s, nwrap = m.sample(8, 64, L, gen=g)
+    lq_e = m.log_prob(x, L, preordered=True)
+    if nwrap == 0:
+        assert torch.allclose(lq_s, lq_e, atol=1e-3), float((lq_s - lq_e).abs().max())
+
+def test_logprob_canonical_mode_on_canonical_configs():
+    # DIAGNOSTIC (not the exactness gate -- that is the preordered test above): canonical-mode log_prob
+    # agrees with sample logq only where canonical_order(sampled) == arange(N), i.e. every particle
+    # landed back inside the cell targeted by its own generation step so the slot-indexed anchor t[slot]
+    # recovers the anchor sample() used. At identity-init the per-step offset is u~N(0,1) (spline ==
+    # identity exactly; head.log_prob is bit-identical for any h since all Linear weights are zero), so
+    # a step's physical offset has std = s = HALF a cell width and P(all N particles stay in their own
+    # cells) ~ 0.32^N: astronomically small at N=64, a real checkable event at N=8 with a wide batch
+    # (~2/256 canonical at this seed). On that subset the agreement is ~1.9e-6; on noncanonical entries
+    # the gap reaches ~20 nats/config -- which is exactly why the SMC-base role must use preordered=True.
     from liquid_coupling_flow.mw.mw_generator import mw_scaffold, canonical_order
     m = _model(); L, N, B = 5.198, 8, 256
     g = torch.Generator().manual_seed(0)

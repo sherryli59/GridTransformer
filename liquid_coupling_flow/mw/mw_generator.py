@@ -22,6 +22,19 @@ Part 2 (this file, Task 9): the model —
       encodings of r) so the model carries no curve-specific or absolute-
       position information -- the size-transfer invariant this campaign
       needs (see MEMORY.md "curve-conditioning-blocks-transfer").
+
+Ordering modes (which q0 lives where):
+    - SMC base / importance weights: `log_prob(x, L, preordered=True)` scores
+      x in its GIVEN storage order (slot j = AR step j, anchor t_j, causal
+      prefix = slots < j). A sample's true density is the AR density in
+      generation order, and `sample()` returns slot j == step j, so this is
+      the exact density of `sample()`'s own output; canonical-lifting a
+      sampled config CHANGES the value whenever the config is noncanonical
+      (a particle strayed from its generation-step cell), which would bias
+      importance weights.
+    - Training / scoring reference configs: `log_prob(x, L)` (default,
+      preordered=False) canonicalizes first -- the deterministic
+      `canonical_order` factorization of unordered data.
 """
 from __future__ import annotations
 import math
@@ -230,14 +243,26 @@ class MWGenerator(nn.Module):
     # log_prob: one teacher-forced vectorized pass
     # ------------------------------------------------------------------
 
-    def log_prob(self, x, L):
+    def log_prob(self, x, L, preordered=False):
+        """Exact AR log-density of x under this generator. Returns [B].
+
+        preordered=False (default; training / scoring reference configs): canonicalize first via
+        `canonical_order` -- the deterministic factorization of unordered data.
+        preordered=True (SMC base / importance weights): score x in its GIVEN storage order (slot j =
+        AR step j, anchor t_j, causal prefix = slots < j). This is the exact density of `sample()`'s
+        own output (which returns slot j == generation step j); canonical-lifting a sampled config
+        changes the value whenever it is noncanonical, biasing IS weights (KA lineage:
+        ka_flowhead.log_prob's `preordered` arg)."""
         B, N, _ = x.shape
         device = x.device
         x = torch.remainder(x, L)
         t, rank, R = mw_scaffold(N, L, device)
         s = (L / R) / 2.0
-        perm = canonical_order(x, L, R, rank)
-        xo = torch.gather(x, 1, perm[..., None].expand(-1, -1, 3))               # [B,N,3] canonical order
+        if preordered:
+            xo = x                                                                # slot j == AR step j
+        else:
+            perm = canonical_order(x, L, R, rank)
+            xo = torch.gather(x, 1, perm[..., None].expand(-1, -1, 3))           # [B,N,3] canonical order
 
         K = min(self.knn, N)
         jj = torch.arange(N, device=device)

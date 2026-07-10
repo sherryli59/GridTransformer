@@ -402,7 +402,21 @@ DEFAULT_MODEL_KW = dict(knn=12, d_model=128, n_layers=2, n_heads=4, num_bins=8, 
                          periods=(0.5, 1.0, 2.0, 4.0), n_pair_feat=N_PAIR_FEAT)
 
 
-def load_training_bank(art_path=None, thin_events=6, val_frac=0.1):
+def _load_bank_cfgs(path):
+    bank = torch.load(path, map_location="cpu", weights_only=False)
+    cfgs = bank["cfgs"] if "cfgs" in bank else bank["ref"]["cfgs"]
+    assert cfgs.ndim == 3 and cfgs.shape[-1] == 3, f"{path}: bad cfgs shape {tuple(cfgs.shape)}"
+    return cfgs.float()
+
+
+def _thin_by_events(cfgs, n_chains, thin_events):
+    assert n_chains > 0 and thin_events > 0
+    n_tot, N, _ = cfgs.shape
+    assert n_tot % n_chains == 0, f"bank size {n_tot} not a multiple of n_chains={n_chains}"
+    return cfgs.reshape(n_tot // n_chains, n_chains, N, 3)[::thin_events]
+
+
+def load_training_bank(art_path=None, thin_events=6, val_frac=0.1, extra_banks=None):
     """Reuse the certified G2 reference bank (mw_gates.g2's `ref` MC run) as MLE training data.
 
     cfgs [n_events*CHAINS_B, N, 3] is event-major (index = event*CHAINS_B + chain: mc_run's
@@ -411,10 +425,21 @@ def load_training_bank(art_path=None, thin_events=6, val_frac=0.1):
     decorrelation), then split by EVENT ORDER (not interleaved) so validation is strictly
     later-in-time than training -- a cheap guard against leakage through residual autocorrelation.
 
+    Multi-bank mode (extra_banks): each extra bank is a (path, n_chains, thin_events) tuple
+    pointing at an mc_run-output artifact (top-level "cfgs", or "ref"-nested like the G2 gate
+    artifact), event-major with ITS OWN chain count, thinned by ITS OWN thin. Train = the primary
+    bank's usual first-(1-val_frac) portion (its tail stays EXCLUDED -- it validated the earlier
+    checkpoints in this lineage, so folding it into train would leak model selection) + ALL events
+    of every extra bank except the last + the first-(1-val_frac) of the LAST extra bank.
+    Val = the LAST extra bank's tail ONLY (the freshest, never-touched data -- the cleanest
+    generalization read; provenance printed).
+
     Args:
-        art_path: bank .pt path (default artifacts/mw_g2_N64.pt).
-        thin_events: keep every this-th collection event.
-        val_frac: fraction of the THINNED events (not raw events) held out, taken from the end.
+        art_path: primary bank .pt path (default artifacts/mw_g2_N64.pt; CHAINS_B chains).
+        thin_events: keep every this-th collection event of the primary bank.
+        val_frac: fraction of thinned events held out from the end (of the primary bank, or of the
+            last extra bank when extra_banks is given).
+        extra_banks: optional list of (path, n_chains, thin_events) tuples.
 
     Returns:
         x_train, x_val: [.,N,3] float32, wrapped into [0,L).
@@ -422,22 +447,36 @@ def load_training_bank(art_path=None, thin_events=6, val_frac=0.1):
     """
     if art_path is None:
         art_path = os.path.join(ART, "mw_g2_N64.pt")
-    bank = torch.load(art_path, map_location="cpu")
-    cfgs = bank["ref"]["cfgs"]                                            # [n_events*CHAINS_B, N, 3]
-    n_tot, N, _ = cfgs.shape
-    assert n_tot % CHAINS_B == 0, f"bank size {n_tot} not a multiple of CHAINS_B={CHAINS_B}"
-    n_events = n_tot // CHAINS_B
-    cfgs = cfgs.reshape(n_events, CHAINS_B, N, 3)[::thin_events]          # [n_thin,CHAINS_B,N,3]
-    n_thin = cfgs.shape[0]
-    n_val_events = max(1, int(round(n_thin * val_frac)))
-    n_train_events = n_thin - n_val_events
-    assert n_train_events > 0, f"val_frac={val_frac} leaves no training events (n_thin={n_thin})"
-    x_train = cfgs[:n_train_events].reshape(-1, N, 3)                     # earlier events
-    x_val = cfgs[n_train_events:].reshape(-1, N, 3)                       # later events
+    prim = _thin_by_events(_load_bank_cfgs(art_path), CHAINS_B, thin_events)   # [n_thin,CHAINS_B,N,3]
+    n_thin, _, N, _ = prim.shape
     L = (N / RHO_STAR) ** (1.0 / 3.0)
-    x_train = torch.remainder(x_train, L)
-    x_val = torch.remainder(x_val, L)
-    return x_train, x_val, L
+
+    def _split(cfgs_e):                                   # head=train, tail=val (later-in-time)
+        n = cfgs_e.shape[0]
+        n_val = max(1, int(round(n * val_frac)))
+        assert n - n_val > 0, f"val_frac={val_frac} leaves no training events (n_thin={n})"
+        return cfgs_e[:n - n_val], cfgs_e[n - n_val:]
+
+    if not extra_banks:
+        tr, va = _split(prim)
+        x_train, x_val = tr.reshape(-1, N, 3), va.reshape(-1, N, 3)
+    else:
+        prim_tr, _ = _split(prim)                         # primary tail excluded (past-val hygiene)
+        parts = [prim_tr.reshape(-1, N, 3)]
+        for path, n_chains, thin in extra_banks[:-1]:
+            eb = _thin_by_events(_load_bank_cfgs(path), n_chains, thin)
+            assert eb.shape[2] == N, f"{path}: N={eb.shape[2]} != primary N={N}"
+            parts.append(eb.reshape(-1, N, 3))            # never used as val anywhere: all -> train
+        path, n_chains, thin = extra_banks[-1]
+        eb = _thin_by_events(_load_bank_cfgs(path), n_chains, thin)
+        assert eb.shape[2] == N, f"{path}: N={eb.shape[2]} != primary N={N}"
+        eb_tr, eb_va = _split(eb)
+        parts.append(eb_tr.reshape(-1, N, 3))
+        x_train, x_val = torch.cat(parts, 0), eb_va.reshape(-1, N, 3)
+        print(f"load_training_bank: val = last {eb_va.shape[0]} thinned events x {n_chains} chains "
+              f"({x_val.shape[0]} configs) of {path} ONLY (freshest bank); train parts "
+              f"{[int(p.shape[0]) for p in parts]} = {x_train.shape[0]} configs", flush=True)
+    return torch.remainder(x_train, L), torch.remainder(x_val, L), L
 
 
 def _augment_batch(x, L, gen):
@@ -505,6 +544,7 @@ def _model_from_ckpt(ckpt):
 
 def train(steps=20000, batch=32, lr=3e-4, val_every=500, out="mw_gen_N64.pt", seed=0,
           art_path=None, thin_events=6, val_frac=0.1, device=None, augment=True, warm=None,
+          extra_banks=None, reset_best=False,
           **model_kw):
     """MLE-train MWGenerator on the banked reference configs (load_training_bank).
 
@@ -533,7 +573,8 @@ def train(steps=20000, batch=32, lr=3e-4, val_every=500, out="mw_gen_N64.pt", se
     torch.manual_seed(seed)
     device = device or DEV
 
-    x_train, x_val, L = load_training_bank(art_path=art_path, thin_events=thin_events, val_frac=val_frac)
+    x_train, x_val, L = load_training_bank(art_path=art_path, thin_events=thin_events,
+                                           val_frac=val_frac, extra_banks=extra_banks)
     x_train, x_val = x_train.to(device), x_val.to(device)
     N = x_train.shape[1]
 
@@ -543,13 +584,14 @@ def train(steps=20000, batch=32, lr=3e-4, val_every=500, out="mw_gen_N64.pt", se
         kw = _ckpt_hparams(wc)
         model = _model_from_ckpt(wc).to(device)
         model.load_state_dict(wc["state_dict"])
-        best_val = float(wc["val_nll"])
+        best_val = float("inf") if reset_best else float(wc["val_nll"])
         for k, cur in (("thin_events", thin_events), ("val_frac", val_frac)):
             if k in wc and wc[k] != cur:                  # data-provenance guard: best_val was measured
                 print(f"WARNING train: warm ckpt {k}={wc[k]} != current {cur} -- carried best_val "
                       f"was measured on a DIFFERENT val split; comparability not guaranteed", flush=True)
+        best_msg = "reset for new validation bank" if reset_best else f"carried at {best_val:.4f}"
         print(f"warm-continue from {warm_path}: loaded step {wc.get('step')} "
-              f"val_nll {best_val:.4f} (best_val carried; fresh Adam)", flush=True)
+              f"val_nll {float(wc['val_nll']):.4f} (best_val {best_msg}; fresh Adam)", flush=True)
     else:
         kw = {**DEFAULT_MODEL_KW, **model_kw}
         model = MWGenerator(**kw).to(device)
@@ -573,7 +615,8 @@ def train(steps=20000, batch=32, lr=3e-4, val_every=500, out="mw_gen_N64.pt", se
                 "n_layers": kw["n_layers"], "n_heads": kw["n_heads"], "num_bins": kw["num_bins"],
                 "tail_bound": kw["tail_bound"], "periods": kw["periods"],
                 "n_pair_feat": kw["n_pair_feat"], "val_nll": val_nll, "step": step, "train_N": N,
-                "thin_events": thin_events, "val_frac": val_frac}         # data provenance (warm guard)
+                "thin_events": thin_events, "val_frac": val_frac,
+                "extra_banks": extra_banks}                              # data provenance (warm guard)
 
     history = []
     for step in range(steps):

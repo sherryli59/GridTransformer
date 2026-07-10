@@ -27,20 +27,27 @@ placed neighbors around the scaffold cell) — v5 restores and strengthens that 
    width 1.30σ; j=0 → o_0 = t_0. The scaffold selects REGION AND ORDER ONLY; it no longer defines the
    output coordinate system.
 2. **Prefix-derived orientation**: `build_frames` (existing, fallback-hardened) on the two nearest
-   causal prefix particles relative to o_j.
-3. **Offset**: u = Rf·wrap_pm(x_j − o_j, L)/s, s = 0.65σ. |u| ≤ (L/2)/s = 4.0 exactly — the spline's
-   tail_bound=4 covers the entire principal image; no wrap-truncation regime at all.
+   causal prefix particles relative to o_j. The frame is used for geometry tokens, not as a periodic
+   output chart (implementation-review correction below).
+3. **Offset (exactness correction from implementation review)**: an arbitrary continuous rotation
+   is not an automorphism of the cubic torus: a rotated minimum-image cube is not the same cube, and
+   one rotated coordinate can reach sqrt(3)L/(2s), not L/(2s). Moreover, the old `Spline3Head` has
+   unbounded Gaussian tails. The exact v5a chart is therefore
+   u = wrap_pm(x_j − o_j, L)/s in the GLOBAL cubic axes, s=L/8, with an AR circular RQS head on each
+   coordinate of [-4,4). The local frame still supplies rotation-adapted conditioning features.
+   This chart covers the full torus once and has no wrapped-tail or truncation regime.
 4. **Causal-kNN tokens** (k=12 nearest prefix particles of o_j), geometry-only features per token:
    frame coords (3), r (1), fixed-period Fourier(r) (8), min(1/r², 4) (1), r/1.19 (1),
    prefix-occupancy scalar n_valid/k (1), and an angular feature matched to the mW three-body kernel:
    (cos θ + 1/3) where θ is the angle at o_j between this neighbor and the nearest neighbor (1)
    [implementer may add a pooled tetrahedral summary token; features must remain geometry-only —
    no curve indices]. Per-step encoder over k+1 tokens (CLS), as the v1/v2 lineage.
-5. **Head**: AR local-frame RQS spline (Spline3Head, num_bins=32, tail_bound=4.0) — demonstrated
-   0.16σ resolution; multimodal per axis (the legitimate site-multimodality must survive).
+5. **Head**: AR circular RQS spline (`CircularSpline3Head`, num_bins=32, bound=4.0), with a uniform
+   circle base and periodic sine/cosine embeddings of preceding coordinates. It is bounded,
+   normalized on the torus, and multimodal per axis.
 6. **Exactness invariants (unchanged, co-first-class)**: ungated sample↔log_prob(preordered) on every
-   draw; perturbed-weights mirror at 1e-4-scale; origin/frame are deterministic prefix functions ⇒
-   per-step change of variables exact (|det Rf| = 1).
+   draw; perturbed-weights mirror at 1e-4-scale; the origin is a deterministic prefix function and
+   its per-step map is a torus translation with unit Jacobian. The frame affects conditioning only.
 7. **Checkpoint selection includes TF structure** (the val-NLL-blindness lesson): every val cycle,
    compute TF pooled-predecessor g(r) on 64 val configs (one forward + head samples); track
    peak_err = |g(1.19) − 2.18|/2.18 and core_mass = mean g on r ∈ (0, 1.0). Save best_nll AND

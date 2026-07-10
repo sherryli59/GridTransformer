@@ -236,12 +236,15 @@ class MWGenerator(nn.Module):
     """
 
     def __init__(self, knn=12, d_model=128, n_layers=2, n_heads=4, num_bins=8, tail_bound=4.0,
-                 periods=(0.5, 1.0, 2.0, 4.0)):
+                 periods=(0.5, 1.0, 2.0, 4.0), n_pair_feat=N_PAIR_FEAT):
         super().__init__()
+        assert n_pair_feat in (0, N_PAIR_FEAT), \
+            f"n_pair_feat must be 0 (v1 12-dim tokens) or {N_PAIR_FEAT} (v2), got {n_pair_feat}"
         self.knn = knn
         self.d_model = d_model
         self.periods = tuple(periods)
-        n_feat = 3 + 1 + 2 * len(self.periods) + N_PAIR_FEAT      # frame coords(3) + r(1) + sincos(2P) + pair(2)
+        self.n_pair_feat = n_pair_feat
+        n_feat = 3 + 1 + 2 * len(self.periods) + n_pair_feat     # frame(3) + r(1) + sincos(2P) [+ pair(2)]
         self.embed = nn.Linear(n_feat, d_model)
         self.cls = nn.Parameter(torch.zeros(1, 1, d_model))
         layer = nn.TransformerEncoderLayer(d_model, n_heads, dim_feedforward=2 * d_model,
@@ -258,13 +261,16 @@ class MWGenerator(nn.Module):
         return torch.cat(feats, dim=-1)
 
     def _tokens(self, Rf, nbr_rel):
-        """Rf: [...,3,3], nbr_rel: [...,k,3] (vector to anchor, world frame) -> token feats [...,k,14].
+        """Rf: [...,3,3], nbr_rel: [...,k,3] (vector to anchor, world frame) -> token feats
+        [...,k,12+n_pair_feat].
 
-        Layout: [frame coords(3), r(1), sincos(2P=8), min(1/r^2, 4)(1), r/1.19(1)]. The pair tail is
-        the ARM-FULL P1 excluded-volume inductive bias: 1/r^2 clamped at r >= EV_RMIN=0.5 (== capped
-        at 4.0; implemented as 1/clamp_min(r,0.5)^2 so the clamped branch has exactly zero gradient
-        -- no inf at the zeroed invalid-slot rows r=0), and r scaled by R_SHELL1=1.19 sigma (the
-        first-shell g(r) peak location, the physical unit for "contact distance").
+        Layout: [frame coords(3), r(1), sincos(2P=8)] + (when n_pair_feat=2) [min(1/r^2, 4)(1),
+        r/1.19(1)]. The pair tail is the ARM-FULL P1 excluded-volume inductive bias: 1/r^2 clamped
+        at r >= EV_RMIN=0.5 (== capped at 4.0; implemented as 1/clamp_min(r,0.5)^2 so the clamped
+        branch has exactly zero gradient -- no inf at the zeroed invalid-slot rows r=0), and r
+        scaled by R_SHELL1=1.19 sigma (the first-shell g(r) peak location, the physical unit for
+        "contact distance"). n_pair_feat=0 reproduces the v1 12-dim layout exactly (checkpoint
+        back-compat).
 
         SINGLE source of truth for per-neighbor features: both log_prob's vectorized pass and
         sample's per-step pass call this, so they cannot desynchronize
@@ -272,8 +278,11 @@ class MWGenerator(nn.Module):
         r = nbr_rel.norm(dim=-1, keepdim=True)                                   # [...,k,1]
         feat_xyz = torch.einsum("...ij,...mj->...mi", Rf, nbr_rel)               # [...,k,3] frame coords
         four = self._fourier(r)                                                   # [...,k,2P]
-        inv_r2 = 1.0 / r.clamp_min(EV_RMIN) ** 2                                  # [...,k,1] == min(1/r^2, 4)
-        return torch.cat([feat_xyz, r, four, inv_r2, r / R_SHELL1], dim=-1)       # [...,k,14]
+        feats = [feat_xyz, r, four]
+        if self.n_pair_feat > 0:
+            inv_r2 = 1.0 / r.clamp_min(EV_RMIN) ** 2                              # [...,k,1] == min(1/r^2, 4)
+            feats += [inv_r2, r / R_SHELL1]
+        return torch.cat(feats, dim=-1)                                           # [...,k,12+n_pair_feat]
 
     # ------------------------------------------------------------------
     # log_prob: one teacher-forced vectorized pass
@@ -390,7 +399,7 @@ CHAINS_B = 16                  # independent MC chains in the G2 reference bank 
                                 # collection loop appends one [B,N,3] snapshot per collection event.
 
 DEFAULT_MODEL_KW = dict(knn=12, d_model=128, n_layers=2, n_heads=4, num_bins=8, tail_bound=4.0,
-                         periods=(0.5, 1.0, 2.0, 4.0))
+                         periods=(0.5, 1.0, 2.0, 4.0), n_pair_feat=N_PAIR_FEAT)
 
 
 def load_training_bank(art_path=None, thin_events=6, val_frac=0.1):
@@ -472,11 +481,26 @@ def _val_nll(model, x_val, L, N, chunk=64):
     return total / (x_val.shape[0] * N)
 
 
+def _ckpt_hparams(ckpt):
+    """Model hyperparams from a checkpoint dict, with n_pair_feat back-compat.
+
+    n_pair_feat: use the stored key when present; otherwise INFER it from the embed weight's input
+    dim (embed.weight.shape[1] - (3+1+2P)) -- unambiguous, and covers BOTH pre-schema v1 ckpts
+    (12-dim tokens -> 0) and key-less ckpts written by an in-flight v2 process holding the
+    pre-schema module in memory (14-dim tokens -> 2)."""
+    kw = {k: ckpt[k] for k in ("knn", "d_model", "n_layers", "n_heads", "num_bins",
+                                 "tail_bound", "periods")}
+    if "n_pair_feat" in ckpt:
+        kw["n_pair_feat"] = ckpt["n_pair_feat"]
+    else:
+        base = 3 + 1 + 2 * len(kw["periods"])
+        kw["n_pair_feat"] = int(ckpt["state_dict"]["embed.weight"].shape[1]) - base
+    return kw
+
+
 def _model_from_ckpt(ckpt):
     """Construct an (untrained) MWGenerator from a checkpoint's recorded hyperparams."""
-    return MWGenerator(knn=ckpt["knn"], d_model=ckpt["d_model"], n_layers=ckpt["n_layers"],
-                        n_heads=ckpt["n_heads"], num_bins=ckpt["num_bins"],
-                        tail_bound=ckpt["tail_bound"], periods=ckpt["periods"])
+    return MWGenerator(**_ckpt_hparams(ckpt))
 
 
 def train(steps=20000, batch=32, lr=3e-4, val_every=500, out="mw_gen_N64.pt", seed=0,
@@ -516,11 +540,14 @@ def train(steps=20000, batch=32, lr=3e-4, val_every=500, out="mw_gen_N64.pt", se
     if warm is not None:
         warm_path = warm if os.path.exists(warm) else os.path.join(ART, warm)   # cwd-relative or ART name
         wc = torch.load(warm_path, map_location=device)
-        kw = {k: wc[k] for k in ("knn", "d_model", "n_layers", "n_heads", "num_bins",
-                                   "tail_bound", "periods")}
+        kw = _ckpt_hparams(wc)
         model = _model_from_ckpt(wc).to(device)
         model.load_state_dict(wc["state_dict"])
         best_val = float(wc["val_nll"])
+        for k, cur in (("thin_events", thin_events), ("val_frac", val_frac)):
+            if k in wc and wc[k] != cur:                  # data-provenance guard: best_val was measured
+                print(f"WARNING train: warm ckpt {k}={wc[k]} != current {cur} -- carried best_val "
+                      f"was measured on a DIFFERENT val split; comparability not guaranteed", flush=True)
         print(f"warm-continue from {warm_path}: loaded step {wc.get('step')} "
               f"val_nll {best_val:.4f} (best_val carried; fresh Adam)", flush=True)
     else:
@@ -544,8 +571,9 @@ def train(steps=20000, batch=32, lr=3e-4, val_every=500, out="mw_gen_N64.pt", se
     def _ckpt(val_nll, step):
         return {"state_dict": model.state_dict(), "knn": kw["knn"], "d_model": kw["d_model"],
                 "n_layers": kw["n_layers"], "n_heads": kw["n_heads"], "num_bins": kw["num_bins"],
-                "tail_bound": kw["tail_bound"], "periods": kw["periods"], "val_nll": val_nll,
-                "step": step, "train_N": N}
+                "tail_bound": kw["tail_bound"], "periods": kw["periods"],
+                "n_pair_feat": kw["n_pair_feat"], "val_nll": val_nll, "step": step, "train_N": N,
+                "thin_events": thin_events, "val_frac": val_frac}         # data provenance (warm guard)
 
     history = []
     for step in range(steps):

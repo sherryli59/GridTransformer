@@ -285,6 +285,43 @@ def test_token_pair_features():
     assert torch.isfinite(nbr.grad).all()                                      # clamp kills the 1/r^3 inf
     assert EV_RMIN == 0.5 and abs(1.0 / EV_RMIN ** 2 - 4.0) < 1e-9
 
+def test_v1_ckpt_backcompat(tmp_path):
+    # Checkpoint schema back-compat, all three load paths:
+    #   (a) pre-schema v1 ckpt (12-dim tokens, NO n_pair_feat key)      -> shape-inferred 0
+    #   (b) key-less ckpt from an in-flight v2 process (14-dim, no key) -> shape-inferred 2
+    #   (c) v2 ckpt with the key stored                                  -> key wins, roundtrips 2
+    from liquid_coupling_flow.mw.mw_generator import MWGenerator, load_generator
+    L = 5.198
+
+    def _save(m, n_pair_key, path):
+        ck = {"state_dict": m.state_dict(), "knn": 6, "d_model": 32, "n_layers": 1, "n_heads": 2,
+              "num_bins": 8, "tail_bound": 4.0, "periods": (0.5, 1.0, 2.0, 4.0), "val_nll": 3.0,
+              "step": 0, "train_N": 64}
+        if n_pair_key is not None:
+            ck["n_pair_feat"] = n_pair_key
+        torch.save(ck, path)
+        return path
+
+    torch.manual_seed(0)
+    m_v1 = MWGenerator(knn=6, d_model=32, n_layers=1, n_heads=2, n_pair_feat=0)
+    assert m_v1.embed.in_features == 12
+    m1 = load_generator(_save(m_v1, None, str(tmp_path / "v1.pt")), device="cpu")     # (a)
+    assert m1.n_pair_feat == 0 and m1.embed.in_features == 12
+
+    m_v2 = MWGenerator(knn=6, d_model=32, n_layers=1, n_heads=2)                      # default 2
+    m2 = load_generator(_save(m_v2, None, str(tmp_path / "v2_keyless.pt")), device="cpu")  # (b)
+    assert m2.n_pair_feat == 2 and m2.embed.in_features == 14
+    m3 = load_generator(_save(m_v2, 2, str(tmp_path / "v2.pt")), device="cpu")        # (c)
+    assert m3.n_pair_feat == 2 and m3.embed.in_features == 14
+
+    g = torch.Generator().manual_seed(0)
+    x = torch.rand(2, 64, 3, generator=g) * L
+    for m in (m1, m2, m3):
+        lp = m.log_prob(x, L)
+        assert lp.shape == (2,) and torch.isfinite(lp).all()
+    # loaded v1 must reproduce the source 12-dim model's density exactly (state carried, not re-init)
+    assert torch.allclose(m1.log_prob(x, L), m_v1.log_prob(x, L), atol=1e-5)
+
 def test_augment_exactness():
     # Ground-truth check that _augment_batch is an exact symmetry of U (torus translation + cubic
     # O_h) -- catches sign/center/wrap bugs directly at the energy level: any wrong center, sign

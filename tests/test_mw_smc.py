@@ -45,5 +45,7 @@ def test_mutation_stationarity_tiny():
 def test_smc_runs_and_saves(tmp_path):
     b = UniformBase(8, 2.6)
     out = smc_run(b, 8, 2.6, beta=2.0, B=64, n_sweeps=2, step=0.2, seed=0, save_tag="_smoke")
-    assert out["history"][-1]["lam"] == 1.0 and torch.isfinite(out["logZ"] * 1.0)
+    # plan-bug fix: the brief's line was torch.isfinite(out["logZ"] * 1.0), but logZ is a python
+    # float per the contract and torch.isfinite requires a Tensor — math.isfinite is the right check.
+    assert out["history"][-1]["lam"] == 1.0 and math.isfinite(out["logZ"])
     assert out["evals"] > 0

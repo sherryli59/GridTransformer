@@ -122,11 +122,16 @@ def smc_run(base, N, L, beta, B=256, ess_target=0.6, n_sweeps=3, step=None, seed
         x, U, lq, info = mutation_sweeps(x, base, lam, beta, L, n_sweeps, step, gen)
         evals += info["evals"]
 
-        # (4) rung guard: carried U/lq must equal a fresh re-evaluation (weight-path exactness)
+        # (4) rung guard: carried U/lq must equal a fresh re-evaluation (weight-path exactness).
+        # U tolerance is RELATIVE to the energy scale: the guard exists to catch bookkeeping bugs
+        # (O(1)-per-move errors), not float32 rounding on clash-scale energies — uniform init at
+        # ambient density gives U ~ 1e2+ where an absolute 1e-4 sits below fp32 resolution (float64
+        # control: drift 7e-13, pure rounding). lq guard stays absolute (log-densities are O(N)).
         lq_fresh = base.log_q(x[:8])
         assert float((lq[:8] - lq_fresh).abs().max()) < 1e-3, "carried log_q drifted from fresh re-eval"
         U_fresh = mw_energy(x[:8], L)
-        assert float((U[:8] - U_fresh).abs().max()) < 1e-4, "carried U drifted from fresh re-eval"
+        assert float((U[:8] - U_fresh).abs().max()) < 1e-4 * max(1.0, float(U_fresh.abs().max())), \
+            "carried U drifted from fresh re-eval"
 
         # (5) record + per-rung save
         history.append({
@@ -134,7 +139,7 @@ def smc_run(base, N, L, beta, B=256, ess_target=0.6, n_sweeps=3, step=None, seed
             "U_mean": float((U / N).mean()), "dlam": dlam, "evals": info["evals"],
         })
         rung += 1
-        result = {"x": x, "U": U, "logw": logw, "logZ": torch.tensor(logZ), "history": history,
+        result = {"x": x, "U": U, "logw": logw, "logZ": logZ, "history": history,
                   "evals": evals, "wall": time.time() - t0}
         torch.save(result, path)
 

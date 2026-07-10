@@ -305,6 +305,15 @@ def test_v1_ckpt_backcompat(tmp_path):
     torch.manual_seed(0)
     m_v1 = MWGenerator(knn=6, d_model=32, n_layers=1, n_heads=2, n_pair_feat=0)
     assert m_v1.embed.in_features == 12
+    # Perturb BEFORE saving (the suite's consistency-test idiom): at identity init the head's
+    # Linear weights are all zero, so log_prob is the bare Gaussian base independent of every
+    # other random parameter -- the loaded-vs-source density equality below would be VACUOUS
+    # (two differently-seeded identity-init v1 models give delta = 0.0). Perturbed, the equality
+    # genuinely certifies state carriage + the reconstructed 12-dim conditioning path.
+    torch.manual_seed(4)
+    with torch.no_grad():
+        for p in m_v1.parameters():
+            p.add_(0.05 * torch.randn_like(p))
     m1 = load_generator(_save(m_v1, None, str(tmp_path / "v1.pt")), device="cpu")     # (a)
     assert m1.n_pair_feat == 0 and m1.embed.in_features == 12
 

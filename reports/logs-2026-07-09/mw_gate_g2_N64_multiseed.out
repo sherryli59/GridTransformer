@@ -1,0 +1,30 @@
+G2 N=64: L=5.1953 beta=10.3814 ref(equil=40000,collect=8000,every=4,B=16) smc(B=512,n_sweeps=10,final_sweeps=0,ess_target=0.95,seed=0)
+G2 N=64: ref CACHED from artifact (/mnt/ssd/GridTransformer/liquid_coupling_flow/mw/artifacts/mw_g2_N64.pt)
+G2 N=64: smc step = ref frozen adapted step 0.0783
+G2 N=64 <U>/N: SMC -1.6280+/-0.0007 vs ref -1.6272+/-0.0007 | |diff| 0.0008 < tol 0.0043 -> PASS
+G2 N=64 <U>/N null check (informational): |diff| 0.0008 vs null95 0.0016
+G2 N=64 P(U/N) TV: 0.1093 vs null95 0.1067 (floor 0.05) -> FAIL
+G2 N=64 g(r): max|dg| 0.0813 vs null95 0.0978 (floor 0.10) -> PASS
+G2 N=64 OVERALL -> FAIL
+G2 N=64: saved -> /mnt/ssd/GridTransformer/liquid_coupling_flow/mw/artifacts/mw_g2_N64.pt
+--- seed 0 overall: FAIL ---
+G2 N=64: L=5.1953 beta=10.3814 ref(equil=40000,collect=8000,every=4,B=16) smc(B=512,n_sweeps=10,final_sweeps=0,ess_target=0.95,seed=1)
+G2 N=64: ref CACHED from artifact (/mnt/ssd/GridTransformer/liquid_coupling_flow/mw/artifacts/mw_g2_N64.pt)
+G2 N=64: smc step = ref frozen adapted step 0.0783
+G2 N=64 <U>/N: SMC -1.6295+/-0.0008 vs ref -1.6272+/-0.0007 | |diff| 0.0023 < tol 0.0044 -> PASS
+G2 N=64 <U>/N null check (informational): |diff| 0.0023 vs null95 0.0016
+G2 N=64 P(U/N) TV: 0.1150 vs null95 0.1079 (floor 0.05) -> FAIL
+G2 N=64 g(r): max|dg| 0.0735 vs null95 0.0953 (floor 0.10) -> PASS
+G2 N=64 OVERALL -> FAIL
+G2 N=64: saved -> /mnt/ssd/GridTransformer/liquid_coupling_flow/mw/artifacts/mw_g2_s1_N64.pt
+--- seed 1 overall: FAIL ---
+G2 N=64: L=5.1953 beta=10.3814 ref(equil=40000,collect=8000,every=4,B=16) smc(B=512,n_sweeps=10,final_sweeps=0,ess_target=0.95,seed=2)
+G2 N=64: ref CACHED from artifact (/mnt/ssd/GridTransformer/liquid_coupling_flow/mw/artifacts/mw_g2_N64.pt)
+G2 N=64: smc step = ref frozen adapted step 0.0783
+G2 N=64 <U>/N: SMC -1.6271+/-0.0008 vs ref -1.6272+/-0.0007 | |diff| 0.0002 < tol 0.0044 -> PASS
+G2 N=64 <U>/N null check (informational): |diff| 0.0002 vs null95 0.0016
+G2 N=64 P(U/N) TV: 0.0805 vs null95 0.1068 (floor 0.05) -> PASS
+G2 N=64 g(r): max|dg| 0.0884 vs null95 0.0943 (floor 0.10) -> PASS
+G2 N=64 OVERALL -> PASS
+G2 N=64: saved -> /mnt/ssd/GridTransformer/liquid_coupling_flow/mw/artifacts/mw_g2_s2_N64.pt
+--- seed 2 overall: PASS ---

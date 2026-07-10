@@ -66,9 +66,14 @@ def mutation_sweeps(x, base, lam, beta, L, n_sweeps, step, gen):
     return x, U, lq, {"acc": n_acc / max(1, n_sweeps * N * B), "evals": n_evals}
 
 
-def smc_run(base, N, L, beta, B=256, ess_target=0.6, n_sweeps=3, step=None, seed=0, save_tag=""):
+def smc_run(base, N, L, beta, B=256, ess_target=0.6, n_sweeps=3, step=None, seed=0, save_tag="",
+            final_sweeps=0):
     """Anneal lambda: 0 -> 1 with adaptive ESS-targeted steps, resample-when-degenerate, mutate to
-    re-equilibrate at the new lambda. Returns x, U, logw, logZ, history, evals, wall; saves the
+    re-equilibrate at the new lambda. final_sweeps>0 runs extra mutation sweeps AT lam=1 after the
+    ladder finishes — the pi_1-invariant kernel at the target preserves exactness, and the weight
+    path (logw/logZ) is untouched by construction (G2 diagnosis: an ESS-happy ladder can jump
+    0.77->0.91->1.0 with only n_sweeps mutation per rung, leaving the population mutation-limited,
+    U/N still descending at lam=1). Returns x, U, logw, logZ, history, evals, wall; saves the
     running result dict to artifacts/mw_smc{save_tag}_N{N}.pt after every rung."""
     if step is None:
         step = 0.15
@@ -139,6 +144,19 @@ def smc_run(base, N, L, beta, B=256, ess_target=0.6, n_sweeps=3, step=None, seed
             "U_mean": float((U / N).mean()), "dlam": dlam, "evals": info["evals"],
         })
         rung += 1
+        result = {"x": x, "U": U, "logw": logw, "logZ": logZ, "history": history,
+                  "evals": evals, "wall": time.time() - t0}
+        torch.save(result, path)
+
+    # lam=1 finisher: extra pi_1-invariant mutation to relax a mutation-limited final population.
+    # Does NOT touch logw/logZ (exactness); bookkept as one extra history entry marked final=True.
+    if final_sweeps > 0:
+        x, U, lq, info = mutation_sweeps(x, base, 1.0, beta, L, final_sweeps, step, gen)
+        evals += info["evals"]
+        history.append({
+            "rung": rung, "lam": 1.0, "ess": ess(logw),
+            "U_mean": float((U / N).mean()), "dlam": 0.0, "evals": info["evals"], "final": True,
+        })
         result = {"x": x, "U": U, "logw": logw, "logZ": logZ, "history": history,
                   "evals": evals, "wall": time.time() - t0}
         torch.save(result, path)

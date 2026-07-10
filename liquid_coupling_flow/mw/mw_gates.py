@@ -63,11 +63,22 @@ def _tv_shared_bins(u_smc, w, u_ref, nbins=40):
     return tv, edges, p_smc, p_ref
 
 
-def g2(N, B=512, n_ref_equil=None, n_ref_collect=None, save_tag="_g2"):
+def g2(N, B=512, n_ref_equil=None, n_ref_collect=None, save_tag="_g2", n_sweeps=10,
+       final_sweeps=300):
     """G2 gate at size N: independent displacement-MC reference vs annealed-SMC final population,
     both at the ambient point (beta=1/T*, L from rho*). Saves full populations (both arms) + all
     metrics to artifacts/mw_g2_N{N}.pt (repo rule: full data, never summaries-only) and returns
-    that same dict."""
+    that same dict.
+
+    Mutation budget (the first real N=8 run FAILED all three metrics on mutation-limited depth):
+    the SMC arm's MH step is the REFERENCE's frozen adapted step (spec section 2 — the lam=1-tuned
+    step; letting it default to 0.15 vs the adapted 0.0666 at beta*=10.38 was a real mismatch),
+    n_sweeps=10 per rung, plus a final_sweeps=300 lam=1 finisher (pi_1-invariant, weight path
+    untouched -> exactness preserved).
+
+    Reference cache: if the CANONICAL artifact mw_g2_N{N}.pt exists and its saved ref budgets
+    exactly match the requested ones, its ref dict is reused instead of re-running mc_run (the
+    N=64 reference costs ~2h; gate retries must not pay it again). Exact budget match only."""
     if n_ref_equil is None or n_ref_collect is None:
         if N not in REF_BUDGETS:
             raise ValueError(f"g2: no default reference budget for N={N}; "
@@ -80,10 +91,28 @@ def g2(N, B=512, n_ref_equil=None, n_ref_collect=None, save_tag="_g2"):
     L = (N / RHO_STAR) ** (1.0 / 3.0)
 
     print(f"G2 N={N}: L={L:.4f} beta={beta:.4f} ref(equil={n_ref_equil},collect={n_ref_collect},"
-          f"every=4,B={REF_B}) smc(B={B})", flush=True)
+          f"every=4,B={REF_B}) smc(B={B},n_sweeps={n_sweeps},final_sweeps={final_sweeps})",
+          flush=True)
 
-    ref = mc_run(N, L, beta, n_ref_equil, n_ref_collect, every=4, seed=0, B=REF_B)
-    out = smc_run(UniformBase(N, L), N, L, beta, B=B, seed=0, save_tag=save_tag)
+    # reference cache: exact budget match against the CANONICAL artifact only (keep it simple);
+    # artifacts written before the cache existed lack "ref_budget" and correctly fall through.
+    ref = None
+    canon_path = os.path.join(ART, f"mw_g2_N{N}.pt")
+    if os.path.exists(canon_path):
+        try:
+            prev = torch.load(canon_path, map_location="cpu", weights_only=False)
+        except Exception as e:
+            print(f"G2 N={N}: ref cache unreadable ({e}); running mc_run fresh", flush=True)
+            prev = None
+        if prev is not None and prev.get("ref_budget") == (n_ref_equil, n_ref_collect):
+            ref = prev["ref"]
+            print(f"G2 N={N}: ref CACHED from artifact ({canon_path})", flush=True)
+    if ref is None:
+        ref = mc_run(N, L, beta, n_ref_equil, n_ref_collect, every=4, seed=0, B=REF_B)
+
+    print(f"G2 N={N}: smc step = ref frozen adapted step {ref['step']:.4f}", flush=True)
+    out = smc_run(UniformBase(N, L), N, L, beta, B=B, n_sweeps=n_sweeps, step=ref["step"],
+                  seed=0, save_tag=save_tag, final_sweeps=final_sweeps)
 
     w = torch.softmax(out["logw"].double(), 0)      # double precision softmax (ess()'s reasoning)
 
@@ -121,10 +150,12 @@ def g2(N, B=512, n_ref_equil=None, n_ref_collect=None, save_tag="_g2"):
 
     result = {
         "N": N, "L": L, "beta": beta,
+        "ref_budget": (n_ref_equil, n_ref_collect),        # cache key for g2 retries
         "ref": {"cfgs": ref["cfgs"], "U": ref["U"], "acc": ref["acc"], "step": ref["step"],
                 "flat_budget": ref["flat_budget"], "coll_drift": ref["coll_drift"], "traj": ref["traj"]},
         "smc": {"x": out["x"], "U": out["U"], "logw": out["logw"], "logZ": out["logZ"],
-                "history": out["history"], "evals": out["evals"], "wall": out["wall"]},
+                "history": out["history"], "evals": out["evals"], "wall": out["wall"],
+                "B": B, "n_sweeps": n_sweeps, "final_sweeps": final_sweeps, "step": ref["step"]},
         "mean_U_per_N": {"smc": mean_smc, "se_smc": se_smc, "ref": mean_ref, "se_ref": se_ref,
                           "diff": diff1, "tol": tol1, "pass": pass1},
         "tv_U_per_N": {"tv": tv, "nbins": 40, "edges": edges, "p_smc": p_smc, "p_ref": p_ref,

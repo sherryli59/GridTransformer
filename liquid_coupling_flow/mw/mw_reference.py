@@ -15,7 +15,8 @@ ART = os.path.join(os.path.dirname(__file__), "artifacts")
 DEV = "cuda" if torch.cuda.is_available() else "cpu"
 
 
-def mc_run(N, L, beta, n_equil, n_collect, every, seed, step0=0.15, B=8, track_every=200, ckpt_path=None):
+def mc_run(N, L, beta, n_equil, n_collect, every, seed, step0=0.15, B=8, track_every=200, ckpt_path=None,
+           init_cfgs=None):
     """Batched Metropolis single-site displacement MC, B chains in parallel.
 
     One sweep = N single-site attempts over all B chains: propose x_i + step*randn, wrap, accept
@@ -23,10 +24,18 @@ def mc_run(N, L, beta, n_equil, n_collect, every, seed, step0=0.15, B=8, track_e
     tracked incrementally (U += dU on accept) so long runs stay affordable; the incremental value is
     refreshed via a full mw_energy_chunked recompute at the equil->collection boundary and drift-checked
     once more at the very end (soft guard: warn + recompute, never crash).
+
+    init_cfgs: optional [B,N,3] tensor to initialize the B chains from (wrapped into [0,L)) instead
+    of uniform random -- warm-start from already-equilibrated configs, so n_equil can be small
+    (e.g. 500 sweeps of safety burn-in) when EXTENDING an existing converged reference.
     """
     device = DEV
     gen = torch.Generator(device=device).manual_seed(seed)
-    x = torch.remainder(torch.rand(B, N, 3, generator=gen, device=device) * L, L)
+    if init_cfgs is not None:
+        assert init_cfgs.shape == (B, N, 3), f"init_cfgs {tuple(init_cfgs.shape)} != {(B, N, 3)}"
+        x = torch.remainder(init_cfgs.to(device=device, dtype=torch.float32).clone(), L)
+    else:
+        x = torch.remainder(torch.rand(B, N, 3, generator=gen, device=device) * L, L)
     U = mw_energy_chunked(x, L)
 
     step = step0

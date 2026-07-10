@@ -19,9 +19,10 @@ Part 2 (this file, Task 9): the model —
       convention: u_j = Rf_j @ wrap_pm(x_j - t_j, L) / s, s = (L/R)/2 (half
       cell width); log q_x,j = log q_u,j - 3 log s. Per-neighbor features are
       geometry-only (frame coords + radial distance + fixed-period Fourier
-      encodings of r) so the model carries no curve-specific or absolute-
-      position information -- the size-transfer invariant this campaign
-      needs (see MEMORY.md "curve-conditioning-blocks-transfer").
+      encodings of r + excluded-volume pair features [min(1/r^2,4), r/1.19])
+      so the model carries no curve-specific or absolute-position information
+      -- the size-transfer invariant this campaign needs (see MEMORY.md
+      "curve-conditioning-blocks-transfer").
 
 Part 3 (this file, Task 10): training CLI + Phase-2 entry diagnostics --
     - `load_training_bank`: reuses the certified G2 reference MC bank
@@ -61,6 +62,11 @@ from liquid_coupling_flow.mw.mw_energy import RHO_STAR
 _LOG2PI = math.log(2 * math.pi)
 ART = os.path.join(os.path.dirname(__file__), "artifacts")
 DEV = "cuda" if torch.cuda.is_available() else "cpu"
+
+# excluded-volume pair features (ARM-FULL P1 lineage), appended to each neighbor token:
+R_SHELL1 = 1.19        # first-shell g(r) peak location (sigma units) -- the physical contact scale
+EV_RMIN = 0.5          # 1/r^2 clamp radius: feature = 1/clamp_min(r, 0.5)^2 == min(1/r^2, 4.0)
+N_PAIR_FEAT = 2
 
 
 def wrap_pm(v, L):
@@ -218,9 +224,11 @@ class MWGenerator(nn.Module):
 
     Per-step j (curve rank), the anchor t_j conditions a causal-kNN context of already-placed
     particles (canonical order, i < j only). Per-neighbor features are geometry-only: frame
-    coordinates + radial distance + fixed-period Fourier encodings of r -- no curve index, no
-    absolute position, so the conditioning is a function of local geometry alone (the transfer
-    invariant; see test_prefix_storage_invariance / test_translation_by_lattice below).
+    coordinates + radial distance + fixed-period Fourier encodings of r + excluded-volume pair
+    features [min(1/r^2, 4), r/1.19] (ARM-FULL P1 lineage: direct excluded-volume inductive bias;
+    1.19 sigma = first-shell g(r) peak) -- no curve index, no absolute position, so the
+    conditioning is a function of local geometry alone (the transfer invariant; see
+    test_prefix_storage_invariance / test_translation_by_lattice below).
 
     log_prob(x, L) does ONE teacher-forced vectorized pass (the `_inertial_R_logprob` pattern from
     ka_flowhead.py, ported to 3D: causal mask via broadcast distances to every anchor, topk-kNN,
@@ -233,7 +241,7 @@ class MWGenerator(nn.Module):
         self.knn = knn
         self.d_model = d_model
         self.periods = tuple(periods)
-        n_feat = 3 + 1 + 2 * len(self.periods)                    # frame coords(3) + r(1) + sincos(2P)
+        n_feat = 3 + 1 + 2 * len(self.periods) + N_PAIR_FEAT      # frame coords(3) + r(1) + sincos(2P) + pair(2)
         self.embed = nn.Linear(n_feat, d_model)
         self.cls = nn.Parameter(torch.zeros(1, 1, d_model))
         layer = nn.TransformerEncoderLayer(d_model, n_heads, dim_feedforward=2 * d_model,
@@ -250,11 +258,22 @@ class MWGenerator(nn.Module):
         return torch.cat(feats, dim=-1)
 
     def _tokens(self, Rf, nbr_rel):
-        """Rf: [...,3,3], nbr_rel: [...,k,3] (vector to anchor, world frame) -> token feats [...,k,12]."""
+        """Rf: [...,3,3], nbr_rel: [...,k,3] (vector to anchor, world frame) -> token feats [...,k,14].
+
+        Layout: [frame coords(3), r(1), sincos(2P=8), min(1/r^2, 4)(1), r/1.19(1)]. The pair tail is
+        the ARM-FULL P1 excluded-volume inductive bias: 1/r^2 clamped at r >= EV_RMIN=0.5 (== capped
+        at 4.0; implemented as 1/clamp_min(r,0.5)^2 so the clamped branch has exactly zero gradient
+        -- no inf at the zeroed invalid-slot rows r=0), and r scaled by R_SHELL1=1.19 sigma (the
+        first-shell g(r) peak location, the physical unit for "contact distance").
+
+        SINGLE source of truth for per-neighbor features: both log_prob's vectorized pass and
+        sample's per-step pass call this, so they cannot desynchronize
+        (test_sample_logprob_consistency_perturbed is the mirror-correctness guard)."""
         r = nbr_rel.norm(dim=-1, keepdim=True)                                   # [...,k,1]
         feat_xyz = torch.einsum("...ij,...mj->...mi", Rf, nbr_rel)               # [...,k,3] frame coords
         four = self._fourier(r)                                                   # [...,k,2P]
-        return torch.cat([feat_xyz, r, four], dim=-1)                             # [...,k,12]
+        inv_r2 = 1.0 / r.clamp_min(EV_RMIN) ** 2                                  # [...,k,1] == min(1/r^2, 4)
+        return torch.cat([feat_xyz, r, four, inv_r2, r / R_SHELL1], dim=-1)       # [...,k,14]
 
     # ------------------------------------------------------------------
     # log_prob: one teacher-forced vectorized pass
@@ -301,7 +320,7 @@ class MWGenerator(nn.Module):
         off = wrap_pm(xo - t[None], L)                                             # [B,N,3]
         u = torch.einsum("bnij,bnj->bni", Rf, off) / s                             # [B,N,3] world -> frame
 
-        tok_feat = self._tokens(Rf, nbr_rel)                                       # [B,N,K,12]
+        tok_feat = self._tokens(Rf, nbr_rel)                                       # [B,N,K,14]
         tok = self.embed(tok_feat)                                                  # [B,N,K,d]
         cls = self.cls.expand(B, N, 1, self.d_model)
         seq = torch.cat([cls, tok], dim=2)                                          # [B,N,K+1,d]
@@ -348,7 +367,7 @@ class MWGenerator(nn.Module):
             n_valid = torch.full((B,), k, dtype=torch.long, device=device)
             Rf = build_frames(frame_in, n_valid)                                     # [B,3,3]
 
-            tok_feat = self._tokens(Rf, real)                                        # [B,k,12]
+            tok_feat = self._tokens(Rf, real)                                        # [B,k,14]
             tok = self.embed(tok_feat)                                               # [B,k,d]
             cls = self.cls.expand(B, 1, self.d_model)
             seq = torch.cat([cls, tok], dim=1)                                       # [B,k+1,d]

@@ -119,7 +119,11 @@ def test_sample_logprob_consistency_perturbed():
     # Perturbing ALL parameters makes every pathway load-bearing: the sequential sample-side and the
     # vectorized teacher-forced side must construct identical conditioning for the assert to hold.
     m = _model(); L = 5.198
-    torch.manual_seed(4)                                 # fixed perturbation seed, chosen for nwrap==0
+    torch.manual_seed(5)                                 # fixed perturbation seed, chosen for nwrap==0
+                                                          # (re-picked when the 14-dim pair features
+                                                          # changed embed's shape: old seed 4 wrapped 2
+                                                          # offsets; seeds 0-11 scanned, all non-wrap
+                                                          # seeds consistent at <=7.6e-5)
     with torch.no_grad():
         for p in m.parameters():
             p.add_(0.05 * torch.randn_like(p))
@@ -264,6 +268,22 @@ def test_training_bank_wraps_domain(tmp_path):
     assert bool((x_train >= 0).all() and (x_train < L_out).all())
     assert bool((x_val >= 0).all() and (x_val < L_out).all())
     assert torch.allclose(x_train, torch.full_like(x_train, 0.37), atol=1e-5)
+
+def test_token_pair_features():
+    # feature-vector layout guard: [frame(3), r(1), sincos(8), min(1/r^2,4)(1), r/1.19(1)] = 14;
+    # the excluded-volume tail must clamp at r=0.5 (cap 4.0) and stay finite at the zeroed
+    # invalid-slot rows (r=0), where the clamped branch must also carry zero gradient (no inf/nan).
+    from liquid_coupling_flow.mw.mw_generator import R_SHELL1, EV_RMIN
+    m = _model()
+    Rf = torch.eye(3)[None]
+    nbr = torch.tensor([[[2.0, 0.0, 0.0], [0.25, 0.0, 0.0], [0.0, 0.0, 0.0]]], requires_grad=True)
+    tok = m._tokens(Rf, nbr)
+    assert tok.shape == (1, 3, 14)
+    assert torch.allclose(tok[0, :, 12], torch.tensor([0.25, 4.0, 4.0]))      # 1/2^2; clamped; clamped
+    assert torch.allclose(tok[0, :, 13], torch.tensor([2.0, 0.25, 0.0]) / R_SHELL1)
+    tok[0, :, 12].sum().backward()
+    assert torch.isfinite(nbr.grad).all()                                      # clamp kills the 1/r^3 inf
+    assert EV_RMIN == 0.5 and abs(1.0 / EV_RMIN ** 2 - 4.0) < 1e-9
 
 def test_augment_exactness():
     # Ground-truth check that _augment_batch is an exact symmetry of U (torus translation + cubic

@@ -453,8 +453,16 @@ def _val_nll(model, x_val, L, N, chunk=64):
     return total / (x_val.shape[0] * N)
 
 
+def _model_from_ckpt(ckpt):
+    """Construct an (untrained) MWGenerator from a checkpoint's recorded hyperparams."""
+    return MWGenerator(knn=ckpt["knn"], d_model=ckpt["d_model"], n_layers=ckpt["n_layers"],
+                        n_heads=ckpt["n_heads"], num_bins=ckpt["num_bins"],
+                        tail_bound=ckpt["tail_bound"], periods=ckpt["periods"])
+
+
 def train(steps=20000, batch=32, lr=3e-4, val_every=500, out="mw_gen_N64.pt", seed=0,
-          art_path=None, thin_events=6, val_frac=0.1, device=None, augment=True, **model_kw):
+          art_path=None, thin_events=6, val_frac=0.1, device=None, augment=True, warm=None,
+          **model_kw):
     """MLE-train MWGenerator on the banked reference configs (load_training_bank).
 
     Loss = -log_prob(batch, L).mean()/N, CANONICAL mode (preordered=False): the banked training
@@ -466,6 +474,12 @@ def train(steps=20000, batch=32, lr=3e-4, val_every=500, out="mw_gen_N64.pt", se
     augment=True applies _augment_batch (exact torus translations + cubic O_h) to each TRAIN batch
     only; validation stays fixed/unaugmented so val NLL is comparable across evals (checkpointing).
 
+    warm: optional checkpoint path to warm-continue from. The model is constructed from THAT
+    checkpoint's recorded hyperparams (`model_kw` is IGNORED -- the loaded state_dict fixes the
+    architecture) and its state_dict loaded; best_val initializes from the checkpoint's val_nll so
+    the continuation only overwrites the best file if it genuinely improves on the loaded model.
+    The Adam optimizer is fresh (no optimizer state is carried).
+
     Val-loss checkpointing is a hard requirement (train-loss checkpointing is the measured trap in
     this repo, MEMORY "exposure-bias-noise-run"): every val_every steps this evaluates full-val
     NLL/particle and saves BOTH the best-on-val checkpoint (`out`) and an always-saved last
@@ -475,13 +489,25 @@ def train(steps=20000, batch=32, lr=3e-4, val_every=500, out="mw_gen_N64.pt", se
     """
     torch.manual_seed(seed)
     device = device or DEV
-    kw = {**DEFAULT_MODEL_KW, **model_kw}
 
     x_train, x_val, L = load_training_bank(art_path=art_path, thin_events=thin_events, val_frac=val_frac)
     x_train, x_val = x_train.to(device), x_val.to(device)
     N = x_train.shape[1]
 
-    model = MWGenerator(**kw).to(device)
+    if warm is not None:
+        warm_path = warm if os.path.exists(warm) else os.path.join(ART, warm)   # cwd-relative or ART name
+        wc = torch.load(warm_path, map_location=device)
+        kw = {k: wc[k] for k in ("knn", "d_model", "n_layers", "n_heads", "num_bins",
+                                   "tail_bound", "periods")}
+        model = _model_from_ckpt(wc).to(device)
+        model.load_state_dict(wc["state_dict"])
+        best_val = float(wc["val_nll"])
+        print(f"warm-continue from {warm_path}: loaded step {wc.get('step')} "
+              f"val_nll {best_val:.4f} (best_val carried; fresh Adam)", flush=True)
+    else:
+        kw = {**DEFAULT_MODEL_KW, **model_kw}
+        model = MWGenerator(**kw).to(device)
+        best_val = float("inf")
     opt = torch.optim.Adam(model.parameters(), lr=lr)
 
     out_path = out if os.path.isabs(out) else os.path.join(ART, out)
@@ -493,7 +519,8 @@ def train(steps=20000, batch=32, lr=3e-4, val_every=500, out="mw_gen_N64.pt", se
 
     uniform_nll = 3.0 * math.log(L)                       # calibration reference: -log(L^-3N)/N
     print(f"train: N={N} L={L:.4f} n_train={x_train.shape[0]} n_val={x_val.shape[0]} device={device} "
-          f"augment={augment} uniform_baseline_nll_per_particle={uniform_nll:.4f}", flush=True)
+          f"augment={augment} warm={warm} uniform_baseline_nll_per_particle={uniform_nll:.4f}",
+          flush=True)
 
     def _ckpt(val_nll, step):
         return {"state_dict": model.state_dict(), "knn": kw["knn"], "d_model": kw["d_model"],
@@ -501,7 +528,6 @@ def train(steps=20000, batch=32, lr=3e-4, val_every=500, out="mw_gen_N64.pt", se
                 "tail_bound": kw["tail_bound"], "periods": kw["periods"], "val_nll": val_nll,
                 "step": step, "train_N": N}
 
-    best_val = float("inf")
     history = []
     for step in range(steps):
         idx = torch.randint(0, x_train.shape[0], (batch,), device=device)
@@ -531,9 +557,7 @@ def load_generator(path, device=None):
     """Construct a MWGenerator from a checkpoint's recorded hyperparams and load its weights."""
     device = device or DEV
     ckpt = torch.load(path, map_location=device)
-    model = MWGenerator(knn=ckpt["knn"], d_model=ckpt["d_model"], n_layers=ckpt["n_layers"],
-                         n_heads=ckpt["n_heads"], num_bins=ckpt["num_bins"], tail_bound=ckpt["tail_bound"],
-                         periods=ckpt["periods"])
+    model = _model_from_ckpt(ckpt)
     model.load_state_dict(ckpt["state_dict"])
     model.to(device)
     model.eval()
@@ -646,6 +670,9 @@ if __name__ == "__main__":
     p_tr.add_argument("--thin_events", type=int, default=6)
     p_tr.add_argument("--val_frac", type=float, default=0.1)
     p_tr.add_argument("--augment", action=argparse.BooleanOptionalAction, default=True)
+    p_tr.add_argument("--warm", type=str, default=None,
+                      help="checkpoint path to warm-continue from (hyperparams+weights loaded, "
+                           "best_val carried, fresh Adam; model hyperparam flags are ignored)")
     p_tr.add_argument("--knn", type=int, default=DEFAULT_MODEL_KW["knn"])
     p_tr.add_argument("--d_model", type=int, default=DEFAULT_MODEL_KW["d_model"])
     p_tr.add_argument("--n_layers", type=int, default=DEFAULT_MODEL_KW["n_layers"])
@@ -663,7 +690,8 @@ if __name__ == "__main__":
     if args.cmd == "train":
         train(steps=args.steps, batch=args.batch, lr=args.lr, val_every=args.val_every, out=args.out,
               seed=args.seed, thin_events=args.thin_events, val_frac=args.val_frac,
-              augment=args.augment, knn=args.knn, d_model=args.d_model, n_layers=args.n_layers,
-              n_heads=args.n_heads, num_bins=args.num_bins, tail_bound=args.tail_bound)
+              augment=args.augment, warm=args.warm, knn=args.knn, d_model=args.d_model,
+              n_layers=args.n_layers, n_heads=args.n_heads, num_bins=args.num_bins,
+              tail_bound=args.tail_bound)
     elif args.cmd == "orderspread":
         orderspread(ckpt=args.ckpt, M=args.M, K=args.K, seed=args.seed)

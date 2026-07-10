@@ -314,3 +314,34 @@ def test_train_smoke(tmp_path):
     xb = torch.rand(4, N, 3) * L
     lp = model.log_prob(xb, L)
     assert lp.shape == (4,) and torch.isfinite(lp).all()
+
+def test_train_warm_smoke(tmp_path):
+    # warm-continue: second run constructs from the saved ckpt's hyperparams (no model_kw passed --
+    # the tiny architecture must round-trip through the ckpt), loads its weights, and carries
+    # best_val, so its history starts near the first run's end rather than from scratch.
+    from liquid_coupling_flow.mw.mw_generator import train, CHAINS_B
+    from liquid_coupling_flow.mw.mw_energy import RHO_STAR
+    torch.manual_seed(0)
+    N, n_events = 64, 13
+    L = (N / RHO_STAR) ** (1.0 / 3.0)
+    g = torch.Generator().manual_seed(0)
+    cfgs = torch.rand(n_events * CHAINS_B, N, 3, generator=g) * L
+    bank_path = tmp_path / "fake_bank.pt"
+    torch.save({"ref": {"cfgs": cfgs, "step": 0.0783}}, bank_path)
+
+    out1 = str(tmp_path / "warm_a.pt")
+    r1 = train(steps=10, batch=8, lr=1e-2, val_every=5, out=out1, seed=0,
+                art_path=str(bank_path), thin_events=1, val_frac=0.1, device="cpu",
+                knn=6, d_model=32, n_layers=1, n_heads=2)
+    out2 = str(tmp_path / "warm_b.pt")
+    r2 = train(steps=10, batch=8, lr=1e-3, val_every=5, out=out2, seed=1,
+                art_path=str(bank_path), thin_events=1, val_frac=0.1, device="cpu", warm=out1)
+
+    # starts near the loaded model's val (not fresh-init: scratch step-0 val is ~4.69 and nearly
+    # seed-independent here -- the identity-init head is a pure standard-normal base)
+    assert abs(r2["history"][0]["val_nll"] - r1["best_val"]) < 0.2
+    assert r2["history"][0]["val_nll"] < r1["history"][0]["val_nll"] - 0.05
+    # best_val carried from the ckpt: the continuation's best can only be <= the loaded best
+    assert r2["best_val"] <= r1["best_val"] + 1e-6
+    assert all(math.isfinite(h["val_nll"]) for h in r2["history"])
+    assert os.path.exists(r2["last_path"])                # last always written; best only on improvement

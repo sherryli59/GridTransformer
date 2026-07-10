@@ -1,4 +1,4 @@
-import math, torch, pytest
+import math, os, torch, pytest
 from liquid_coupling_flow.mw.mw_generator import mw_scaffold, canonical_order, build_frames
 
 def test_scaffold_covers_box():
@@ -214,3 +214,85 @@ def test_translation_by_lattice():
     shift = torch.tensor([L / 4, 0.0, 0.0])             # one full cell (R=4): scaffold maps onto itself
     lp2 = m.log_prob(torch.remainder(x + shift, L), L)
     assert torch.allclose(m.log_prob(x, L), lp2, atol=1e-3)
+
+
+# ---------------------------------------------------------------------------
+# Task 10: training CLI + Phase-2 entry diagnostics
+# ---------------------------------------------------------------------------
+
+def test_training_bank(tmp_path):
+    # Synthetic event-major bank: every particle/coord in a config equals that config's event value
+    # (chain doesn't matter for this arithmetic check). Values stay well inside (0,L) so
+    # torch.remainder is a no-op and the event index is exactly recoverable from the stored value.
+    from liquid_coupling_flow.mw.mw_generator import load_training_bank, CHAINS_B
+    from liquid_coupling_flow.mw.mw_energy import RHO_STAR
+    N, n_events, thin_events, val_frac = 4, 20, 6, 0.2
+    L = (N / RHO_STAR) ** (1.0 / 3.0)
+    spacing = L / (n_events + 2)
+    ev = torch.arange(n_events).repeat_interleave(CHAINS_B).float()      # [n_events*CHAINS_B]
+    cfgs = ((ev + 1) * spacing)[:, None, None].expand(-1, N, 3).clone()
+    bank_path = tmp_path / "fake_bank.pt"
+    torch.save({"ref": {"cfgs": cfgs, "step": 0.05}}, bank_path)
+
+    x_train, x_val, L_out = load_training_bank(art_path=str(bank_path), thin_events=thin_events,
+                                                 val_frac=val_frac)
+    assert abs(L_out - L) < 1e-6
+
+    # thinned events (cfgs[::6] of 20) = 0,6,12,18 (4 events); val_frac=0.2 -> n_val=round(4*0.2)=1
+    # -> train keeps the first 3 (0,6,12), val gets the last (18): strictly later-in-time.
+    assert x_train.shape == (3 * CHAINS_B, N, 3)
+    assert x_val.shape == (1 * CHAINS_B, N, 3)
+
+    def events_of(x):
+        return sorted(set((x[:, 0, 0] / spacing - 1).round().long().tolist()))
+    assert events_of(x_train) == [0, 6, 12]
+    assert events_of(x_val) == [18]
+
+    assert bool((x_train >= 0).all() and (x_train < L_out).all())
+    assert bool((x_val >= 0).all() and (x_val < L_out).all())
+
+def test_training_bank_wraps_domain(tmp_path):
+    from liquid_coupling_flow.mw.mw_generator import load_training_bank, CHAINS_B
+    from liquid_coupling_flow.mw.mw_energy import RHO_STAR
+    N = 4
+    L = (N / RHO_STAR) ** (1.0 / 3.0)
+    cfgs = torch.full((2 * CHAINS_B, N, 3), L + 0.37)                    # deliberately out of [0,L)
+    bank_path = tmp_path / "fake_bank.pt"
+    torch.save({"ref": {"cfgs": cfgs, "step": 0.05}}, bank_path)
+
+    x_train, x_val, L_out = load_training_bank(art_path=str(bank_path), thin_events=1, val_frac=0.5)
+    assert bool((x_train >= 0).all() and (x_train < L_out).all())
+    assert bool((x_val >= 0).all() and (x_val < L_out).all())
+    assert torch.allclose(x_train, torch.full_like(x_train, 0.37), atol=1e-5)
+
+def test_train_smoke(tmp_path):
+    # 30 steps on a tiny model config, tiny synthetic bank ("200-config slice"): checks the training
+    # loop plumbing (finite + decreasing loss, both checkpoint files, load_generator round-trip) --
+    # not a convergence test.
+    from liquid_coupling_flow.mw.mw_generator import train, load_generator, CHAINS_B
+    from liquid_coupling_flow.mw.mw_energy import RHO_STAR
+    torch.manual_seed(0)
+    N, n_events = 64, 13                                  # 13*16=208 configs ~ "200-config slice"
+    L = (N / RHO_STAR) ** (1.0 / 3.0)
+    g = torch.Generator().manual_seed(0)
+    cfgs = torch.rand(n_events * CHAINS_B, N, 3, generator=g) * L
+    bank_path = tmp_path / "fake_bank.pt"
+    torch.save({"ref": {"cfgs": cfgs, "step": 0.0783}}, bank_path)
+
+    out_path = str(tmp_path / "smoke.pt")
+    result = train(steps=30, batch=8, lr=1e-2, val_every=10, out=out_path, seed=0,
+                    art_path=str(bank_path), thin_events=1, val_frac=0.1, device="cpu",
+                    knn=6, d_model=32, n_layers=1, n_heads=2)
+
+    history = result["history"]
+    assert len(history) >= 2
+    assert all(math.isfinite(h["train_loss"]) and math.isfinite(h["val_nll"]) for h in history)
+    assert history[-1]["val_nll"] < history[0]["val_nll"]
+
+    last_path = result["last_path"]
+    assert os.path.exists(out_path) and os.path.exists(last_path)
+
+    model = load_generator(out_path, device="cpu")
+    xb = torch.rand(4, N, 3) * L
+    lp = model.log_prob(xb, L)
+    assert lp.shape == (4,) and torch.isfinite(lp).all()

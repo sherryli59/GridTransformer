@@ -23,6 +23,19 @@ Part 2 (this file, Task 9): the model —
       position information -- the size-transfer invariant this campaign
       needs (see MEMORY.md "curve-conditioning-blocks-transfer").
 
+Part 3 (this file, Task 10): training CLI + Phase-2 entry diagnostics --
+    - `load_training_bank`: reuses the certified G2 reference MC bank
+      (event-major MC snapshots, arbitrary storage order) as MLE training
+      data, thinned for decorrelation and split by event order (val strictly
+      later-in-time than train).
+    - `train` / `load_generator`: val-loss-checkpointed MLE training CLI
+      (always-save-last + best-on-val, per this repo's checkpointing rule).
+    - `orderspread`: Phase-2 entry diagnostics on reference configs --
+      log-density spread under random storage orderings, canonicalization
+      stability under the frozen MC step size, and the trained sampler's
+      carry-forward exactness counters (n_wrapped, noncanonical fraction).
+      Recorded for the record, not gated.
+
 Ordering modes (which q0 lives where):
     - SMC base / importance weights: `log_prob(x, L, preordered=True)` scores
       x in its GIVEN storage order (slot j = AR step j, anchor t_j, causal
@@ -38,12 +51,16 @@ Ordering modes (which q0 lives where):
 """
 from __future__ import annotations
 import math
+import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from liquid_coupling_flow.transforms_spline import RQSplineElementwise, DEFAULT_MIN_DERIVATIVE
+from liquid_coupling_flow.mw.mw_energy import RHO_STAR
 
 _LOG2PI = math.log(2 * math.pi)
+ART = os.path.join(os.path.dirname(__file__), "artifacts")
+DEV = "cuda" if torch.cuda.is_available() else "cpu"
 
 
 def wrap_pm(v, L):
@@ -343,3 +360,275 @@ class MWGenerator(nn.Module):
             x[:, j, :] = torch.remainder(tj[None, :] + off, L)
             logq = logq + lq_u - 3 * math.log(s)
         return x, logq, n_wrapped
+
+
+# ---------------------------------------------------------------------------
+# Task 10: training CLI + Phase-2 entry diagnostics
+# ---------------------------------------------------------------------------
+
+CHAINS_B = 16                  # independent MC chains in the G2 reference bank (mw_gates.REF_B);
+                                # event-major layout: cfgs[event*CHAINS_B + chain] -- mc_run's
+                                # collection loop appends one [B,N,3] snapshot per collection event.
+
+DEFAULT_MODEL_KW = dict(knn=12, d_model=128, n_layers=2, n_heads=4, num_bins=8, tail_bound=4.0,
+                         periods=(0.5, 1.0, 2.0, 4.0))
+
+
+def load_training_bank(art_path=None, thin_events=6, val_frac=0.1):
+    """Reuse the certified G2 reference bank (mw_gates.g2's `ref` MC run) as MLE training data.
+
+    cfgs [n_events*CHAINS_B, N, 3] is event-major (index = event*CHAINS_B + chain: mc_run's
+    collection loop appends one [CHAINS_B,N,3] snapshot per collection event, `every` sweeps apart --
+    4 sweeps for the G2 bank). Thin by taking every `thin_events`-th EVENT (all chains kept, for
+    decorrelation), then split by EVENT ORDER (not interleaved) so validation is strictly
+    later-in-time than training -- a cheap guard against leakage through residual autocorrelation.
+
+    Args:
+        art_path: bank .pt path (default artifacts/mw_g2_N64.pt).
+        thin_events: keep every this-th collection event.
+        val_frac: fraction of the THINNED events (not raw events) held out, taken from the end.
+
+    Returns:
+        x_train, x_val: [.,N,3] float32, wrapped into [0,L).
+        L: box length, (N/RHO_STAR)^(1/3).
+    """
+    if art_path is None:
+        art_path = os.path.join(ART, "mw_g2_N64.pt")
+    bank = torch.load(art_path, map_location="cpu")
+    cfgs = bank["ref"]["cfgs"]                                            # [n_events*CHAINS_B, N, 3]
+    n_tot, N, _ = cfgs.shape
+    assert n_tot % CHAINS_B == 0, f"bank size {n_tot} not a multiple of CHAINS_B={CHAINS_B}"
+    n_events = n_tot // CHAINS_B
+    cfgs = cfgs.reshape(n_events, CHAINS_B, N, 3)[::thin_events]          # [n_thin,CHAINS_B,N,3]
+    n_thin = cfgs.shape[0]
+    n_val_events = max(1, int(round(n_thin * val_frac)))
+    n_train_events = n_thin - n_val_events
+    assert n_train_events > 0, f"val_frac={val_frac} leaves no training events (n_thin={n_thin})"
+    x_train = cfgs[:n_train_events].reshape(-1, N, 3)                     # earlier events
+    x_val = cfgs[n_train_events:].reshape(-1, N, 3)                       # later events
+    L = (N / RHO_STAR) ** (1.0 / 3.0)
+    x_train = torch.remainder(x_train, L)
+    x_val = torch.remainder(x_val, L)
+    return x_train, x_val, L
+
+
+def _val_nll(model, x_val, L, N, chunk=64):
+    """Full-val NLL/particle, chunked, no_grad. Restores the model's train/eval mode on exit."""
+    was_training = model.training
+    model.eval()
+    total = 0.0
+    with torch.no_grad():
+        for i in range(0, x_val.shape[0], chunk):
+            xb = x_val[i:i + chunk]
+            total += float((-model.log_prob(xb, L)).sum().item())
+    if was_training:
+        model.train()
+    return total / (x_val.shape[0] * N)
+
+
+def train(steps=20000, batch=32, lr=3e-4, val_every=500, out="mw_gen_N64.pt", seed=0,
+          art_path=None, thin_events=6, val_frac=0.1, device=None, **model_kw):
+    """MLE-train MWGenerator on the banked reference configs (load_training_bank).
+
+    Loss = -log_prob(batch, L).mean()/N, CANONICAL mode (preordered=False): the banked training
+    data comes off the MC chains in arbitrary storage order (not a curve-visit order), and
+    canonical_order is the deterministic AR factorization of unordered data. `model_kw` overrides
+    MWGenerator's default hyperparams (DEFAULT_MODEL_KW); `art_path`/`thin_events`/`val_frac` let
+    tests point at a small synthetic bank without touching the production data path.
+
+    Val-loss checkpointing is a hard requirement (train-loss checkpointing is the measured trap in
+    this repo, MEMORY "exposure-bias-noise-run"): every val_every steps this evaluates full-val
+    NLL/particle and saves BOTH the best-on-val checkpoint (`out`) and an always-saved last
+    checkpoint (`out` with a `_last` suffix), so a long run's progress survives a val regression.
+
+    Returns {"out_path", "last_path", "history", "best_val"} (history: per-eval step/train_loss/val_nll).
+    """
+    torch.manual_seed(seed)
+    device = device or DEV
+    kw = {**DEFAULT_MODEL_KW, **model_kw}
+
+    x_train, x_val, L = load_training_bank(art_path=art_path, thin_events=thin_events, val_frac=val_frac)
+    x_train, x_val = x_train.to(device), x_val.to(device)
+    N = x_train.shape[1]
+
+    model = MWGenerator(**kw).to(device)
+    opt = torch.optim.Adam(model.parameters(), lr=lr)
+
+    out_path = out if os.path.isabs(out) else os.path.join(ART, out)
+    assert out_path.endswith(".pt"), f"out must end with .pt, got {out!r}"
+    last_path = out_path[:-3] + "_last.pt"
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+
+    uniform_nll = 3.0 * math.log(L)                       # calibration reference: -log(L^-3N)/N
+    print(f"train: N={N} L={L:.4f} n_train={x_train.shape[0]} n_val={x_val.shape[0]} device={device} "
+          f"uniform_baseline_nll_per_particle={uniform_nll:.4f}", flush=True)
+
+    def _ckpt(val_nll, step):
+        return {"state_dict": model.state_dict(), "knn": kw["knn"], "d_model": kw["d_model"],
+                "n_layers": kw["n_layers"], "n_heads": kw["n_heads"], "num_bins": kw["num_bins"],
+                "tail_bound": kw["tail_bound"], "periods": kw["periods"], "val_nll": val_nll,
+                "step": step, "train_N": N}
+
+    best_val = float("inf")
+    history = []
+    for step in range(steps):
+        idx = torch.randint(0, x_train.shape[0], (batch,), device=device)
+        xb = x_train[idx]
+        loss = -model.log_prob(xb, L).mean() / N
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+        train_loss = float(loss.item())
+
+        if step % val_every == 0 or step == steps - 1:
+            val_nll = _val_nll(model, x_val, L, N)
+            print(f"step {step}: train {train_loss:.4f} val {val_nll:.4f}", flush=True)
+            history.append({"step": step, "train_loss": train_loss, "val_nll": val_nll})
+            ckpt = _ckpt(val_nll, step)
+            torch.save(ckpt, last_path)                    # always-save-last
+            if val_nll < best_val:
+                best_val = val_nll
+                torch.save(ckpt, out_path)                  # best-on-val
+
+    return {"out_path": out_path, "last_path": last_path, "history": history, "best_val": best_val}
+
+
+def load_generator(path, device=None):
+    """Construct a MWGenerator from a checkpoint's recorded hyperparams and load its weights."""
+    device = device or DEV
+    ckpt = torch.load(path, map_location=device)
+    model = MWGenerator(knn=ckpt["knn"], d_model=ckpt["d_model"], n_layers=ckpt["n_layers"],
+                         n_heads=ckpt["n_heads"], num_bins=ckpt["num_bins"], tail_bound=ckpt["tail_bound"],
+                         periods=ckpt["periods"])
+    model.load_state_dict(ckpt["state_dict"])
+    model.to(device)
+    model.eval()
+    return model
+
+
+def orderspread(ckpt="mw_gen_N64.pt", M=64, K=32, seed=0, bank_path=None, device=None):
+    """Phase-2 entry diagnostics on reference configs for a trained generator (recorded, NOT gated).
+
+    (i)   log q~ spread under K RANDOM storage orderings (preordered=True, forced-order scoring):
+          per the SMC-base role log_prob(..., preordered=True) scores x in ITS GIVEN storage order,
+          so re-labeling storage moves the value -- this measures that spread against the 2D-WCA
+          campaign's 0.027 nats/particle ordering-penalty benchmark (MEMORY
+          "ordered-space-mh-exactness-efficiency").
+    (ii)  canonicalization stability under the frozen MC step-size perturbation: how often the
+          canonical_order permutation itself changes (a particle crosses a cell boundary), and the
+          resulting |Delta log_prob| (canonical mode) on those flips -- the scale of the
+          mutation-MH discontinuity this ordering choice would induce.
+    (iii) the trained sampler's carry-forward exactness counters: n_wrapped and the noncanonical
+          fraction of canonical_order(sample) == arange(N).
+
+    Saves all arrays to artifacts/mw_orderspread_N64.pt; returns the same dict.
+    """
+    device = device or DEV
+    ckpt_path = ckpt if os.path.isabs(ckpt) else os.path.join(ART, ckpt)
+    N = torch.load(ckpt_path, map_location="cpu")["train_N"]
+    model = load_generator(ckpt_path, device)
+    L = (N / RHO_STAR) ** (1.0 / 3.0)
+
+    if bank_path is None:
+        bank_path = os.path.join(ART, "mw_g2_N64.pt")
+    bank = torch.load(bank_path, map_location="cpu")
+    cfgs_all = torch.remainder(bank["ref"]["cfgs"], L)
+    ref_step = float(bank["ref"]["step"])
+
+    g = torch.Generator().manual_seed(seed)
+    idx = torch.randperm(cfgs_all.shape[0], generator=g)[:M]
+    cfgs = cfgs_all[idx].to(device)                                       # [M,N,3]
+
+    t, rank, R = mw_scaffold(N, L, device)
+
+    # (i) K random orderings -> per-config log q~ spread
+    gK = torch.Generator(device=device).manual_seed(seed + 1)
+    lps = torch.empty(K, M)
+    with torch.no_grad():
+        for k in range(K):
+            perm = torch.stack([torch.randperm(N, device=device, generator=gK) for _ in range(M)])
+            xp = torch.gather(cfgs, 1, perm[..., None].expand(-1, -1, 3))
+            lps[k] = model.log_prob(xp, L, preordered=True).cpu()
+    std_per_config = lps.std(dim=0) / N                                   # [M] nats/particle
+    mean_std, max_std = float(std_per_config.mean()), float(std_per_config.max())
+    print(f"orderspread (i): K={K} random orderings over M={M} configs -> log q~ std/N "
+          f"mean={mean_std:.4f} max={max_std:.4f} (2D-WCA ordering-penalty ref: 0.027 nats/particle)",
+          flush=True)
+
+    # (ii) canonicalization stability under the frozen MC step-size perturbation
+    gp = torch.Generator(device=device).manual_seed(seed + 2)
+    pert = ref_step * torch.randn(M, N, 3, device=device, generator=gp)
+    cfgs_pert = torch.remainder(cfgs + pert, L)
+    perm0 = canonical_order(cfgs, L, R, rank)
+    perm1 = canonical_order(cfgs_pert, L, R, rank)
+    changed = (perm0 != perm1).any(dim=1)                                 # [M]
+    p_changed = float(changed.float().mean())
+    with torch.no_grad():
+        lp0 = model.log_prob(cfgs, L)
+        lp1 = model.log_prob(cfgs_pert, L)
+    dlp = (lp1 - lp0).abs()
+    n_flips = int(changed.sum())
+    dlp_flip = dlp[changed].cpu()
+    print(f"orderspread (ii): P(canonical order changed)={p_changed:.4f} (n_flips={n_flips}/{M}, "
+          f"step={ref_step:.4f}); |delta log_prob| on flips: "
+          f"mean={float(dlp_flip.mean()) if n_flips else float('nan'):.4f} "
+          f"max={float(dlp_flip.max()) if n_flips else float('nan'):.4f}", flush=True)
+
+    # (iii) trained sampler's carry-forward exactness counters
+    gS = torch.Generator(device=device).manual_seed(seed + 3)
+    with torch.no_grad():
+        xs, _, n_wrapped = model.sample(512, N, L, gen=gS)
+    perm_s = canonical_order(xs, L, R, rank)
+    noncanon = (perm_s != torch.arange(N, device=device)[None]).any(dim=1)
+    noncanon_frac = float(noncanon.float().mean())
+    print(f"orderspread (iii): sample(512) -> n_wrapped={n_wrapped} (of {512 * N} steps), "
+          f"noncanonical_frac={noncanon_frac:.4f}", flush=True)
+
+    out = {"M": M, "K": K, "seed": seed, "N": N, "L": L, "ref_step": ref_step,
+           "lps": lps, "std_per_config": std_per_config, "mean_std": mean_std, "max_std": max_std,
+           "perm0": perm0.cpu(), "perm1": perm1.cpu(), "changed": changed.cpu(), "p_changed": p_changed,
+           "dlp": dlp.cpu(), "dlp_flip": dlp_flip, "n_flips": n_flips,
+           "n_wrapped": n_wrapped, "noncanon_frac": noncanon_frac}
+    os.makedirs(ART, exist_ok=True)
+    out_path = os.path.join(ART, "mw_orderspread_N64.pt")
+    torch.save(out, out_path)
+    print(f"orderspread: saved -> {out_path}", flush=True)
+    return out
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="mW generator training + Phase-2 entry diagnostics")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    p_tr = sub.add_parser("train")
+    p_tr.add_argument("--steps", type=int, default=20000)
+    p_tr.add_argument("--batch", type=int, default=32)
+    p_tr.add_argument("--lr", type=float, default=3e-4)
+    p_tr.add_argument("--val_every", type=int, default=500)
+    p_tr.add_argument("--out", type=str, default="mw_gen_N64.pt")
+    p_tr.add_argument("--seed", type=int, default=0)
+    p_tr.add_argument("--thin_events", type=int, default=6)
+    p_tr.add_argument("--val_frac", type=float, default=0.1)
+    p_tr.add_argument("--knn", type=int, default=DEFAULT_MODEL_KW["knn"])
+    p_tr.add_argument("--d_model", type=int, default=DEFAULT_MODEL_KW["d_model"])
+    p_tr.add_argument("--n_layers", type=int, default=DEFAULT_MODEL_KW["n_layers"])
+    p_tr.add_argument("--n_heads", type=int, default=DEFAULT_MODEL_KW["n_heads"])
+    p_tr.add_argument("--num_bins", type=int, default=DEFAULT_MODEL_KW["num_bins"])
+    p_tr.add_argument("--tail_bound", type=float, default=DEFAULT_MODEL_KW["tail_bound"])
+
+    p_os = sub.add_parser("orderspread")
+    p_os.add_argument("--ckpt", type=str, default="mw_gen_N64.pt")
+    p_os.add_argument("--M", type=int, default=64)
+    p_os.add_argument("--K", type=int, default=32)
+    p_os.add_argument("--seed", type=int, default=0)
+
+    args = parser.parse_args()
+    if args.cmd == "train":
+        train(steps=args.steps, batch=args.batch, lr=args.lr, val_every=args.val_every, out=args.out,
+              seed=args.seed, thin_events=args.thin_events, val_frac=args.val_frac, knn=args.knn,
+              d_model=args.d_model, n_layers=args.n_layers, n_heads=args.n_heads,
+              num_bins=args.num_bins, tail_bound=args.tail_bound)
+    elif args.cmd == "orderspread":
+        orderspread(ckpt=args.ckpt, M=args.M, K=args.K, seed=args.seed)

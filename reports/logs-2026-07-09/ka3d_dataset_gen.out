@@ -1,0 +1,10 @@
+[3d-data] equilibrated 128 chains N=512 L=7.53 T=0.5 in 61.8 min | U/N=-6.7345
+[3d-data] snapshot 1/8: 128 configs U/N=-6.7381+-0.0300  (68.1 min)
+[3d-data] snapshot 2/8: 128 configs U/N=-6.7455+-0.0296  (74.4 min)
+[3d-data] snapshot 3/8: 128 configs U/N=-6.7505+-0.0307  (80.8 min)
+[3d-data] snapshot 4/8: 128 configs U/N=-6.7567+-0.0313  (87.1 min)
+[3d-data] snapshot 5/8: 128 configs U/N=-6.7650+-0.0321  (94.9 min)
+[3d-data] snapshot 6/8: 128 configs U/N=-6.7603+-0.0304  (105.2 min)
+[3d-data] snapshot 7/8: 128 configs U/N=-6.7726+-0.0295  (116.7 min)
+[3d-data] snapshot 8/8: 128 configs U/N=-6.7766+-0.0283  (129.1 min)
+[3d-data] DONE 1024 configs -> liquid_coupling_flow/artifacts/ka3d_dataset_N512_T0.5.pt  <U/N>=-6.7582+-0.0326

@@ -13,12 +13,13 @@ class JointSpeciesFlow(nn.Module):
     """Shared EGNN trunk -> (position velocity v, per-particle species logits)."""
 
     def __init__(self, n_particles, L, hidden_nf=32, n_layers=3, n_species=2, tanh=True, attention=True,
-                 two_time=False):
+                 two_time=False, n_dimension=2):
         super().__init__()
         self.N = n_particles; self.L = float(L); self.n_species = n_species; self.two_time = two_time
-        self.dyn = EGNN_dynamics(n_particles=n_particles, n_dimension=2, hidden_nf=hidden_nf, n_layers=n_layers,
-                                 recurrent=True, attention=attention, condition_time=True, tanh=tanh, agg="sum",
-                                 L=float(L), n_species=n_species)
+        self.n_dim = int(n_dimension)                                     # 2 (default, unchanged) or 3
+        self.dyn = EGNN_dynamics(n_particles=n_particles, n_dimension=self.n_dim, hidden_nf=hidden_nf,
+                                 n_layers=n_layers, recurrent=True, attention=attention, condition_time=True,
+                                 tanh=tanh, agg="sum", L=float(L), n_species=n_species)
         self.species_head = nn.Sequential(nn.Linear(hidden_nf, hidden_nf), nn.SiLU(), nn.Linear(hidden_nf, n_species))
         if two_time:
             # decoupled species-noise clock: injected additively after the EGNN input projection so the
@@ -44,11 +45,11 @@ class JointSpeciesFlow(nn.Module):
         return [src, dst]
 
     def forward(self, t, x, s, t_spec=None):
-        """t (=t_pos) [B,1,1], x [B,N,2], s [B,N] long, t_spec [B,1,1] (two_time only; default = t)
-        -> v [B,N,2], logits [B,N,n_species]."""
+        """t (=t_pos) [B,1,1], x [B,N,D], s [B,N] long, t_spec [B,1,1] (two_time only; default = t)
+        -> v [B,N,D], logits [B,N,n_species]. D = self.n_dim (2 or 3)."""
         dyn = self.dyn; B = x.shape[0]; N = self.N; dev = x.device
         edges = self._edges(x, B, N, dev)
-        xf = x.reshape(B * N, 2)
+        xf = x.reshape(B * N, self.n_dim)
         h_t = t.expand(-1, N, -1).reshape(B * N, 1)                       # time scalar per node
         h = torch.cat([h_t, dyn.species_embedding(s).view(B * N, -1)], dim=-1)
         edge_attr = dist_sq_torus(xf[edges[0]], xf[edges[1]], self.L).unsqueeze(-1)
@@ -59,14 +60,14 @@ class JointSpeciesFlow(nn.Module):
             hh = hh + self.tspec_proj(ts.expand(-1, N, -1).reshape(B * N, 1))
         for i in range(egnn.n_layers):
             hh, xx, _ = egnn._modules["gcl_%d" % i](hh, edges, xx, edge_attr=edge_attr)
-        vel = log_map(xf, xx, self.L).view(B, N, 2)                       # torus velocity = coordinate update
+        vel = log_map(xf, xx, self.L).view(B, N, self.n_dim)              # torus velocity = coordinate update
         logits = self.species_head(hh).view(B, N, self.n_species)
         return vel, logits
 
     # ---- generation: Euler ODE for x + count-preserving swap tau-leap for s ----
     @torch.no_grad()
     def sample(self, x0, s0, n_steps=250, n_inner=4, swap_scale=1.0, t_eps=1e-3):
-        """x0 [B,N,2] (torus), s0 [B,N] long (exactly 22:22). Returns x1 [B,N,2], s1 [B,N] long (still 22:22)."""
+        """x0 [B,N,D] (torus), s0 [B,N] long (count-preserved). Returns x1 [B,N,D], s1 [B,N] long. D=self.n_dim."""
         B, N = x0.shape[0], self.N; dev = x0.device
         x = x0.clone(); s = s0.clone(); dt = 1.0 / n_steps
         ar = torch.arange(B, device=dev)
@@ -165,7 +166,7 @@ def denoiser_eval(model, x1, s1, t_eval=0.9, n_rep=4, t_pos=None):
     tp_val = t_eval if t_pos is None else t_pos
     accs, confs, cors, mm_accs = [], [], [], []
     for _ in range(n_rep):
-        x0 = torch.rand(B, N, 2, device=dev) * L
+        x0 = torch.rand(B, N, model.n_dim, device=dev) * L
         x0 = global_position_ot(x0, x1, L)
         tp = torch.full((B,), tp_val, device=dev)
         t = torch.full((B,), t_eval, device=dev)
@@ -209,6 +210,6 @@ def joint_loss(model, x0, x1, s0, s1, lam=1.0):
         s_t = kawasaki_interpolate(s0, s1, t)
         v, logits = model(t.view(B, 1, 1), x_t, s_t)
     target = -log_map(x1, x0, L)
-    L_pos = (torch.sum((v - target) ** 2, dim=(1, 2)) / (N * 2)).mean()
+    L_pos = (torch.sum((v - target) ** 2, dim=(1, 2)) / (N * model.n_dim)).mean()
     L_spec = F.cross_entropy(logits.reshape(B * N, -1), s1.reshape(B * N))
     return L_pos + lam * L_spec, L_pos.detach(), L_spec.detach()

@@ -90,8 +90,15 @@ transferred across N without a cliff.
   frame + fixed-period physical radial encodings (size-invariant). Monatomic ⇒ no species machinery.
 - **Head:** per-coordinate factorized rational-quadratic-spline conditional for the residual w.r.t. the
   frame anchor (same head family as `ka_flowhead`, widened to 3 coordinates).
-- **Density bookkeeping:** q₀(x) evaluated via the deterministic canonical (curve) ordering; exactness
-  tests = sample↔log_prob agreement (per-step, 1e-5 scale) + noncanonical-fraction counter. Note: the AR
+- **Density bookkeeping (amended 2026-07-09 after Task-9 measurement — identity-init sampling is ~100%
+  noncanonical at N=64, so canonical-lift evaluation of SAMPLES would mis-state their density):** for the
+  SMC-base role, q₀ lives on LABELED space: the SMC state's storage order is the generation slot order and
+  q₀(x) = the AR density evaluated PREORDERED (slot order). Sample and density then agree exactly for every
+  draw (no rejection, no gating), mutation ratios carry no canonical-order-flip discontinuities, and the
+  label-blind target e^{−βU} keeps labeled-space SMC exact. Canonical ordering is used ONLY to factorize
+  training data (MLE on reference configs) and for diagnostics; the noncanonical-fraction counter remains
+  as a training-quality metric, not an exactness patch. Exactness test = ungated sample↔log_prob(preordered)
+  agreement on every sample (1e-4). Note: the AR
   density is not local — a single-site move changes downstream conditionals — so each mutation MH
   evaluation costs one teacher-forced forward (B-parallel). Acceptable at N≤216; in the value regime the
   NN forward is the cheap component by assumption.

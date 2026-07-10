@@ -1,0 +1,4 @@
+BEDROCK N=2: <U> -0.390681 (halving err 4.61e-09)
+BEDROCK N=3: <U> -0.952723 (halving err 2.32e-03)
+G1 N=2: quad -0.390681 (halv 4.61e-09) | MC -0.390735 +/- 0.001494 (acc 0.64, step 176147.018, flat 0.0249) | |diff| 0.000054 < tol 0.004481 -> PASS
+G1 N=3: quad -0.952723 (halv 2.32e-03) | MC -0.951069 +/- 0.001877 (acc 0.51, step 176147.018, flat 0.0188) | |diff| 0.001654 < tol 0.007950 -> PASS

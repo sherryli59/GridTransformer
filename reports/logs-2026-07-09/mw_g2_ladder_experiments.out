@@ -1,0 +1,4 @@
+et0.9_ns10_f0      rungs   68  evals   2785792  wall   23.2s  U/N -1.8662  (ref -1.8631)  gap -0.0031
+et0.95_ns10_f0     rungs   92  evals   3768832  wall   31.0s  U/N -1.8620  (ref -1.8631)  gap +0.0011
+et0.9_ns10_f2k     rungs   69  evals  10977792  wall   85.7s  U/N -1.8612  (ref -1.8631)  gap +0.0019
+et0.6_ns10_f10k    rungs   34  evals  42312192  wall  329.9s  U/N -1.8650  (ref -1.8631)  gap -0.0019

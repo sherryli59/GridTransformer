@@ -1,0 +1,9 @@
+=== G2 N=8 Thu 09 Jul 2026 05:26:12 PM PDT ===
+G2 N=8: L=2.5977 beta=10.3814 ref(equil=20000,collect=20000,every=4,B=16) smc(B=512)
+G2 N=8 <U>/N: SMC -1.8450+/-0.0021 vs ref -1.8631+/-0.0003 | |diff| 0.0181 < tol 0.0073 -> FAIL
+G2 N=8 P(U/N) TV: 0.1939 < 0.05 -> FAIL
+G2 N=8 g(r): max|dg| 0.4366 < 0.10 -> FAIL
+G2 N=8 OVERALL -> FAIL
+G2 N=8: saved -> /mnt/ssd/GridTransformer/liquid_coupling_flow/mw/artifacts/mw_g2_N8.pt
+=== G2 N=64 Thu 09 Jul 2026 05:43:09 PM PDT ===
+G2 N=64: L=5.1953 beta=10.3814 ref(equil=40000,collect=8000,every=4,B=16) smc(B=512)

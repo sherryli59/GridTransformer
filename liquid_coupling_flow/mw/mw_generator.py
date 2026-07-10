@@ -412,6 +412,33 @@ def load_training_bank(art_path=None, thin_events=6, val_frac=0.1):
     return x_train, x_val, L
 
 
+def _augment_batch(x, L, gen):
+    """Exact on-the-fly data augmentation: per batch element, a continuous torus translation
+    followed by a random element of the 48-element cubic group O_h.
+
+    (a) translation: x -> remainder(x + v, L), v ~ U[0,L)^3 drawn per config -- exact symmetry of
+        the periodic box.
+    (b) O_h element as a SIGNED COORDINATE PERMUTATION about the box center c = L/2:
+        y_i = s_i * (x - c)_{perm(i)} + c, perm ~ U(S_3), s ~ U{+-1}^3. Signed permutation
+        matrices with arbitrary sign pattern realize the full 48-element group O_h (24 proper
+        rotations x optional inversion); the improper half is exact too (SW/mW is achiral and the
+        box symmetric). Deliberately NOT continuous rotations -- those are not a symmetry of the
+        periodic box.
+
+    All randomness through `gen` (device must match x). Returns [B,N,3] in [0,L).
+    """
+    B, N, _ = x.shape
+    device = x.device
+    v = torch.rand(B, 1, 3, device=device, generator=gen) * L
+    x = torch.remainder(x + v, L)
+    perm = torch.rand(B, 3, device=device, generator=gen).argsort(dim=1)          # [B,3] ~ U(S_3)
+    signs = (torch.randint(0, 2, (B, 3), device=device, generator=gen) * 2 - 1).to(x.dtype)
+    c = L / 2.0
+    xc = x - c                                                                     # [-c, c)
+    xp = torch.gather(xc, 2, perm[:, None, :].expand(-1, N, -1))                   # xp[...,i] = xc[...,perm[i]]
+    return torch.remainder(c + signs[:, None, :] * xp, L)
+
+
 def _val_nll(model, x_val, L, N, chunk=64):
     """Full-val NLL/particle, chunked, no_grad. Restores the model's train/eval mode on exit."""
     was_training = model.training
@@ -427,7 +454,7 @@ def _val_nll(model, x_val, L, N, chunk=64):
 
 
 def train(steps=20000, batch=32, lr=3e-4, val_every=500, out="mw_gen_N64.pt", seed=0,
-          art_path=None, thin_events=6, val_frac=0.1, device=None, **model_kw):
+          art_path=None, thin_events=6, val_frac=0.1, device=None, augment=True, **model_kw):
     """MLE-train MWGenerator on the banked reference configs (load_training_bank).
 
     Loss = -log_prob(batch, L).mean()/N, CANONICAL mode (preordered=False): the banked training
@@ -435,6 +462,9 @@ def train(steps=20000, batch=32, lr=3e-4, val_every=500, out="mw_gen_N64.pt", se
     canonical_order is the deterministic AR factorization of unordered data. `model_kw` overrides
     MWGenerator's default hyperparams (DEFAULT_MODEL_KW); `art_path`/`thin_events`/`val_frac` let
     tests point at a small synthetic bank without touching the production data path.
+
+    augment=True applies _augment_batch (exact torus translations + cubic O_h) to each TRAIN batch
+    only; validation stays fixed/unaugmented so val NLL is comparable across evals (checkpointing).
 
     Val-loss checkpointing is a hard requirement (train-loss checkpointing is the measured trap in
     this repo, MEMORY "exposure-bias-noise-run"): every val_every steps this evaluates full-val
@@ -459,9 +489,11 @@ def train(steps=20000, batch=32, lr=3e-4, val_every=500, out="mw_gen_N64.pt", se
     last_path = out_path[:-3] + "_last.pt"
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
+    aug_gen = torch.Generator(device=device).manual_seed(seed + 1) if augment else None
+
     uniform_nll = 3.0 * math.log(L)                       # calibration reference: -log(L^-3N)/N
     print(f"train: N={N} L={L:.4f} n_train={x_train.shape[0]} n_val={x_val.shape[0]} device={device} "
-          f"uniform_baseline_nll_per_particle={uniform_nll:.4f}", flush=True)
+          f"augment={augment} uniform_baseline_nll_per_particle={uniform_nll:.4f}", flush=True)
 
     def _ckpt(val_nll, step):
         return {"state_dict": model.state_dict(), "knn": kw["knn"], "d_model": kw["d_model"],
@@ -474,6 +506,8 @@ def train(steps=20000, batch=32, lr=3e-4, val_every=500, out="mw_gen_N64.pt", se
     for step in range(steps):
         idx = torch.randint(0, x_train.shape[0], (batch,), device=device)
         xb = x_train[idx]
+        if augment:
+            xb = _augment_batch(xb, L, aug_gen)
         loss = -model.log_prob(xb, L).mean() / N
         opt.zero_grad()
         loss.backward()
@@ -611,6 +645,7 @@ if __name__ == "__main__":
     p_tr.add_argument("--seed", type=int, default=0)
     p_tr.add_argument("--thin_events", type=int, default=6)
     p_tr.add_argument("--val_frac", type=float, default=0.1)
+    p_tr.add_argument("--augment", action=argparse.BooleanOptionalAction, default=True)
     p_tr.add_argument("--knn", type=int, default=DEFAULT_MODEL_KW["knn"])
     p_tr.add_argument("--d_model", type=int, default=DEFAULT_MODEL_KW["d_model"])
     p_tr.add_argument("--n_layers", type=int, default=DEFAULT_MODEL_KW["n_layers"])
@@ -627,8 +662,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
     if args.cmd == "train":
         train(steps=args.steps, batch=args.batch, lr=args.lr, val_every=args.val_every, out=args.out,
-              seed=args.seed, thin_events=args.thin_events, val_frac=args.val_frac, knn=args.knn,
-              d_model=args.d_model, n_layers=args.n_layers, n_heads=args.n_heads,
-              num_bins=args.num_bins, tail_bound=args.tail_bound)
+              seed=args.seed, thin_events=args.thin_events, val_frac=args.val_frac,
+              augment=args.augment, knn=args.knn, d_model=args.d_model, n_layers=args.n_layers,
+              n_heads=args.n_heads, num_bins=args.num_bins, tail_bound=args.tail_bound)
     elif args.cmd == "orderspread":
         orderspread(ckpt=args.ckpt, M=args.M, K=args.K, seed=args.seed)

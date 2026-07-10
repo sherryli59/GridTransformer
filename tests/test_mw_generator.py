@@ -265,6 +265,24 @@ def test_training_bank_wraps_domain(tmp_path):
     assert bool((x_val >= 0).all() and (x_val < L_out).all())
     assert torch.allclose(x_train, torch.full_like(x_train, 0.37), atol=1e-5)
 
+def test_augment_exactness():
+    # Ground-truth check that _augment_batch is an exact symmetry of U (torus translation + cubic
+    # O_h) -- catches sign/center/wrap bugs directly at the energy level: any wrong center, sign
+    # convention, or non-symmetry element changes pair distances and hence mw_energy.
+    from liquid_coupling_flow.mw.mw_generator import _augment_batch
+    from liquid_coupling_flow.mw.mw_energy import mw_energy, RHO_STAR
+    N = 27
+    L = (N / RHO_STAR) ** (1.0 / 3.0)
+    g = torch.Generator().manual_seed(0)
+    x = torch.rand(16, N, 3, generator=g) * L
+    xa = _augment_batch(x, L, g)
+    assert xa.shape == x.shape
+    assert bool((xa >= 0).all() and (xa < L).all())
+    assert not torch.allclose(xa, x)                      # actually transformed, not identity
+    U0, U1 = mw_energy(x, L), mw_energy(xa, L)
+    rel = ((U1 - U0).abs() / U0.abs().clamp_min(1.0)).max()
+    assert float(rel) < 1e-4, f"augmentation changed the energy: max rel diff {float(rel):.2e}"
+
 def test_train_smoke(tmp_path):
     # 30 steps on a tiny model config, tiny synthetic bank ("200-config slice"): checks the training
     # loop plumbing (finite + decreasing loss, both checkpoint files, load_generator round-trip) --

@@ -1,4 +1,4 @@
-import math, torch
+import math, os, torch
 from liquid_coupling_flow.mw.mw_base import UniformBase
 from liquid_coupling_flow.mw.mw_smc import ess, next_lambda, smc_run, mutation_sweeps
 from liquid_coupling_flow.mw.mw_energy import mw_energy
@@ -81,3 +81,18 @@ def test_g2_smoke():
     assert out["null"]["tv"].shape == (20,) and torch.isfinite(out["null"]["tv"]).all()
     assert out["null"]["max_dg"].shape == (20,) and torch.isfinite(out["null"]["max_dg"]).all()
     assert math.isfinite(out["tv_U_per_N"]["null95"]) and math.isfinite(out["g_r"]["null95"])
+
+def test_g3_smoke(tmp_path):
+    # tiny N=8 unit, redirected save/plot paths so this can never touch the real mw_g3.pt or
+    # collide with the N=64 G2 gate running concurrently on the GPU. ess_target=0.8 (not the
+    # certified 0.95) keeps the rung count -- and wall-clock -- small for a smoke test.
+    from liquid_coupling_flow.mw.mw_gates import g3
+    art_path = str(tmp_path / "mw_g3_smoke.pt")
+    plot_path = str(tmp_path / "mw_g3_scaling_smoke.png")
+    out = g3(Ns=(8,), seeds=(0,), B=64, ess_target=0.8, step=0.0666,
+             art_path=art_path, plot_path=plot_path)
+    assert len(out["units"]) == 1
+    u = next(iter(out["units"].values()))
+    assert u["T"] > 0 and math.isfinite(u["evals"]) and math.isfinite(u["logZ"])
+    assert os.path.exists(art_path)
+    assert os.path.exists(plot_path)

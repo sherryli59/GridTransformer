@@ -28,7 +28,7 @@ This module is reused by Phase-2/3 re-gates (same g2() at later checkpoints of t
 Run: python -m liquid_coupling_flow.mw.mw_gates g2 <N> [B]
 """
 from __future__ import annotations
-import math, os, sys, torch
+import datetime, math, os, sys, torch
 from liquid_coupling_flow.mw.mw_base import UniformBase
 from liquid_coupling_flow.mw.mw_smc import smc_run
 from liquid_coupling_flow.mw.mw_reference import mc_run, g_r
@@ -36,6 +36,7 @@ from liquid_coupling_flow.mw.mw_energy import T_STAR, RHO_STAR
 
 ART = os.path.join(os.path.dirname(__file__), "artifacts")
 DEV = "cuda" if torch.cuda.is_available() else "cpu"
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 REF_B = 16                                  # independent MC chains (fixed, matches the G1 pattern)
 REF_BUDGETS = {8: (20000, 20000), 64: (40000, 8000)}   # N -> (n_equil, n_collect)
@@ -258,10 +259,144 @@ def g2(N, B=512, n_ref_equil=None, n_ref_collect=None, save_tag="_g2", n_sweeps=
     return result
 
 
+def g3(Ns=(27, 64, 125, 216), B=256, seeds=(0, 1), ess_target=0.95, n_sweeps=10, step=None,
+       art_path=None, plot_path=None):
+    """G3 rung-scaling harness: T_trivial(N) = the rung count of the CERTIFIED uniform-base SMC
+    protocol (frozen after three G2 iterations: ess_target=0.95, n_sweeps=10, step = the
+    reference's frozen adapted MH step) run at the ambient point for each N. This is the
+    proportional-to-N baseline that Phase-2's generator base will be judged against (a real
+    head-start = fewer rungs than this line at matched N).
+
+    Ambient point per N: beta=1/T_STAR, L=(N/RHO_STAR)**(1/3) (same T*, rho* as G1/G2 -- only the
+    box grows with N, density and temperature are held fixed).
+
+    step: if None, loaded from artifacts/mw_g2_N64.pt's ["ref"]["step"] -- the G2 gate's frozen,
+    lam=1-adapted single-site MH step at N=64. Justification for reusing ONE N's adapted step
+    across all of Ns: the adapted step targets a local per-move acceptance rate set by the
+    IMMEDIATE cage around a particle (density rho* and temperature T*, both held fixed across N
+    here) -- it is an INTENSIVE quantity, not an extensive one, so it should not need re-adapting
+    per system size at a fixed thermodynamic point. (G2 measured this directly: N=8's independently
+    adapted step, 0.0666, and N=64's, 0.0783, are the same order and both far from the naive 0.15
+    default -- consistent with, not a proof of, intensivity; G3 does not re-derive a step per N,
+    it assumes N=64's carries over.) Hard-fails with a clear message if the artifact is missing --
+    no default step is invented silently.
+
+    Per-unit checkpointing + resume: after EVERY (N, seed) unit the running results dict is
+    torch.save'd to art_path (default artifacts/mw_g3.pt); on startup, units already present in
+    that file are loaded and skipped (printed "SKIP (banked)"), so a killed/resumed campaign never
+    redoes finished (N, seed) pairs -- same discipline as ka_finite_size.run_unit.
+
+    After all units (banked + freshly run) a least-squares fit T = c*N THROUGH THE ORIGIN is
+    computed (c = sum(N*T)/sum(N*N)); R^2 uses the uncentered total sum-of-squares sum(T^2), the
+    convention for a no-intercept fit (there is no "mean model" baseline once the intercept is
+    fixed at 0). A T vs N scatter (both seeds) + the fit line is saved to plot_path (default
+    reports/logs-<today>/mw_g3_scaling.png).
+
+    Run: python -m liquid_coupling_flow.mw.mw_gates g3
+    """
+    if art_path is None:
+        art_path = os.path.join(ART, "mw_g3.pt")
+    if plot_path is None:
+        plot_path = os.path.join(REPO_ROOT, "reports",
+                                  f"logs-{datetime.date.today().isoformat()}", "mw_g3_scaling.png")
+
+    if step is None:
+        step_src = os.path.join(ART, "mw_g2_N64.pt")
+        if not os.path.exists(step_src):
+            raise FileNotFoundError(
+                f"g3: step=None and the N=64 reference artifact is missing ({step_src}); "
+                f"run G2 N=64 first (it certifies the frozen adapted MH step this harness reuses "
+                f"across N as an intensive quantity), or pass step=<float> explicitly.")
+        step = float(torch.load(step_src, map_location="cpu", weights_only=False)["ref"]["step"])
+        print(f"G3: step={step:.4f} loaded from {step_src} (N=64 frozen adapted step)", flush=True)
+
+    units = {}
+    if os.path.exists(art_path):
+        prev = torch.load(art_path, map_location="cpu", weights_only=False)
+        units = prev.get("units", {})
+
+    beta = 1.0 / T_STAR
+    for N in Ns:
+        L = (N / RHO_STAR) ** (1.0 / 3.0)
+        for seed in seeds:
+            key = f"N{N}_s{seed}"
+            if key in units:
+                u = units[key]
+                print(f"G3 N={N} s={seed}: SKIP (banked: T={u['T']} U/N={u['U_per_N']:.4f})",
+                      flush=True)
+                continue
+            out = smc_run(UniformBase(N, L), N, L, beta, B=B, ess_target=ess_target,
+                          n_sweeps=n_sweeps, step=step, seed=seed, save_tag=f"_g3_N{N}_s{seed}")
+            T = sum(1 for h in out["history"] if not h.get("final", False))
+            w = torch.softmax(out["logw"].double(), 0)
+            um = float((w * (out["U"] / N).double()).sum())
+            unit = {"N": N, "seed": seed, "L": L, "T": T, "evals": out["evals"],
+                    "logZ": out["logZ"], "U_per_N": um, "wall": out["wall"]}
+            units[key] = unit
+            print(f"G3 N={N} s={seed}: T={T} evals={out['evals']} U/N={um:.4f} "
+                  f"wall={out['wall']:.0f}s", flush=True)
+            os.makedirs(os.path.dirname(art_path), exist_ok=True)
+            torch.save({"units": units, "Ns": Ns, "B": B, "seeds": seeds,
+                        "ess_target": ess_target, "n_sweeps": n_sweeps, "step": step}, art_path)
+
+    # least-squares fit T = c*N through the origin, over ALL units (banked + fresh)
+    Ns_all = torch.tensor([u["N"] for u in units.values()], dtype=torch.float64)
+    Ts_all = torch.tensor([u["T"] for u in units.values()], dtype=torch.float64)
+    c = float((Ns_all * Ts_all).sum() / (Ns_all * Ns_all).sum())
+    ss_res = float(((Ts_all - c * Ns_all) ** 2).sum())
+    ss_tot = float((Ts_all ** 2).sum())      # uncentered (no-intercept) convention
+    r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
+
+    print(f"G3 fit (through origin, {len(units)} units): T = {c:.4f} * N   R^2={r2:.4f}",
+          flush=True)
+    for N in sorted({u["N"] for u in units.values()}):
+        Ts_N = [u["T"] for u in units.values() if u["N"] == N]
+        mean_T = sum(Ts_N) / len(Ts_N)
+        print(f"G3 N={N}: mean T={mean_T:.2f}  T/N={mean_T / N:.4f}  n_seeds={len(Ts_N)}",
+              flush=True)
+
+    result = {"units": units, "Ns": Ns, "B": B, "seeds": seeds, "ess_target": ess_target,
+              "n_sweeps": n_sweeps, "step": step, "fit": {"c": c, "r2": r2}}
+    os.makedirs(os.path.dirname(art_path), exist_ok=True)
+    torch.save(result, art_path)
+    print(f"G3: saved -> {art_path}", flush=True)
+
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots(figsize=(6, 4.5))
+    for seed in sorted({u["seed"] for u in units.values()}):
+        Ns_s = [u["N"] for u in units.values() if u["seed"] == seed]
+        Ts_s = [u["T"] for u in units.values() if u["seed"] == seed]
+        ax.scatter(Ns_s, Ts_s, label=f"seed {seed}", zorder=3)
+    n_max = max(float(Ns_all.max()), 1.0)
+    n_line = torch.linspace(0.0, n_max * 1.05, 50)
+    ax.plot(n_line.numpy(), (c * n_line).numpy(), "k--",
+            label=f"fit: T={c:.3f}N (R^2={r2:.3f})", zorder=2)
+    ax.set_xlabel("N")
+    ax.set_ylabel("T (rung count)")
+    ax.set_title("G3: uniform-base SMC rung count vs N (certified protocol)")
+    ax.legend()
+    fig.tight_layout()
+    os.makedirs(os.path.dirname(plot_path), exist_ok=True)
+    fig.savefig(plot_path, dpi=120)
+    plt.close(fig)
+    print(f"G3 plot saved -> {plot_path}", flush=True)
+
+    return result
+
+
 if __name__ == "__main__":
-    if len(sys.argv) < 3 or sys.argv[1] != "g2":
+    if len(sys.argv) < 2 or sys.argv[1] not in ("g2", "g3"):
         print("usage: python -m liquid_coupling_flow.mw.mw_gates g2 <N> [B]", file=sys.stderr)
+        print("       python -m liquid_coupling_flow.mw.mw_gates g3", file=sys.stderr)
         sys.exit(1)
-    N_arg = int(sys.argv[2])
-    B_arg = int(sys.argv[3]) if len(sys.argv) > 3 else 512
-    g2(N_arg, B=B_arg)
+    if sys.argv[1] == "g2":
+        if len(sys.argv) < 3:
+            print("usage: python -m liquid_coupling_flow.mw.mw_gates g2 <N> [B]", file=sys.stderr)
+            sys.exit(1)
+        N_arg = int(sys.argv[2])
+        B_arg = int(sys.argv[3]) if len(sys.argv) > 3 else 512
+        g2(N_arg, B=B_arg)
+    else:
+        g3()

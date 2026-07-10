@@ -104,8 +104,30 @@ def test_sample_logprob_consistency_preordered():
     g = torch.Generator().manual_seed(0)
     x, lq_s, nwrap = m.sample(8, 64, L, gen=g)
     lq_e = m.log_prob(x, L, preordered=True)
-    if nwrap == 0:
-        assert torch.allclose(lq_s, lq_e, atol=1e-3), float((lq_s - lq_e).abs().max())
+    # Loud wrap guard: the seed is fixed and known to give nwrap==0, so if a future change produces
+    # wraps this gate must FAIL (pick a new nwrap==0 seed deliberately), never silently skip.
+    assert nwrap == 0, f"expected nwrap==0 at this fixed seed, got {nwrap}"
+    assert torch.allclose(lq_s, lq_e, atol=1e-4), float((lq_s - lq_e).abs().max())
+
+def test_sample_logprob_consistency_perturbed():
+    # At identity init the head's Linear weights are ZERO, so the ENTIRE conditioning path (kNN
+    # mirror, frames, encoder, padding mask, ctx chaining, both logabsdet signs) is invisible to
+    # the density -- e.g. a transposed frame or desynchronized neighbor set would still pass the
+    # identity-init gate above (the Gaussian base is rotation-invariant, so any orthonormal-frame
+    # mixup preserves ||u|| and is invisible there; verified by mutation: transposing log_prob's
+    # frame einsum blows THIS test up to max|delta|=57.8 while the identity-init gate stays green).
+    # Perturbing ALL parameters makes every pathway load-bearing: the sequential sample-side and the
+    # vectorized teacher-forced side must construct identical conditioning for the assert to hold.
+    m = _model(); L = 5.198
+    torch.manual_seed(4)                                 # fixed perturbation seed, chosen for nwrap==0
+    with torch.no_grad():
+        for p in m.parameters():
+            p.add_(0.05 * torch.randn_like(p))
+    g = torch.Generator().manual_seed(0)
+    x, lq_s, nwrap = m.sample(8, 64, L, gen=g)
+    assert nwrap == 0, f"expected nwrap==0 at this fixed seed, got {nwrap}"
+    lq_e = m.log_prob(x, L, preordered=True)
+    assert torch.allclose(lq_s, lq_e, atol=1e-4), float((lq_s - lq_e).abs().max())
 
 def test_logprob_canonical_mode_on_canonical_configs():
     # DIAGNOSTIC (not the exactness gate -- that is the preordered test above): canonical-mode log_prob
@@ -137,13 +159,23 @@ def test_logprob_permutation_invariant():
     assert torch.allclose(m.log_prob(x, L), m.log_prob(x[:, perm], L), atol=1e-4)
 
 def test_conditional_normalized_1d():
-    # identity-init head: q(a|h) must integrate to 1 on a fine grid (Gaussian base, machine-level)
+    # q(a|h) must integrate to 1 on a fine grid, BOTH at identity init (Gaussian base, machine-level)
+    # and with mildly perturbed weights -- the perturbed case pins the ABSOLUTE sign of the inverse
+    # logabsdet in logp_a (a global sign flip would keep sample/log_prob mirror agreement, which uses
+    # forward and inverse ld with opposite signs, but breaks normalization: int q da != 1).
     from liquid_coupling_flow.mw.mw_generator import Spline3Head
     torch.manual_seed(0)
     head = Spline3Head(32, 8, 4.0)
     h = torch.randn(1, 32)
     a = torch.linspace(-8, 8, 4001)[:, None]
     lp = head.logp_a(h.expand(4001, -1), a)             # expose per-dim conditional for this test
+    z = torch.trapz(lp.exp().squeeze(), a.squeeze())
+    assert abs(float(z) - 1.0) < 1e-3
+    torch.manual_seed(4)
+    with torch.no_grad():
+        for p in head.parameters():
+            p.add_(0.05 * torch.randn_like(p))
+    lp = head.logp_a(h.expand(4001, -1), a)
     z = torch.trapz(lp.exp().squeeze(), a.squeeze())
     assert abs(float(z) - 1.0) < 1e-3
 

@@ -269,6 +269,8 @@ class MWGenerator(nn.Module):
         causal = jj[None, None, :] < jj[None, :, None]                            # [1,N(step j),N(cand k)]: k<j
         d = wrap_pm(xo[:, None, :, :] - t[None, :, None, :], L)                   # [B,N(step),N(cand),3]
         dist2 = (d ** 2).sum(-1)                                                   # [B,N,N]
+        # Exact-distance topk ties are measure-zero for continuous positions, and both passes rank
+        # bit-identical dist2 values, so tie-breaking cannot desynchronize sample vs log_prob.
         idx = dist2.masked_fill(~causal, 1e9).topk(K, dim=2, largest=False).indices  # [B,N,K] nearest-first
         nbr_pos = torch.gather(xo[:, None, :, :].expand(B, N, N, 3), 2,
                                 idx[..., None].expand(-1, -1, -1, 3))               # [B,N,K,3]
@@ -320,7 +322,7 @@ class MWGenerator(nn.Module):
                 placed = x[:, :j, :]                                                # [B,j,3]
                 d = wrap_pm(placed - tj[None, None, :], L)                          # [B,j,3]
                 dist2 = (d ** 2).sum(-1)                                             # [B,j]
-                idx = dist2.topk(k, dim=1, largest=False).indices                    # [B,k] nearest-first
+                idx = dist2.topk(k, dim=1, largest=False).indices                    # [B,k] nearest-first (ties: see log_prob)
                 real = torch.gather(d, 1, idx[..., None].expand(-1, -1, 3))          # [B,k,3] rel to anchor t_j
             else:
                 real = torch.zeros(B, 0, 3, device=device)
@@ -337,7 +339,7 @@ class MWGenerator(nn.Module):
 
             u, lq_u = self.head.sample(h, gen=gen)                                   # [B,3], [B]
             off = torch.einsum("bij,bi->bj", Rf, u * s)                              # frame -> world
-            n_wrapped += int((off.abs() > L / 2).any(-1).sum().item())
+            n_wrapped += int((off.abs() > L / 2).any(-1).sum().item())               # counts (config,step) events, not configs
             x[:, j, :] = torch.remainder(tj[None, :] + off, L)
             logq = logq + lq_u - 3 * math.log(s)
         return x, logq, n_wrapped

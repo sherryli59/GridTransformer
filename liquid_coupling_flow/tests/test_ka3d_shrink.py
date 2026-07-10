@@ -1,7 +1,9 @@
+import math
 import torch
-from liquid_coupling_flow.ka3d_shrink import lambda_tilde, shrink_particle_energy, shrink_pair_row
+from liquid_coupling_flow.ka3d_shrink import lambda_tilde, shrink_particle_energy, shrink_pair_row, cavity_move, replica_exchange
 from liquid_coupling_flow.ka_pmc_3d import particle_energies
 from liquid_coupling_flow.ka_energy import ka_energy, SIGMA, EPS, RCUT_FACTOR
+from liquid_coupling_flow.ka_cavity import assert_mobile_inside
 
 
 def _ref_particle_energy(x, s, L, lam, mobile):
@@ -64,3 +66,36 @@ def test_shrinkage_effect_lambda_half_mixed_mobile():
     xnew=x.clone(); xnew[rows,i]=xi
     delta_ref = 0.5*_ref_particle_energy(xnew,s,L,lam,mob).sum(1) - 0.5*_ref_particle_energy(x,s,L,lam,mob).sum(1)
     assert torch.allclose(delta_row, delta_ref, atol=1e-8)
+
+
+def test_cavity_move_never_escapes():
+    torch.manual_seed(0); N=80; L=(N/1.2)**(1/3); center=torch.tensor([L/2]*3); R=1.8
+    x=torch.rand(1,N,3)*L; s=torch.tensor([[0]*64+[1]*16])
+    d=x-center; d=d-L*torch.round(d/L); mob=d.square().sum(-1)<R*R
+    r=(x-center).norm(dim=-1,keepdim=True).clamp_min(1e-6)
+    x=torch.where(mob[...,None]&(r>=R), center+(x-center)/r*(R*0.9), x)   # valid start
+    U=0.5*shrink_particle_energy(x,s,L,1.0,mob).sum(1)
+    for _ in range(200): x,U,_=cavity_move(x,s,U,mob,center,R,L,2.0,1.0,0.08)
+    assert_mobile_inside(x,mob,center,R,L)
+
+
+def test_replica_exchange_weight_ratio_explicit():
+    # Two replicas, two fixed configs: log_acc is deterministic given the configs (the accept coin is
+    # drawn separately), so a single call suffices to check it against the explicit joint-weight ratio.
+    # double precision: random-uniform-at-density cores overlap hard enough that energies/logA reach
+    # ~1e8-1e9 (see below), where float32's ~1e-7 relative precision alone blows past the atol=1e-4
+    # deterministic-equality check.
+    torch.manual_seed(3); N=40; L=(N/1.2)**(1/3); center=torch.tensor([L/2]*3, dtype=torch.double); R=1.6
+    x=(torch.rand(2,N,3)*L).double(); s=torch.tensor([[0]*32+[1]*8]*2); mob=torch.ones(2,N,dtype=torch.bool)
+    betas=torch.tensor([2.0,1.3], dtype=torch.double); lams=torch.tensor([1.0,0.8], dtype=torch.double)
+    def H(cfg_x, lam): return float(0.5*shrink_particle_energy(cfg_x[None],s[:1],L,float(lam),mob[:1]).sum(1))
+    Ha_xa=H(x[0],1.0); Hb_xb=H(x[1],0.8); Ha_xb=H(x[1],1.0); Hb_xa=H(x[0],0.8)
+    logA=-(2.0*(Ha_xb-Ha_xa)) - (1.3*(Hb_xa-Hb_xb))
+    # random-uniform N=40 @ rho=1.2 gives astronomically overlapping cores (logA ~ 1e8+): min(1,exp(x))
+    # is well-defined for any real x, but math.exp(x) itself overflows there, so guard it (mathematically
+    # identical to min(1.0, math.exp(loga)) for every real loga, just without the OverflowError crash).
+    def acc_prob(loga): return 1.0 if loga >= 0 else math.exp(loga)
+    expected=acc_prob(logA)
+    _,_,la=replica_exchange(x.clone(), s.clone(), mob, center, R, L, betas, lams)
+    assert abs(float(la[0]) - logA) < 1e-4
+    assert abs(acc_prob(float(la[0])) - expected) < 1e-4

@@ -75,3 +75,19 @@ MODEL PROPOSAL, not a MELTED high-T ensemble -> no basin-hopping. This is exactl
 paper needed temperature-PT (+ shrinkage, ~xi_PTS replicas) for. FIX = add TEMPERATURE annealing (melt-then-
 cool) to the SMC path and/or basin-crossing moves (swap/cluster); local-move + constraint-anneal alone is
 insufficient beyond the single-basin regime.
+
+## Basin-crossing attempts (user: tackle multi-basin failure WITHOUT classic tempering)
+Estimator note: the PAPER's G_PTS = overlap of TWO INDEPENDENT samples (= qc_pair here), NOT sample-vs-ref.
+Under qc_pair the naive baseline is DEGENERATE (0.86-0.99 = under-mixed).
+- lambda-scheduled LARGE random blobs: R=2.0 qc_pair 0.99->0.79 PARTIAL. Random-centered clusters BEAT a
+  fixed geometric CORE (deterministic same-slot regen collapses all M samples -> qc_pair ~0.93).
+- REJECTED temperature-melt: it IS the paper's classic PT (model becomes a mere proposal) -> no new science.
+- MODEL-NATIVE MTM-JUMP (mtm_jump_b): batched N-trial large-block independence-MTM, generator teleports to
+  best-of-N basin, exact log q filters. Equilibrates ~4 sweeps, qc_pair->0.12 -- LOOKED like it revealed
+  under-mixing, but ENERGY CHECK REFUTES: MTM interior is +48/particle ABOVE reference at R=2.0 (+9 at R=1.4,
+  grows with R). Large-block (K=12) regen is CLASHY (model can't generate a clean 12-particle rearrangement);
+  MTM accepts among clashy proposals -> low qc_pair is a CLASH ARTIFACT, not equilibrium.
+BINDING CONSTRAINT: local moves clean-but-can't-cross; large moves cross-but-clashy. Basin-crossing is
+bottlenecked by the model's PROPOSAL QUALITY for large collective rearrangements (conditional gen-gap /
+in-block exposure bias) -- a MODEL problem, not a sampler trick. Fix = cleaner large-block conditional
+(scheduled sampling / in-block exposure-bias fix), NOT more enhanced sampling.

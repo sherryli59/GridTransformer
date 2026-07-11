@@ -92,7 +92,9 @@ class _ERSIDataModule(pl.LightningDataModule):
 def train(*, N: int = 64, K: int = 12, hidden_nf: int = 128, n_layers: int = 4,
           steps: int = 10_000, batch: int = 32, lr: float = 3e-4, ot: bool = True,
           out: str = "mw_ersi_N64.pt", bank_paths=None, seed: int = 0,
-          thin_events: int = 2, val_frac: float = 0.1, device: str = "cpu") -> dict:
+          thin_events: int = 2, val_frac: float = 0.1, device: str = "cpu",
+          checkpoint_dir: str | None = None, checkpoint_every: int = 1_000,
+          resume_from: str | None = None) -> dict:
     """Fit an mW eRSI velocity and save a portable reconstruction checkpoint.
 
     CPU is the safe default because the shared GPU belongs to active campaign
@@ -102,6 +104,8 @@ def train(*, N: int = 64, K: int = 12, hidden_nf: int = 128, n_layers: int = 4,
         raise ValueError(f"require 2 <= N and 1 <= K < N, got N={N}, K={K}")
     if steps < 1 or batch < 1:
         raise ValueError("steps and batch must be positive")
+    if checkpoint_every < 1:
+        raise ValueError("checkpoint_every must be positive")
     if not bank_paths:
         raise ValueError("bank_paths is required; training data is never guessed")
     if device != "cpu" and not (device == "cuda" and torch.cuda.is_available()):
@@ -109,6 +113,8 @@ def train(*, N: int = 64, K: int = 12, hidden_nf: int = 128, n_layers: int = 4,
 
     _add_learndiffeq_path()
     from pytorch_lightning.callbacks import Callback
+    from pytorch_lightning.callbacks import ModelCheckpoint
+    from pytorch_lightning.loggers import CSVLogger
 
     pl.seed_everything(seed, workers=True)
     L = L_for_N(N)
@@ -136,16 +142,25 @@ def train(*, N: int = 64, K: int = 12, hidden_nf: int = 128, n_layers: int = 4,
                 value = outputs["loss"] if isinstance(outputs, dict) else outputs
                 losses.append(float(value.detach().cpu()))
 
+        out_path = Path(out)
+        checkpoint_path = Path(checkpoint_dir) if checkpoint_dir is not None else out_path.with_name(
+            f"{out_path.stem}_checkpoints")
+        checkpoint_path.mkdir(parents=True, exist_ok=True)
+        checkpoint_cb = ModelCheckpoint(
+            dirpath=str(checkpoint_path), filename="step{step:06d}", every_n_train_steps=checkpoint_every,
+            save_top_k=-1, save_last=True,
+        )
+        csv_logger = CSVLogger(save_dir=str(checkpoint_path), name="metrics")
         trainer = pl.Trainer(
             max_steps=steps, accelerator="gpu" if device == "cuda" else "cpu", devices=1,
-            logger=False, enable_checkpointing=False, enable_progress_bar=False,
-            num_sanity_val_steps=0, deterministic=True, callbacks=[_RecordAndAugment()],
+            logger=csv_logger, enable_checkpointing=True, enable_progress_bar=False,
+            log_every_n_steps=50, num_sanity_val_steps=0, deterministic=True,
+            callbacks=[_RecordAndAugment(), checkpoint_cb],
         )
-        trainer.fit(model, datamodule=dm)
+        trainer.fit(model, datamodule=dm, ckpt_path=resume_from)
 
     if not losses:
         raise RuntimeError("eRSI trainer completed without recording a training loss")
-    out_path = Path(out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     torch.save({
         "architecture": "mw_ersi_traceable_rfm_v1",
@@ -153,7 +168,9 @@ def train(*, N: int = 64, K: int = 12, hidden_nf: int = 128, n_layers: int = 4,
         "n_layers": n_layers, "L": L, "dim_phys": 3, "n_species": 1, "ot": bool(ot),
         "step": int(steps), "solver": {"method": "rk4", "n_steps": 40},
     }, out_path)
-    return {"path": str(out_path), "loss_first": losses[0], "loss_last": losses[-1], "n_steps": len(losses)}
+    return {"path": str(out_path), "loss_first": losses[0], "loss_last": losses[-1], "n_steps": len(losses),
+            "checkpoint_dir": str(checkpoint_path), "last_checkpoint": checkpoint_cb.last_model_path,
+            "metrics_csv": str(Path(csv_logger.log_dir) / "metrics.csv")}
 
 
 __all__ = ["train", "_make_flow"]

@@ -1,0 +1,75 @@
+N=512 L=10.391 beta=10.38 (train N=64, L=5.195; L/2 here = 5.20 sigma)
+size-agnostic weight load OK (N=64 -> N=512)
+[stage1] flow gen 59s | shape (64, 512, 3) density 0.4564 (rho*=0.4564) NN-dist median 1.096
+[stage1] ZERO-SHOT STRUCTURE @ N=512: U/N -1.3327  shell1 1.58 shell2 1.08  (N=216 was 1.60/1.09; N=64 was 1.72/1.11)
+[stage2] anneal rung  0/13 beta   0.50  U/N -0.0831  (115s)
+[stage2] anneal rung  1/13 beta   0.63  U/N -0.6027  (230s)
+[stage2] anneal rung  2/13 beta   0.80  U/N -0.8063  (345s)
+[stage2] anneal rung  3/13 beta   1.01  U/N -0.9582  (460s)
+[stage2] anneal rung  4/13 beta   1.27  U/N -1.0652  (575s)
+[stage2] anneal rung  5/13 beta   1.61  U/N -1.1676  (789s)
+[stage2] anneal rung  6/13 beta   2.03  U/N -1.2467  (1080s)
+[stage2] anneal rung  7/13 beta   2.56  U/N -1.3185  (1370s)
+[stage2] anneal rung  8/13 beta   3.23  U/N -1.3804  (1660s)
+[stage2] anneal rung  9/13 beta   4.08  U/N -1.4311  (1951s)
+[stage2] anneal rung 10/13 beta   5.16  U/N -1.4789  (2241s)
+[stage2] anneal rung 11/13 beta   6.51  U/N -1.5185  (2373s)
+[stage2] anneal rung 12/13 beta   8.22  U/N -1.5574  (2488s)
+[stage2] anneal rung 13/13 beta  10.38  U/N -1.5926  (2603s)
+[stage2] relax round  5/40  U/N -1.6075  (2891s)
+[stage2] relax round 10/40  U/N -1.6138  (3179s)
+[stage2] relax round 15/40  U/N -1.6173  (3466s)
+[stage2] relax round 20/40  U/N -1.6182  (3952s)
+[stage2] relax round 25/40  U/N -1.6218  (4681s)
+[stage2] relax round 30/40  U/N -1.6233  (5263s)
+[stage2] relax round 35/40  U/N -1.6251  (5564s)
+[stage2] relax round 40/40  U/N -1.6243  (5852s)
+[stage2] REAL N=512 equilibrium: U/N -1.6243  shell1 2.08 shell2 1.14
+[stage3] exclvol seed gen 11s
+[stage3] seed uniform : U/N +140.5790
+[stage3] seed exclvol : U/N -0.6375
+[stage3] seed flow    : U/N -1.3327
+[uniform] rung  0 beta   0.50  U/N +0.6403  evals     393,216  (144s)
+[uniform] rung  1 beta   0.66  U/N -0.4286  evals     786,432  (291s)
+[uniform] rung  2 beta   0.87  U/N -0.7552  evals   1,179,648  (457s)
+[uniform] rung  3 beta   1.14  U/N -0.9602  evals   1,572,864  (622s)
+[uniform] rung  4 beta   1.51  U/N -1.1026  evals   1,966,080  (786s)
+[uniform] rung  5 beta   1.98  U/N -1.2144  evals   2,359,296  (961s)
+[uniform] rung  6 beta   2.62  U/N -1.3069  evals   2,752,512  (1102s)
+[uniform] rung  7 beta   3.45  U/N -1.3778  evals   3,145,728  (1232s)
+[uniform] rung  8 beta   4.54  U/N -1.4396  evals   3,538,944  (1384s)
+[uniform] rung  9 beta   5.98  U/N -1.4933  evals   3,932,160  (1549s)
+[uniform] rung 10 beta   7.88  U/N -1.5388  evals   4,325,376  (1714s)
+[uniform] rung 11 beta  10.38  U/N -1.5783  evals   4,718,592  (1877s)
+[stage3] exclvol natural rung 2 (beta 0.87)
+[exclvol] rung  2 beta   0.87  U/N -0.9139  evals     393,216  (165s)
+[exclvol] rung  3 beta   1.14  U/N -1.0255  evals     786,432  (330s)
+[exclvol] rung  4 beta   1.51  U/N -1.1400  evals   1,179,648  (481s)
+[exclvol] rung  5 beta   1.98  U/N -1.2313  evals   1,572,864  (647s)
+[exclvol] rung  6 beta   2.62  U/N -1.3150  evals   1,966,080  (812s)
+[exclvol] rung  7 beta   3.45  U/N -1.3829  evals   2,359,296  (978s)
+[exclvol] rung  8 beta   4.54  U/N -1.4456  evals   2,752,512  (1142s)
+[exclvol] rung  9 beta   5.98  U/N -1.4952  evals   3,145,728  (1307s)
+[exclvol] rung 10 beta   7.88  U/N -1.5402  evals   3,538,944  (1473s)
+[exclvol] rung 11 beta  10.38  U/N -1.5782  evals   3,932,160  (1638s)
+[stage3] flow natural rung 7 (beta 3.45)
+[flow] rung  7 beta   3.45  U/N -1.3645  evals     393,216  (165s)
+[flow] rung  8 beta   4.54  U/N -1.4345  evals     786,432  (331s)
+[flow] rung  9 beta   5.98  U/N -1.4920  evals   1,179,648  (483s)
+[flow] rung 10 beta   7.88  U/N -1.5380  evals   1,572,864  (636s)
+[flow] rung 11 beta  10.38  U/N -1.5795  evals   1,966,080  (790s)
+
+=== N=512 ZERO-SHOT AMORTIZATION (vs uniform) ===
+  uniform :    4,718,592 evals  final U/N -1.5783  (1.00x)
+  exclvol :    3,932,160 evals  final U/N -1.5782  (1.20x)
+  flow    :    1,966,080 evals  final U/N -1.5795  (2.40x)
+PLOT: reports/logs-2026-07-11/mw_ersi_transfer512_gr.png
+
+shell1(1.19): real-eq 2.08  flow 1.58
+shell2(1.85): real-eq 1.14  flow 1.08
+
+=== SIZE TREND (train N=64) ===
+  N=64 : shells 1.72/1.11 (eq 2.12/1.19)  amort flow 3.00x exclvol 1.33x
+  N=216: shells 1.60/1.09 (eq 2.13/1.17)  amort flow 2.40x exclvol 1.20x
+  N=512: shells 1.58/1.08 (eq 2.08/1.14)  amort flow 2.40x exclvol 1.20x
+DONE

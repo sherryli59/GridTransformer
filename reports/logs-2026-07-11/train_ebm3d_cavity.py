@@ -14,6 +14,13 @@ from liquid_coupling_flow.ka_energy import ka_energy
 ART = "liquid_coupling_flow/artifacts"
 
 
+def clamp_ball(x, R, eps=1e-5):
+    """Radially clamp any point with |x|>=R into the OPEN ball (rotation matmul can nudge a boundary
+    particle |x|~R just outside, which ball_unsquash rejects). Only touches near-boundary points."""
+    n = x.norm(dim=-1, keepdim=True)
+    return x * (R * (1.0 - eps) / n.clamp_min(1e-12)).clamp(max=1.0)
+
+
 def rand_rot(gen, dev):
     A = torch.randn(3, 3, generator=gen, device=dev); Q, Rm = torch.linalg.qr(A)
     Q = Q * torch.sign(torch.diagonal(Rm))[None]
@@ -54,7 +61,7 @@ def blob(n, R, K, gen, dev):
 def evaluate(model, held, gen, dev, beta=2.0):
     model.eval(); nll, acc = [], []
     for c in held[:16]:
-        xo, so, _ = label_to_scaffold(c["xin"], c["sin"], c["R"])
+        xo, so, _ = label_to_scaffold(clamp_ball(c["xin"], c["R"]), c["sin"], c["R"])
         bnd, s_bnd, R, n = c["bnd"], c["sbnd"], c["R"], c["n"]
         nll.append(float(-model.log_prob_pair(xo, so, bnd, s_bnd, R, preordered=True) / n))
         blk = blob(n, R, 4, gen, dev)
@@ -76,6 +83,7 @@ def main():
     ap.add_argument("--lr", type=float, default=1.5e-4); ap.add_argument("--eval-every", type=int, default=500)
     ap.add_argument("--radii", type=float, nargs="+", default=[1.6, 2.0, 2.4])  # 2R+r_cut<=L=7.53 -> R<=~2.5
     ap.add_argument("--r-ctx", type=float, default=2.5); ap.add_argument("--train-frames", type=int, default=900)
+    ap.add_argument("--resume", action="store_true", help="continue from --out checkpoint (fresh optimizer)")
     ap.add_argument("--freeze-phi", action="store_true",
                     help="keep the potential at zero (base cat-head + boundary + R_embed) -> fair ablation baseline")
     ap.add_argument("--warm", default=f"{ART}/ka3d_blob_noframe.pt")
@@ -89,10 +97,17 @@ def main():
     train = build_pool(X, S, L, range(sp), a.radii, a.r_ctx, gen)
     held = build_pool(X, S, L, range(sp, X.shape[0]), a.radii, a.r_ctx, gen, per=1)
     print(f"3D cavity-EBM: train={len(train)} held={len(held)} radii={tuple(a.radii)} dev={dev}", flush=True)
-    ck = torch.load(a.warm, map_location=dev, weights_only=False)
     m = KA3DScaffoldEBM(cat_bins=128, cat_range=2.5).to(dev)
-    miss, unexp = m.load_state_dict(ck["state_dict"], strict=False); m.use_frame = False
-    print(f"warm {a.warm}: {len(miss)} new, {len(unexp)} unused; frameless", flush=True)
+    start = 0
+    if a.resume and Path(a.out).exists():
+        ck = torch.load(a.out, map_location=dev, weights_only=False)
+        m.load_state_dict(ck["state_dict"], strict=False); m.use_frame = False
+        start = int(ck.get("step", 0))
+        print(f"RESUME {a.out} @ step {start} (fresh optimizer)", flush=True)
+    else:
+        ck = torch.load(a.warm, map_location=dev, weights_only=False)
+        miss, unexp = m.load_state_dict(ck["state_dict"], strict=False); m.use_frame = False
+        print(f"warm {a.warm}: {len(miss)} new, {len(unexp)} unused; frameless", flush=True)
     if a.freeze_phi:
         params = [p for name, p in m.named_parameters() if not name.startswith("phi.")]
         print(f"FREEZE-PHI baseline: potential stays 0 (V_c==0); training {len(params)} param tensors", flush=True)
@@ -100,12 +115,12 @@ def main():
         params = list(m.parameters())
     opt = torch.optim.AdamW(params, lr=a.lr, weight_decay=1e-4)
     t0 = time.time(); m.train()
-    for step in range(a.steps + 1):
+    for step in range(start, a.steps + 1):
         ids = torch.randint(len(train), (a.batch,), generator=gen, device=dev)
         loss = X.new_zeros(())
         for i in ids:
             c = train[int(i)]; Q = rand_rot(gen, dev)
-            xo, so, _ = label_to_scaffold(c["xin"] @ Q.T, c["sin"], c["R"])
+            xo, so, _ = label_to_scaffold(clamp_ball(c["xin"] @ Q.T, c["R"]), c["sin"], c["R"])
             bnd = c["bnd"] @ Q.T
             loss = loss - m.log_prob_pair(xo, so, bnd, c["sbnd"], c["R"], preordered=True) / c["n"]
         loss = loss / a.batch

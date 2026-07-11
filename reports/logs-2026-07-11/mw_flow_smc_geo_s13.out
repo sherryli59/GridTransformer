@@ -1,0 +1,41 @@
+=== invariance tests ===
+(a) lam=0 q0-invariance: U/N -1.3954 -> -1.3965  mean-lq -227.7 -> -227.6  acc 0.02
+(b) lam=1 eq-invariance: U/N -1.6276 -> -1.6281  acc 0.28
+
+=== geometric-path SMC (flow base, global moves)  seed 13 ===
+seed pop: U/N -1.4087  lq mean -225.6
+rung   0 lam 0.0335 (d 0.0335) ess  38.4   acc 0.22 sig 0.0098  U/N -1.4090  lq  -225.8  se/cfg     576  logZ    39.30  (53s)
+rung   1 lam 0.0336 (d 0.0001) ess  38.3 R acc 0.22 sig 0.0098  U/N -1.4464  lq  -221.0  se/cfg   1,088  logZ    39.42  (105s)
+rung   2 lam 0.0757 (d 0.0421) ess  38.4   acc 0.22 sig 0.0098  U/N -1.4467  lq  -221.0  se/cfg   1,600  logZ    89.60  (158s)
+rung   3 lam 0.0758 (d 0.0001) ess  38.3 R acc 0.22 sig 0.0098  U/N -1.4750  lq  -217.4  se/cfg   2,112  logZ    89.72  (211s)
+rung   4 lam 0.1351 (d 0.0592) ess  38.4   acc 0.21 sig 0.0098  U/N -1.4747  lq  -217.8  se/cfg   2,624  logZ   161.02  (263s)
+rung   5 lam 0.1352 (d 0.0001) ess  38.4 R acc 0.23 sig 0.0098  U/N -1.4984  lq  -215.0  se/cfg   3,136  logZ   161.14  (316s)
+rung   6 lam 0.2377 (d 0.1025) ess  38.4   acc 0.28 sig 0.0098  U/N -1.4989  lq  -215.8  se/cfg   3,648  logZ   285.67  (368s)
+rung   7 lam 0.2378 (d 0.0001) ess  38.4 R acc 0.22 sig 0.0098  U/N -1.5058  lq  -216.6  se/cfg   4,160  logZ   285.80  (421s)
+rung   8 lam 0.3625 (d 0.1247) ess  38.4   acc 0.26 sig 0.0098  U/N -1.5070  lq  -216.7  se/cfg   4,672  logZ   437.93  (474s)
+rung   9 lam 0.3626 (d 0.0001) ess  38.4 R acc 0.28 sig 0.0098  U/N -1.5141  lq  -217.8  se/cfg   5,184  logZ   438.05  (526s)
+rung  10 lam 0.5131 (d 0.1505) ess  38.4   acc 0.26 sig 0.0098  U/N -1.5143  lq  -217.9  se/cfg   5,696  logZ   622.55  (579s)
+rung  11 lam 0.5132 (d 0.0001) ess  38.4 R acc 0.24 sig 0.0098  U/N -1.5192  lq  -218.3  se/cfg   6,208  logZ   622.68  (632s)
+rung  12 lam 0.6974 (d 0.1841) ess  38.4   acc 0.27 sig 0.0098  U/N -1.5197  lq  -219.5  se/cfg   6,720  logZ   849.05  (684s)
+rung  13 lam 0.6975 (d 0.0001) ess  38.4 R acc 0.30 sig 0.0098  U/N -1.5220  lq  -221.2  se/cfg   7,232  logZ   849.17  (737s)
+rung  14 lam 0.8424 (d 0.1450) ess  38.4   acc 0.32 sig 0.0098  U/N -1.5222  lq  -223.0  se/cfg   7,744  logZ  1028.10  (789s)
+rung  15 lam 0.8425 (d 0.0001) ess  38.4 R acc 0.29 sig 0.0098  U/N -1.5223  lq  -226.7  se/cfg   8,256  logZ  1028.22  (842s)
+rung  16 lam 0.9767 (d 0.1342) ess  38.4   acc 0.31 sig 0.0098  U/N -1.5238  lq  -227.1  se/cfg   8,768  logZ  1194.72  (895s)
+rung  17 lam 0.9768 (d 0.0001) ess  38.4 R acc 0.31 sig 0.0098  U/N -1.5238  lq  -231.5  se/cfg   9,280  logZ  1194.84  (948s)
+rung  18 lam 1.0000 (d 0.0232) ess  62.7   acc 0.28 sig 0.0098  U/N -1.5243  lq  -232.2  se/cfg   9,792  logZ  1223.65  (1000s)
+
+lam-path done: lam 1.0000  rungs 19  logZ 1223.65 (certified uniform-path 1198.1 +/- 0.4; offset = flow log-normalization error)
+finisher sweep  9: U/N -1.5696  se/cfg 10,432
+finisher sweep 19: U/N -1.5832  se/cfg 11,072
+finisher sweep 29: U/N -1.5894  se/cfg 11,712
+finisher sweep 39: U/N -1.5920  se/cfg 12,352
+finisher sweep 49: U/N -1.5976  se/cfg 12,992
+finisher sweep 53: U/N -1.6002  se/cfg 13,248  << crossed -1.6
+finisher sweep 59: U/N -1.5983  se/cfg 13,632
+
+=== VERDICT: full-likelihood SMC vs seed-only anneal (per-config site-evals to U/N <= -1.6) ===
+  seed-only  (flow seeds, energy-only ladder): 3,072   [N=64 3-arm baseline]
+  full-likelihood geometric SMC:               13,248
+  (uniform baseline: 9,216 / exclvol: 6,912)
+  logZ(flow path) 1223.65 vs certified 1198.1 -> flow log-norm error +25.55 nats
+DONE

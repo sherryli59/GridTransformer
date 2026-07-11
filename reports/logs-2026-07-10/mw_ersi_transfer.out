@@ -1,0 +1,9 @@
+N=216 L=7.793 beta=10.38 (train N=64)
+size-agnostic weight load OK (N=64 -> N=216)
+
+=== ZERO-SHOT STRUCTURE @ N=216 ===
+flow seed U/N -1.3493  |  g(r) shell1 1.60 shell2 1.09  (N=64 was 1.72/1.11; data ~2.1/1.2)
+seed uniform : U/N +197.6640
+seed exclvol : U/N -0.6345
+seed flow    : U/N -1.3493
+[uniform] start rung 0 (beta 0.50) final U/N -1.5791 evals 2,985,984

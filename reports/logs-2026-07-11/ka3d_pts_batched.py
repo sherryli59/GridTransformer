@@ -42,15 +42,26 @@ def blob(n, R, K, gen):
     return mm
 
 
+def core_block(n, R, r_core):
+    """CORE-region move: ALL slots within r_core of the cavity CENTRE (origin). Regenerates the multi-basin
+    core while the boundary-pinned outer shell stays frozen -> the physically-motivated basin-crossing move."""
+    a = fixed_ball_scaffold(n, R, dev)
+    mm = a.norm(dim=-1) < r_core
+    if int(mm.sum()) < 2:                                              # ensure a non-trivial block
+        mm[a.norm(dim=-1).topk(min(4, n), largest=False).indices] = True
+    return mm
+
+
 def ess_frac(logw):
     w = torch.softmax(logw, 0); return float(1.0 / (w ** 2).sum() / w.shape[0])
 
 
 @torch.no_grad()
-def smc_batched(m, xo, so, bnd, s_bnd, R, beta, M, T, n_mut, K, resamp, gen):
+def smc_batched(m, xo, so, bnd, s_bnd, R, beta, M, T, n_mut, K, resamp, gen, kbig=0, core=None):
     n = xo.shape[0]; allmask = torch.ones(n, dtype=torch.bool, device=dev)
     Xb, Sb, _ = m.sample_block_b(xo[None].expand(M, n, 3).clone(), so[None].expand(M, n).clone(),
                                  allmask, bnd, s_bnd, R, gen=gen)                    # M independent full-regens
+    Kbig = min(n - 1, kbig) if kbig > 0 else K                                       # lambda-scheduled move size
 
     def G():
         return -beta * energy_b(Xb, Sb, bnd, s_bnd) - m.block_log_prob_b(Xb, Sb, allmask, bnd, s_bnd, R)
@@ -64,8 +75,12 @@ def smc_batched(m, xo, so, bnd, s_bnd, R, beta, M, T, n_mut, K, resamp, gen):
             idx = torch.searchsorted(w.cumsum(0), pos).clamp(max=M - 1)
             Xb, Sb = Xb[idx].clone(), Sb[idx].clone(); logw = torch.zeros(M, device=dev)
         lt = float(lam[t])
+        Kmove = max(K, int(round(K + (Kbig - K) * (1.0 - lt))))                      # large at low lam -> K at lam=1
+        if core is not None:
+            r_core = R * (core[0] + (core[1] - core[0]) * (1.0 - lt))                # big core at low lam -> small central at lam=1
+            blk_fixed = core_block(n, R, r_core)
         for _ in range(n_mut):
-            blk = blob(n, R, K, gen)
+            blk = blk_fixed if core is not None else blob(n, R, Kmove, gen)
             u0 = energy_b(Xb, Sb, bnd, s_bnd); lqr = m.block_log_prob_b(Xb, Sb, blk, bnd, s_bnd, R)
             Xn, Sn, lqf = m.sample_block_b(Xb, Sb, blk, bnd, s_bnd, R, gen=gen)
             la = lt * (-beta * (energy_b(Xn, Sn, bnd, s_bnd) - u0) + lqr - lqf)
@@ -80,6 +95,10 @@ def main():
     ap.add_argument("--ncav", type=int, default=6); ap.add_argument("--M", type=int, default=64)
     ap.add_argument("--T", type=int, default=40); ap.add_argument("--nmut", type=int, default=4)
     ap.add_argument("--K", type=int, default=4); ap.add_argument("--resamp", type=float, default=0.5)
+    ap.add_argument("--kbig", type=int, default=0, help="lambda-scheduled max blob size (0=fixed K)")
+    ap.add_argument("--core", action="store_true", help="CORE-region moves (regenerate slots within r_core of centre)")
+    ap.add_argument("--core-lo", type=float, default=0.35, help="core radius fraction of R at lam=1 (small central refine)")
+    ap.add_argument("--core-hi", type=float, default=0.85, help="core radius fraction of R at lam=0 (big core, cross basins)")
     ap.add_argument("--beta", type=float, default=2.0); ap.add_argument("--r-ctx", type=float, default=2.5)
     ap.add_argument("--ckpt", default=f"{ART}/ka3d_cavity_ebm3ax.pt")
     ap.add_argument("--out", default="reports/logs-2026-07-11/pts_batched.pt")
@@ -105,7 +124,8 @@ def main():
         gbulk = st.mean([core_qc(cavs[i][0], cavs[i][1], cavs[i + 1][0], cavs[i + 1][1], gen) for i in range(len(cavs) - 1)])
         t0 = time.time(); gc, qw, qp, ess, pops = [], [], [], [], []
         for (xo, so, bnd, sb) in cavs[:a.ncav]:
-            Xb, Sb, w, e = smc_batched(m, xo, so, bnd, sb, R, a.beta, a.M, a.T, a.nmut, a.K, a.resamp, gen)
+            core = (a.core_lo, a.core_hi) if a.core else None
+            Xb, Sb, w, e = smc_batched(m, xo, so, bnd, sb, R, a.beta, a.M, a.T, a.nmut, a.K, a.resamp, gen, a.kbig, core)
             gc.append(sum(float(w[k]) * core_qc(Xb[k], Sb[k], xo, so, gen) for k in range(a.M)))
             qw.append(sum(float(w[k]) * overlap_whole(Xb[k], xo) for k in range(a.M)))
             ii = torch.multinomial(w, 150, replacement=True, generator=gen); jj = torch.multinomial(w, 150, replacement=True, generator=gen)

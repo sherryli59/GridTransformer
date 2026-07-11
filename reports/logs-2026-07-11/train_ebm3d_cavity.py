@@ -76,6 +76,8 @@ def main():
     ap.add_argument("--lr", type=float, default=1.5e-4); ap.add_argument("--eval-every", type=int, default=500)
     ap.add_argument("--radii", type=float, nargs="+", default=[1.6, 2.0, 2.4])  # 2R+r_cut<=L=7.53 -> R<=~2.5
     ap.add_argument("--r-ctx", type=float, default=2.5); ap.add_argument("--train-frames", type=int, default=900)
+    ap.add_argument("--freeze-phi", action="store_true",
+                    help="keep the potential at zero (base cat-head + boundary + R_embed) -> fair ablation baseline")
     ap.add_argument("--warm", default=f"{ART}/ka3d_blob_noframe.pt")
     ap.add_argument("--out", default=f"{ART}/ka3d_cavity_ebm.pt")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
@@ -91,7 +93,12 @@ def main():
     m = KA3DScaffoldEBM(cat_bins=128, cat_range=2.5).to(dev)
     miss, unexp = m.load_state_dict(ck["state_dict"], strict=False); m.use_frame = False
     print(f"warm {a.warm}: {len(miss)} new, {len(unexp)} unused; frameless", flush=True)
-    opt = torch.optim.AdamW(m.parameters(), lr=a.lr, weight_decay=1e-4)
+    if a.freeze_phi:
+        params = [p for name, p in m.named_parameters() if not name.startswith("phi.")]
+        print(f"FREEZE-PHI baseline: potential stays 0 (V_c==0); training {len(params)} param tensors", flush=True)
+    else:
+        params = list(m.parameters())
+    opt = torch.optim.AdamW(params, lr=a.lr, weight_decay=1e-4)
     t0 = time.time(); m.train()
     for step in range(a.steps + 1):
         ids = torch.randint(len(train), (a.batch,), generator=gen, device=dev)

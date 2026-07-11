@@ -7,3 +7,10 @@ seed uniform : U/N +197.6640
 seed exclvol : U/N -0.6345
 seed flow    : U/N -1.3493
 [uniform] start rung 0 (beta 0.50) final U/N -1.5791 evals 2,985,984
+[exclvol] start rung 2 (beta 0.87) final U/N -1.5790 evals 2,488,320
+[flow] start rung 7 (beta 3.45) final U/N -1.5815 evals 1,244,160
+
+=== N=216 ZERO-SHOT AMORTIZATION (vs uniform) ===
+  uniform :   2,985,984 evals  final U/N -1.5791  (1.00x)
+  exclvol :   2,488,320 evals  final U/N -1.5790  (1.20x)
+  flow    :   1,244,160 evals  final U/N -1.5815  (2.40x)

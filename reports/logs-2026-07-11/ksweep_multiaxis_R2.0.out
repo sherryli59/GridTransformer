@@ -1,0 +1,8 @@
+=== block-MTM acceptance: K x N_trials (EBM vs frozen-phi base) ===
+  K=2  base [N16:35% N32:25% N64:45%]   EBM [N16:65% N32:45% N64:40%]
+  K=4  base [N16:0% N32:5% N64:0%]   EBM [N16:5% N32:15% N64:20%]
+  K=6  base [N16:0% N32:0% N64:0%]   EBM [N16:0% N32:0% N64:0%]
+
+=== K=6 clash decomposition (EBM): boundary vs retained vs block ===
+  [base] block particles 120:  <->boundary 20%   <->retained 27%   <->block 22%
+  [EBM] block particles 120:  <->boundary 14%   <->retained 14%   <->block 16%

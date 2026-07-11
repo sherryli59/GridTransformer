@@ -9,7 +9,8 @@ from liquid_coupling_flow.ka3d_cavity_ar import _mic
 from liquid_coupling_flow.ka3d_cavity_carve import carve
 from liquid_coupling_flow.ka_energy import ka_energy
 
-dev = "cuda"; beta = 2.0; R = 2.0; R_CTX = 2.5; CUT = 0.8
+dev = "cuda"; beta = 2.0; R_CTX = 2.5; CUT = 0.8
+R = float(sys.argv[3]) if len(sys.argv) > 3 else 2.0                # argv[3]: held-out radius for transfer
 ebm_p = sys.argv[1] if len(sys.argv) > 1 else "liquid_coupling_flow/artifacts/ka3d_cavity_ebm.pt"
 base_p = sys.argv[2] if len(sys.argv) > 2 else "liquid_coupling_flow/artifacts/ka3d_cavity_base.pt"
 

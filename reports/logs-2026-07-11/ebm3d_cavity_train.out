@@ -1,0 +1,34 @@
+3D cavity-EBM: train=2700 held=124 radii=(1.6, 2.0, 2.4) dev=cuda
+warm liquid_coupling_flow/artifacts/ka3d_blob_noframe.pt: 13 new, 0 unused; frameless
+step     0 loss +1.2096  held_nll +0.7784  MTM(k4,N16) 0%  (18s)
+step   500 loss -1.2600  held_nll -1.3321  MTM(k4,N16) 0%  (152s)
+step  1000 loss -1.8122  held_nll -1.7604  MTM(k4,N16) 0%  (286s)
+step  1500 loss -1.7912  held_nll -1.9638  MTM(k4,N16) 0%  (421s)
+step  2000 loss -1.7440  held_nll -2.0935  MTM(k4,N16) 0%  (555s)
+step  2500 loss -1.9087  held_nll -2.1863  MTM(k4,N16) 0%  (695s)
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/mnt/ssd/GridTransformer/reports/logs-2026-07-11/train_ebm3d_cavity.py", line 116, in <module>
+    f"({time.time()-t0:.0f}s)", flush=True)
+
+  File "/mnt/ssd/GridTransformer/reports/logs-2026-07-11/train_ebm3d_cavity.py", line 103, in main
+    for step in range(a.steps + 1):
+                          ^^^^^^^^^^
+  File "/mnt/ssd/GridTransformer/liquid_coupling_flow/ka3d_scaffold_ebm.py", line 109, in log_prob_pair
+    y, logdet_yx = ball_unsquash(xo, R); anchor_y, _ = ball_unsquash(anchors, R)
+                   ^^^^^^^^^^^^^^^^^^^^
+  File "/mnt/ssd/GridTransformer/liquid_coupling_flow/ka3d_scaffold_ar.py", line 116, in ball_unsquash
+    raise ValueError("ball_unsquash received a point outside the open ball")
+ValueError: ball_unsquash received a point outside the open ball
+3D cavity-EBM: train=2700 held=124 radii=(1.6, 2.0, 2.4) dev=cuda
+RESUME liquid_coupling_flow/artifacts/ka3d_cavity_ebm.pt @ step 2500 (fresh optimizer)
+step  2500 loss -1.8055  held_nll -2.1821  MTM(k4,N16) 6%  (18s)
+step  3000 loss -2.1872  held_nll -2.2479  MTM(k4,N16) 0%  (154s)
+step  3500 loss -2.2743  held_nll -2.2845  MTM(k4,N16) 0%  (289s)
+step  4000 loss -2.1627  held_nll -2.3261  MTM(k4,N16) 0%  (425s)
+step  4500 loss -2.0824  held_nll -2.3602  MTM(k4,N16) 0%  (560s)
+step  5000 loss -2.0953  held_nll -2.3883  MTM(k4,N16) 0%  (696s)
+step  5500 loss -2.3815  held_nll -2.4095  MTM(k4,N16) 0%  (831s)
+step  6000 loss -2.3022  held_nll -2.4510  MTM(k4,N16) 0%  (967s)
+saved liquid_coupling_flow/artifacts/ka3d_cavity_ebm.pt

@@ -1,0 +1,12 @@
+3D cavity-EBM: train=2700 held=124 radii=(1.6, 2.0, 2.4) dev=cuda
+warm liquid_coupling_flow/artifacts/ka3d_cavity_ebm.pt: 14 new, 0 unused; frameless
+step     0 loss -2.1053  held_nll -2.4579  MTM(k4,N16) 0%  (12s)
+step   500 loss -2.4815  held_nll -2.5722  MTM(k4,N16) 0%  (151s)
+step  1000 loss -2.6496  held_nll -2.6199  MTM(k4,N16) 0%  (287s)
+step  1500 loss -2.4516  held_nll -2.6293  MTM(k4,N16) 6%  (424s)
+step  2000 loss -2.4059  held_nll -2.6629  MTM(k4,N16) 6%  (560s)
+step  2500 loss -2.4097  held_nll -2.6724  MTM(k4,N16) 0%  (697s)
+step  3000 loss -2.7247  held_nll -2.6932  MTM(k4,N16) 0%  (834s)
+step  3500 loss -2.6654  held_nll -2.7012  MTM(k4,N16) 0%  (971s)
+step  4000 loss -2.6048  held_nll -2.7341  MTM(k4,N16) 6%  (1107s)
+saved liquid_coupling_flow/artifacts/ka3d_cavity_ebm3ax.pt

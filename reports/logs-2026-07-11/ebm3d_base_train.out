@@ -1,0 +1,11 @@
+3D cavity-EBM: train=2700 held=124 radii=(1.6, 2.0, 2.4) dev=cuda
+warm liquid_coupling_flow/artifacts/ka3d_blob_noframe.pt: 13 new, 0 unused; frameless
+FREEZE-PHI baseline: potential stays 0 (V_c==0); training 81 param tensors
+step     0 loss +1.2096  held_nll +0.7785  MTM(k4,N16) 0%  (17s)
+step  1000 loss -0.5125  held_nll -1.0457  MTM(k4,N16) 0%  (272s)
+step  2000 loss -1.0606  held_nll -1.2462  MTM(k4,N16) 0%  (527s)
+step  3000 loss -1.0545  held_nll -1.3096  MTM(k4,N16) 0%  (782s)
+step  4000 loss -1.3243  held_nll -1.4087  MTM(k4,N16) 0%  (1037s)
+step  5000 loss -1.3087  held_nll -1.5475  MTM(k4,N16) 0%  (1292s)
+step  6000 loss -1.6281  held_nll -1.5678  MTM(k4,N16) 0%  (1547s)
+saved liquid_coupling_flow/artifacts/ka3d_cavity_base.pt

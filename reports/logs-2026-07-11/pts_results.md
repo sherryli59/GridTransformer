@@ -1,0 +1,47 @@
+# Point-to-set (PTS) via the K=4 multi-axis generator — first computation + gaps (2026-07-11)
+
+Goal: measure the static PTS cavity overlap q(R) = <overlap(C, C0)> with C ~ P(interior | frozen boundary)
+~ e^{-bU}, using the multi-axis EBM (ka3d_cavity_ebm3ax) as the generator. Overlap = collective density
+overlap (frac of reference sites with a sampled particle within a=0.3), beta=2.0 (T*=0.5), boundary = shell
+within R+2.5.
+
+## Route 1 -- block-MTM as MCMC (ka3d_pts_ebm.py): FAILS to equilibrate
+K=4 local moves have OK acceptance (~19%) but accepted moves only JIGGLE particles within their pockets
+(<a=0.3): the retained interior + boundary pin them, so a K=4 regeneration returns ~the same positions. A
+chain from the reference stays at overlap 1.00; it cannot cross basins. Not an acceptance problem (more
+trials doesn't help) -- a STEP-SIZE / rearrangement problem. Needs collective moves (K>=6 fail) or
+impractically many sweeps (95s/sweep observed).
+
+## Route 2 -- one-shot importance sampling (full-regen proposal): FAILS to converge
+q_full proposal (regenerate whole interior given boundary) is exact-logq, so w = e^{-bU-logq} is a valid IS
+weight. But ESS% DEGRADES ~1/M (2.1%->1.0%->0.5% as M 48->96->192): eff samples stuck at ~1, estimate
+drifts (0.52->0.58->0.63), never converges. Var(log w) ∝ n (per-particle mismatch compounds over the whole
+interior) => heavy-tailed weights. The known one-shot-ESS=1 wall.
+
+## Route 3 -- SMC / AIS (ka3d_pts_smc.py): WORKS
+Geometric path pi_t ~ q^{1-lam}(e^{-bU})^{lam}, lam 0->1. Incremental weight = dlam*(-bU-logq_full);
+mutation = block move with MH log-accept SCALED by lam (= exact block-MTM at lam=1, higher acceptance at
+broad rungs where the interior CAN rearrange). All exact, reuses block_log_prob/sample_block/energy.
+**R=1.6 (M=48, T=40, nmut=4, ncav=4): SMC q_PTS=0.731 at ESS 77% (eff ~37/48), vs naive-IS q=0.507 at
+ESS 2.1% (eff ~1).** ESS(lam) climbs 2%->56%->...->77% and HOLDS -- the anneal splits Var(log w) into 40
+low-variance pieces with mutation between. (R=2.0, 2.4 computing.)
+
+## Remaining gaps
+1. COST: ~54 min/R at M48/T40/ncav4 -- M x T x (1+nmut) sequential full-context generator passes.
+   FIX = batch the generator over the M-particle dimension (M x speedup); the biggest lever for a real q(R)
+   curve over many R/cavities.
+2. T-CONVERGENCE: q_smc still moves with T (T=8 -> 0.79, T=40 -> 0.73); needs a T-ladder / extrapolation
+   or higher T to certify convergence.
+3. MUTATION AT lam=1: at the target rung the mutation is the low-acceptance full block MH (the same jiggle
+   limit as Route 1), so diversification there leans on resampling+broad-rung mixing. K>=6 or a swap/
+   cluster move would strengthen the terminal rung.
+4. EXACTNESS LEAK: sample_block inherits the base cat-head 8e-3 sample-vs-score bin-flip -> a small bias in
+   the target; fix the ball-map round-trip in Cat3Head.
+5. NO GOLD STANDARD: q_PTS is unvalidated vs an independent reference (long PT/MD cavity run). Need one to
+   certify absolute accuracy (self-consistency across T/M/seed is necessary, not sufficient).
+6. R RANGE: capped ~2.5 by box (2R+r_cut<=L=7.53); true large-xi extrapolation needs a bigger bulk.
+
+## Verdict
+The K=4 generator CANNOT compute PTS on its own (local MCMC won't rearrange; one-shot IS won't converge),
+but as the base+mutation of an SMC it DOES: healthy ESS and a stable-ish q_PTS. SMC is the required wrapper,
+exactly the campaign's ARM-1 conclusion. Files: ka3d_pts_ebm.py, focused_is_converge.py, ka3d_pts_smc.py.

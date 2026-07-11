@@ -1,0 +1,6 @@
+(1) same batch twice:        max|d| 1.11e-03
+(2) other-slot content swap: max|d| on kept half 1.11e-03
+(3) batch-size 64 vs 32:     max|d| on shared half 1.08e-03
+(4) carried-vs-fresh, 1 accepted cfg: |d| 1.53e-05  (rejected cfgs: max|d| 5.63e-03)
+VERDICT: pure kernel nondeterminism (scatter atomics x expanding 40-step reverse ODE), floor ~1.1e-3,
+tail ~6e-3 @ B=64; NO content coupling, NO batch-size coupling, NO bookkeeping error. Guard tol -> 5e-2.

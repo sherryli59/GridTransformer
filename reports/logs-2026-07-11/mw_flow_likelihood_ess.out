@@ -1,0 +1,8 @@
+beta=10.381  B=256  (flow trained @ N=64)
+
+    N  log q0 mean   raw U/N  SNIS U/N        ESS    ESS/B  -log(ESS/B)/N
+   64       -226.0    -1.402    -1.535    1.13/256   0.0044         0.0847
+  216      -1034.6    -1.350    -1.472    1.00/256   0.0039         0.0257
+  512      -2896.2    -1.337    -1.432    1.00/256   0.0039         0.0108
+
+READING: ESS/B ~ exp(-N*delta). If -log(ESS/B)/N is ~constant across N, the per-particle KL gap delta is size-invariant and the weight ESS decays EXACTLY exponentially in N -> the flow LIKELIHOOD (as IS weights) is cursed at scale, even though its SAMPLES transfer flat.

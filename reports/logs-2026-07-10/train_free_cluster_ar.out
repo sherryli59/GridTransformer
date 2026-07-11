@@ -1,0 +1,7 @@
+free-cluster train=1800 held=124 radii=(1.6, 2.0, 2.4) device=cuda
+step      0 held_nll=+8.385 U(true/TF/FR)=-3.84/+123.60/+52.22 clash(TF/FR)=12.5%/9.5% inside=7.5% canon=0.0% order_disp=0.287 logq_err=3.97e-04 (38s)
+step   1000 held_nll=+3.345 U(true/TF/FR)=-3.84/+1089539.97/+448262.95 clash(TF/FR)=72.7%/69.2% inside=73.7% canon=0.0% order_disp=0.173 logq_err=2.59e-04 (304s)
+step   2000 held_nll=+3.169 U(true/TF/FR)=-3.84/+7859816.00/+408161.18 clash(TF/FR)=73.2%/68.5% inside=75.4% canon=0.0% order_disp=0.164 logq_err=3.05e-04 (507s)
+step   3000 held_nll=+3.082 U(true/TF/FR)=-3.84/+7828754.75/+508183.95 clash(TF/FR)=74.7%/68.7% inside=76.7% canon=0.0% order_disp=0.157 logq_err=2.14e-04 (713s)
+step   4000 held_nll=+3.005 U(true/TF/FR)=-3.84/+4583856.50/+901314.38 clash(TF/FR)=73.3%/65.1% inside=77.0% canon=0.0% order_disp=0.159 logq_err=1.83e-04 (909s)
+step   5000 held_nll=+2.946 U(true/TF/FR)=-3.84/+3496660.12/+219221.68 clash(TF/FR)=70.9%/67.8% inside=75.6% canon=0.0% order_disp=0.160 logq_err=2.75e-04 (1086s)

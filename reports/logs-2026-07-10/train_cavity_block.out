@@ -1,0 +1,7 @@
+cavity-block train=1800 held=20 (WITH boundary) dev=cuda
+step      0 block_nll=+2.688 block_clash=96.2% mtm_accept=0.0% (27s)
+step   1000 block_nll=+1.117 block_clash=91.2% mtm_accept=0.0% (346s)
+step   2000 block_nll=+0.627 block_clash=91.2% mtm_accept=0.0% (684s)
+step   3000 block_nll=+0.109 block_clash=81.2% mtm_accept=0.0% (1001s)
+step   4000 block_nll=-0.086 block_clash=82.5% mtm_accept=0.0% (1317s)
+step   5000 block_nll=-0.343 block_clash=80.0% mtm_accept=0.0% (1634s)

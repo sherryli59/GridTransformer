@@ -1,0 +1,5 @@
+ckpt step=4000  n_bins=64 arc_range=4.5 bin_w=0.1406 sigma
+held cavities=60  TRUE U/N median=-6.778
+  oracle : U/N median=-6.508  clashed=0/60
+  mode   : U/N median=+19340752.500  clashed=60/60
+  sample : U/N median=+2470677.125  clashed=60/60

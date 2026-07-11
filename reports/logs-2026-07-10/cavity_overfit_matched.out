@@ -1,0 +1,15 @@
+matched cavity overfit: 12 cavities n=[46, 40, 42, 40, 45, 39, 41, 42, 46, 40, 43, 42]
+  step    0  -logp/n=+8.340  (1s)
+  step  500  -logp/n=-4.880  (52s)
+  step 1000  -logp/n=-5.800  (103s)
+  step 1500  -logp/n=-5.853  (156s)
+  step 2000  -logp/n=-5.848  (208s)
+  step 2500  -logp/n=-5.866  (259s)
+  step 2999  -logp/n=-5.871  (311s)
+
+[MATCHED cavity overfit]  TRUE U/N median=-6.744
+  sample U/N median=+1410379.19   (free-cluster overfit was +3.5)
+  sampled interior clashing with INTERIOR : 387/506 (76.5%)
+  sampled interior clashing with BOUNDARY : 205/506 (40.5%)
+
+VERDICT: cavity sample U/N >> +3.5 AND boundary clashes high => BOUNDARY breaks it. cavity ~ +3.5 => matched, boundary not the issue.

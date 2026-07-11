@@ -1,0 +1,27 @@
+ckpt step=8000
+
+K=1  (n=20 proposals)
+  dU        : median=+12.18  min=-0.48  max=+1.13e+05
+  log_alpha : median=-25.34  best=+1.44
+  clash-free proposals: 12/20  (60%)
+  P(accept) if drawn once: 1/20
+
+K=2  (n=20 proposals)
+  dU        : median=+5492.30  min=+6.46  max=+1.97e+09
+  log_alpha : median=-10979.63  best=-8.98
+  clash-free proposals: 1/20  (5%)
+  P(accept) if drawn once: 0/20
+
+K=4  (n=20 proposals)
+  dU        : median=+1326.11  min=+7.05  max=+5.45e+06
+  log_alpha : median=-2646.03  best=-14.98
+  clash-free proposals: 0/20  (0%)
+  P(accept) if drawn once: 0/20
+
+K=8  (n=20 proposals)
+  dU        : median=+3925.70  min=+512.54  max=+1.25e+10
+  log_alpha : median=-7837.94  best=-1022.28
+  clash-free proposals: 0/20  (0%)
+  P(accept) if drawn once: 0/20
+
+Read: if clash-free proposals ALSO have log_alpha<<0 -> not just clash, systematic dU offset. If clash-free proposals have log_alpha~0 -> pure clash-rate problem, smaller K should already accept.

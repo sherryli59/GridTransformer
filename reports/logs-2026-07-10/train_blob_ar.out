@@ -1,0 +1,15 @@
+masked train=1800 held=20 radii=(1.6, 2.0, 2.4) dev=cuda
+step      0 block_nll=+2.287 block_clash=81.2% mh_accept=0.0% full_U=+987128186.73 (54s)
+step   1000 block_nll=+0.762 block_clash=80.0% mh_accept=0.0% full_U=+241503.11 (376s)
+step   2000 block_nll=+0.403 block_clash=67.5% mh_accept=0.0% full_U=+219515.33 (709s)
+masked train=1800 held=20 radii=(1.6, 2.0, 2.4) dev=cuda
+resumed step=2001
+step   3000 block_nll=+0.367 block_clash=73.8% mh_accept=0.0% full_U=+75415.75 (416s)
+step   4000 block_nll=+0.600 block_clash=67.5% mh_accept=0.0% full_U=+52627.55 (722s)
+step   5000 block_nll=+0.052 block_clash=57.5% mh_accept=0.0% full_U=+2337014.60 (1068s)
+step   6000 block_nll=+0.291 block_clash=70.0% mh_accept=0.0% full_U=+44128.42 (1346s)
+step   7000 block_nll=-0.443 block_clash=62.5% mh_accept=0.0% full_U=+709375.49 (1615s)
+step   8000 block_nll=-0.536 block_clash=65.0% mh_accept=0.0% full_U=+17915.78 (1881s)
+step   9000 block_nll=-0.313 block_clash=53.8% mh_accept=0.0% full_U=+45620.62 (2152s)
+step  10000 block_nll=-0.277 block_clash=57.5% mh_accept=0.3% full_U=+15269.33 (2433s)
+step  11000 block_nll=-0.061 block_clash=57.5% mh_accept=0.0% full_U=+2746.90 (2739s)

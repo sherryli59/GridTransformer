@@ -1,0 +1,9 @@
+ckpt step=5000 (flow_bins=32)
+
+held configs = 60   (clash = pair < 0.8 sigma)
+BLOCK (k=4 blob into true surround; what MTM uses):
+   clash-FREE blocks   : 3%   (2/60)
+   mean #clashes/block : 3.30   (median 3.0)
+FULL (one-shot whole cluster, ~40 particles):
+   clash-FREE clusters : 0%   (0/60)
+   mean #clashes/cluster: 22.88   (median 22.0)

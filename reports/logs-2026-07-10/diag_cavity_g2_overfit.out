@@ -1,0 +1,10 @@
+[diag] pairs=48 n_max=112 L=7.528 first_loss=2.1615 final_loss=1.3343 saved_sample_rms=2.4093
+[diag] TRAINED out_scale = 0.1253  (init 0.1; ~O(1)+ means it grew)
+[diag] FM loss model=1.5715  zero-velocity baseline=2.0543  -> model explains 23.5% of trivial-velocity variance (PARTIAL)
+[diag] R=1.6: sample->target RMS=1.599  (uniform-ball<->uniform-ball control=1.739; peaked conditional wants RMS<<control)
+[diag] R=2.4: sample->target RMS=2.589  (uniform-ball<->uniform-ball control=2.628; peaked conditional wants RMS<<control)
+Traceback (most recent call last):
+  File "/mnt/ssd/GridTransformer/reports/logs-2026-07-10/diag_cavity_g2_overfit.py", line 92, in <module>
+    ug = float(config_energy_per_particle(p, rel[0]))
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: only one element tensors can be converted to Python scalars

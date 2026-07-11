@@ -1,0 +1,6 @@
+cavity ckpt step=4000
+generated interior particles: 1690
+  clashing (<0.8sig) with another INTERIOR : 1198 (70.9%)
+  clashing (<0.8sig) with a frozen BOUNDARY : 599 (35.4%)
+  median per-config nearest interior->boundary dist: 0.311
+VERDICT: interior overlaps dominate -> intra-cluster issue

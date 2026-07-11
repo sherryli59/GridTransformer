@@ -1,0 +1,8 @@
+overfit done -logp/n(last batch)=-5.863 (329s)
+
+memorized cavities=12  TRUE U/N median=-6.744
+  oracle    : U/N median=-6.42  clashed=0/12
+  tf_sample : U/N median=-6.43  clashed=0/12
+  fr_sample : U/N median=+256924.66  clashed=12/12
+
+oracle+tf_sample clean, fr bad => ROLLOUT DRIFT (corrector). tf_sample bad => per-step.

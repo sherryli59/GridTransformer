@@ -1,0 +1,7 @@
+ckpt step=9000
+K=4 N=8: sites=25  empirical MTM accept=0%  median log_ratio=-136.39  best=-19.33
+K=4 N=32: sites=25  empirical MTM accept=0%  median log_ratio=-62.97  best=-5.49
+K=8 N=8: sites=25  empirical MTM accept=0%  median log_ratio=-713.56  best=-41.57
+K=8 N=32: sites=25  empirical MTM accept=0%  median log_ratio=-241.26  best=-52.87
+
+This is the CORRECT MTM test (sum-of-weights, not any-single-trial). If still ~0% even at N=32, the conditional needs more training before collective MTM works; if nonzero, MTM is already viable at this K.

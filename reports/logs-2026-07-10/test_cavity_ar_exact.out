@@ -1,0 +1,7 @@
+/home/sherryli/xsli/softwares/anaconda3/envs/lightning/lib/python3.11/site-packages/torch/nn/modules/transformer.py:379: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+KA3DCavityAR params=0.839M  device=cuda
+R=1.6 n= 21 (A16/B5) shell=316 | logp_data/n=-9.357 | logq==logprob err=3.83e+00 MISMATCH | slot==morton 5%
+R=2.0 n= 41 (A34/B7) shell=365 | logp_data/n=-9.075 | logq==logprob err=4.00e+00 MISMATCH | slot==morton 0%
+R=2.4 n= 64 (A51/B13) shell=394 | logp_data/n=-9.243 | logq==logprob err=6.38e-01 MISMATCH | slot==morton 3%
+done

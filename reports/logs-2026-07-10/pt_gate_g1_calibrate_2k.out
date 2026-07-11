@@ -1,0 +1,2 @@
+[G1 T=0.5 R=1.6 c=0] mobile=19 ref=0.601 rnd=0.086 gap=0.515 conv=False elapsed=6.0m
+[G1 VERDICT] means={1.6: 0.3433445729315281} all_converged=False decreasing=True -> FAIL

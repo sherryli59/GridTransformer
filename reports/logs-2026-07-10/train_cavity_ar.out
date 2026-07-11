@@ -1,0 +1,13 @@
+train cavities=2700  held=124  radii=(1.6, 2.0, 2.4)
+  step     0  held -logp/n=+8.201  gen U/N med=+48984784.00  clashed=40/40  overlap(gen,true)=0.000  (9s)  [ckpt]
+  step  2000  held -logp/n=+2.316  gen U/N med=+364037.09  clashed=40/40  overlap(gen,true)=0.069  (281s)  [ckpt]
+  step  4000  held -logp/n=+1.855  gen U/N med=+127126.97  clashed=40/40  overlap(gen,true)=0.078  (556s)  [ckpt]
+  step  6000  held -logp/n=+1.658  gen U/N med=+94297.70  clashed=40/40  overlap(gen,true)=0.013  (824s)  [ckpt]
+  step  8000  held -logp/n=+1.509  gen U/N med=+207906.34  clashed=40/40  overlap(gen,true)=0.054  (1094s)  [ckpt]
+  step 10000  held -logp/n=+1.403  gen U/N med=+364178.25  clashed=40/40  overlap(gen,true)=0.090  (1361s)  [ckpt]
+  step 12000  held -logp/n=+1.283  gen U/N med=+118690.03  clashed=40/40  overlap(gen,true)=0.045  (1643s)  [ckpt]
+  step 14000  held -logp/n=+1.256  gen U/N med=+105081.30  clashed=40/40  overlap(gen,true)=0.068  (1924s)  [ckpt]
+  step 16000  held -logp/n=+1.204  gen U/N med=+155083.95  clashed=40/40  overlap(gen,true)=0.077  (2206s)  [ckpt]
+  step 18000  held -logp/n=+1.118  gen U/N med=+147715.86  clashed=40/40  overlap(gen,true)=0.110  (2484s)  [ckpt]
+  step 20000  held -logp/n=+1.101  gen U/N med=+129573.14  clashed=40/40  overlap(gen,true)=0.045  (2762s)  [ckpt]
+DONE -> liquid_coupling_flow/artifacts/ka3d_cavity_ar.pt

@@ -1,0 +1,15 @@
+free-cluster control: 12 clusters, n=[46, 40, 42, 40, 45, 39, 41, 42, 46, 40, 43, 42], true U/N=[-4.14, -3.39, -3.84, -3.57, -3.97, -3.46, -3.75, -3.98, -3.88, -3.76, -3.99, -3.96]
+  step    0  -logp/n=+8.441  (0s)
+  step  500  -logp/n=-4.310  (49s)
+  step 1000  -logp/n=-5.582  (98s)
+  step 1500  -logp/n=-5.752  (145s)
+  step 2000  -logp/n=-5.755  (191s)
+  step 2500  -logp/n=-5.781  (241s)
+  step 2999  -logp/n=-5.804  (291s)
+
+free clusters=12  TRUE U/N median=-3.856
+  oracle : U/N median=-1.319  clashed=7/12
+  mode   : U/N median=+43.687  clashed=11/12
+  sample : U/N median=+3.459  clashed=11/12
+
+VERDICT: mode clean => boundary conditioning is the problem. mode clashes => intrinsic machinery.

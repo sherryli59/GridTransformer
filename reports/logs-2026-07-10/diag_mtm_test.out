@@ -1,0 +1,5 @@
+ckpt step=9000
+K=1: sites=30  P(any-of-16 accepted)=11/30 (37%)  median-best-log_alpha=-0.66
+K=4: sites=30  P(any-of-16 accepted)=0/30 (0%)  median-best-log_alpha=-104.99
+
+If K=1 any-of-N is high -> MTM viable now, mismatch (not bug) confirmed; gap will shrink further with more training.

@@ -1,0 +1,6 @@
+ckpt step=10000  flow_bins=12 tail=5.0 -> knot scale ~0.83 (y-space)
+sites=25
+proposal rms WIDTH     : median=0.413  (cage ~0.1-0.2; knot ~0.83)
+|mean - true|          : median=0.226
+true NN distance       : median=0.925  (context scale check)
+width >> cage & ~knot -> RESOLUTION FLOOR (mw precedent) -> flow_bins 12->32 retrain.

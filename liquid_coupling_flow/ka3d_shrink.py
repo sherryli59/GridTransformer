@@ -19,9 +19,13 @@ def _lt_values(lam, mi, mj, dtype):
     lam where both mobile, (1+lam)/2 where exactly one mobile, 1.0 where both pinned."""
     both = mi & mj
     one = mi ^ mj
+    lam_t = torch.as_tensor(lam, device=both.device, dtype=dtype)
+    while lam_t.dim() < both.dim():
+        lam_t = lam_t.unsqueeze(-1)
+    lam_t = lam_t.expand_as(both)
     lt = torch.ones_like(both, dtype=dtype)
-    lt = torch.where(one, torch.full_like(lt, (1.0 + lam) / 2.0), lt)
-    lt = torch.where(both, torch.full_like(lt, float(lam)), lt)
+    lt = torch.where(one, (1.0 + lam_t) / 2.0, lt)
+    lt = torch.where(both, lam_t, lt)
     return lt
 
 
@@ -74,7 +78,12 @@ def shrink_pair_row(x, s, idx, xi, L, lam, mobile):
 
     mobile_row = mobile[b_ids]                                 # [K,N]
     mobile_i = mobile[b_ids, p_ids][:, None].expand(-1, N)     # [K,N]
-    lt = _lt_values(lam, mobile_i, mobile_row, dtype)          # [K,N]
+    lam_row = torch.as_tensor(lam, device=x.device, dtype=dtype)
+    if lam_row.numel() > 1:
+        if lam_row.numel() != B:
+            raise ValueError(f"lam must be scalar or one value per batch row ({B}), got {lam_row.numel()}")
+        lam_row = lam_row[b_ids]
+    lt = _lt_values(lam_row, mobile_i, mobile_row, dtype)      # [K,N]
 
     sig_s = lt * sig
     rc = RCUT_FACTOR * sig_s

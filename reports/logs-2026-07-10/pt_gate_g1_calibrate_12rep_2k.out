@@ -1,0 +1,14 @@
+nohup: ignoring input
+[G1 T=0.5 R=1.6 c=2] mobile=19 ref=0.465 rnd=0.269 gap=0.196 conv=False elapsed=16.3m
+[G1 T=0.5 R=1.6 c=3] mobile=19 ref=0.790 rnd=0.887 gap=0.096 conv=True elapsed=27.4m
+[G1 T=0.5 R=2.2 c=0] mobile=54 ref=0.653 rnd=0.000 gap=0.652 conv=False elapsed=49.9m
+[G1 T=0.5 R=2.2 c=1] mobile=61 ref=0.377 rnd=0.061 gap=0.316 conv=False elapsed=91.9m
+[G1 T=0.5 R=2.2 c=2] mobile=57 ref=0.483 rnd=0.022 gap=0.461 conv=False elapsed=110.2m
+[G1 T=0.5 R=2.2 c=3] mobile=57 ref=0.653 rnd=0.004 gap=0.650 conv=False elapsed=125.4m
+[G1 T=0.5 R=2.4 c=0] mobile=67 ref=0.658 rnd=0.319 gap=0.339 conv=False elapsed=143.3m
+[G1 T=0.5 R=2.4 c=1] mobile=73 ref=0.609 rnd=0.006 gap=0.603 conv=False elapsed=162.7m
+[G1 T=0.5 R=2.4 c=2] mobile=74 ref=0.471 rnd=0.324 gap=0.147 conv=False elapsed=182.4m
+[G1 T=0.5 R=2.4 c=3] mobile=66 ref=0.730 rnd=0.002 gap=0.727 conv=False elapsed=200.0m
+[G1 T=1.0 R=1.6 c=0] mobile=19 ref=0.568 rnd=0.447 gap=0.121 conv=False elapsed=205.1m
+[G1 VERDICT] means={1.6: 0.6395980641245842, 2.2: 0.281449140418772, 2.4: 0.3898167[G1 T=1.0 R=1.6 c=0] mobile=19 ref=0.568 rnd=0.447 gap=0.121 conv=False elapsed=222.8m
+[G1 VERDICT] means={1.6: 0.6395980641245842, 2.2: 0.281449140418772, 2.4: 0.38981673371745273} all_converged=False decreasing=True -> FAIL

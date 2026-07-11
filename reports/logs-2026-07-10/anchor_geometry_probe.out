@@ -1,0 +1,6 @@
+anchor           d_nbr(median)  frac<0.8(on-neighbour)   d_true(median)
+  centroid_int    0.480          97.7%                   1.264
+  centroid_all    0.502          94.9%                   1.262
+  scaffold        0.558          87.3%                   1.155
+
+Read: high d_nbr + low frac<0.8 = SAFE anchor (empty target). Low d_nbr = argmax lands on a neighbour.

@@ -1,0 +1,20 @@
+ckpt step=10000
+n=42 true U/N=-3.994 clash=0.00 | warm U/N=+5972099852.19 clash=0.81
+
+[from-true]
+  sweep   0  U/N=-3.994  clash=0.00  acc=0%
+  sweep  30  U/N=-3.994  clash=0.00  acc=0%
+  sweep  60  U/N=-3.994  clash=0.00  acc=0%
+  sweep  90  U/N=-3.994  clash=0.00  acc=0%
+  sweep 120  U/N=-3.994  clash=0.00  acc=0%
+  sweep 150  U/N=-3.994  clash=0.00  acc=0%
+
+[from-warm]
+  sweep   0  U/N=+5972099852.190  clash=0.81  acc=0%
+  sweep  30  U/N=-1.474  clash=0.14  acc=10%
+  sweep  60  U/N=-1.794  clash=0.21  acc=5%
+  sweep  90  U/N=-1.915  clash=0.14  acc=4%
+  sweep 120  U/N=-2.250  clash=0.14  acc=3%
+  sweep 150  U/N=-2.467  clash=0.10  acc=3%
+
+done

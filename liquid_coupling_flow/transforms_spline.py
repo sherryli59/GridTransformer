@@ -23,6 +23,9 @@ import torch.nn.functional as F
 DEFAULT_MIN_BIN_WIDTH = 1e-3
 DEFAULT_MIN_BIN_HEIGHT = 1e-3
 DEFAULT_MIN_DERIVATIVE = 1e-3
+# softplus(const)+min_deriv == 1: boundary-derivative pad value, computed ONCE (avoids a per-call
+# host->device tensor creation + sync in the hot path).
+_BOUNDARY_DERIV_CONST = float(torch.log(torch.expm1(torch.tensor(1.0 - DEFAULT_MIN_DERIVATIVE))))
 
 
 def _searchsorted(bin_locations: torch.Tensor, inputs: torch.Tensor, eps: float = 1e-6):
@@ -126,19 +129,18 @@ class RQSplineElementwise:
         uw = p_flat[:, :K]
         uh = p_flat[:, K:2 * K]
         ud_interior = p_flat[:, 2 * K:]  # [M, K-1]
-        # Pad boundary derivatives with the constant giving softplus()+min_deriv == 1
-        const = torch.log(torch.expm1(torch.tensor(1.0 - DEFAULT_MIN_DERIVATIVE)))
-        pad = const.to(ud_interior).expand(ud_interior.shape[0], 1)
+        # Pad boundary derivatives with the precomputed constant (softplus+min_deriv == 1).
+        pad = x_flat.new_full((ud_interior.shape[0], 1), _BOUNDARY_DERIV_CONST)
         ud = torch.cat([pad, ud_interior, pad], dim=-1)  # [M, K+1]
 
+        # Compute the spline for ALL elements (inputs clamped into [-B,B] so _rqs_core is well-defined),
+        # then blend identity linear tails via where. Avoids a data-dependent .any() SYNC and
+        # masked_scatter in the hot path; exact for inside elements (tails overwritten anyway).
         inside = (x_flat > -B) & (x_flat < B)
-        out = x_flat.clone()
-        ld = torch.zeros_like(x_flat)
-        if inside.any():
-            o, l = _rqs_core(x_flat[inside], uw[inside], uh[inside], ud[inside],
-                             inverse=inverse, left=-B, right=B, bottom=-B, top=B)
-            out = out.masked_scatter(inside, o)
-            ld = ld.masked_scatter(inside, l)
+        o, l = _rqs_core(x_flat.clamp(-B, B), uw, uh, ud,
+                         inverse=inverse, left=-B, right=B, bottom=-B, top=B)
+        out = torch.where(inside, o, x_flat)
+        ld = torch.where(inside, l, torch.zeros_like(l))
         return out.reshape(shape), ld.reshape(shape)
 
     def forward(self, x, params):

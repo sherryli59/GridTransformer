@@ -1,0 +1,6 @@
+loaded ckpt step=20000
+held cavities evaluated: 60
+  TRUE   U/N median=-6.778
+  TF-gen U/N median=+12795380.500  clashed=60/60  overlap=0.319
+  FR-gen U/N median=+300652.883  clashed=60/60  overlap=0.041
+VERDICT: TF also clashes -> CONDITIONAL itself weak (alignment/capacity)

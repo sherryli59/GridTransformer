@@ -1,0 +1,12 @@
+masked train=1800 held=20 radii=(1.6, 2.0, 2.4) dev=cuda
+head=categorical use_frame=False rot_aug=True
+step      0 block_nll=+6.003 mode_err=1.590 block_clash=76.2% mh_accept=0.0% full_U=+50760719.40 (27s)
+step   1000 block_nll=+1.716 mode_err=0.586 block_clash=76.2% mh_accept=0.0% full_U=+7098342.56 (166s)
+step   2000 block_nll=+0.857 mode_err=0.504 block_clash=77.5% mh_accept=0.0% full_U=+223553.05 (305s)
+step   3000 block_nll=+0.375 mode_err=0.435 block_clash=68.8% mh_accept=0.0% full_U=+50871.22 (442s)
+step   4000 block_nll=+0.133 mode_err=0.450 block_clash=72.5% mh_accept=0.0% full_U=+270746.96 (581s)
+step   5000 block_nll=-0.344 mode_err=0.407 block_clash=65.0% mh_accept=0.0% full_U=+36559.64 (719s)
+step   6000 block_nll=+0.119 mode_err=0.379 block_clash=57.5% mh_accept=0.0% full_U=+26189.91 (859s)
+step   7000 block_nll=-0.210 mode_err=0.410 block_clash=72.5% mh_accept=0.0% full_U=+5876.26 (997s)
+step   8000 block_nll=-0.170 mode_err=0.419 block_clash=57.5% mh_accept=0.0% full_U=+45696.47 (1137s)
+step   9000 block_nll=-0.642 mode_err=0.370 block_clash=55.0% mh_accept=0.0% full_U=+49856.45 (1277s)

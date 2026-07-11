@@ -1,0 +1,4 @@
+train cavities=2700  held=124  radii=(1.6, 2.0, 2.4)
+  step     0  held -logp/n=+8.178  gen U/N med=+64170020.00  clashed=40/40  overlap(gen,true)=0.000  (12s)  [ckpt]
+  step  2000  held -logp/n=+2.929  gen U/N med=+59251.36  clashed=40/40  overlap(gen,true)=0.050  (295s)  [ckpt]
+  step  4000  held -logp/n=+2.695  gen U/N med=+216502.47  clashed=40/40  overlap(gen,true)=0.032  (576s)  [ckpt]

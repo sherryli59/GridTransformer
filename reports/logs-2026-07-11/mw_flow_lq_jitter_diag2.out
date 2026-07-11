@@ -1,0 +1,9 @@
+   eps  jitter max|d|  jitter med|d|
+ 0.000       6.10e-05       1.53e-05
+ 0.005       2.64e-02       3.05e-05
+ 0.010       1.00e-02       3.05e-05
+ 0.020       6.58e-03       3.05e-05
+ 0.050       7.32e-04       3.05e-05
+VERDICT: log_q repeat-eval jitter is HEAVY-TAILED PER-CONFIG, not a floor: median always ~3e-5,
+max jumps to ~3e-2 sporadically w/ NO trend in perturbation — rare kNN-tie flips bifurcate the
+reverse trajectory. Guard must be MEDIAN-based (systematic bug moves median; bistability moves max).

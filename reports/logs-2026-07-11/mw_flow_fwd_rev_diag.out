@@ -1,0 +1,5 @@
+lq_fwd mean  -225.49   lq_rev mean  -225.58
+mean(lq_fwd - lq_rev)   +0.09 nats (+0.0015/particle)   std 0.50   [SMC logZ offset to explain: +16.7]
+VERDICT: forward-composed and reverse log_q AGREE (+0.09 mean); fwd/rev map inconsistency does NOT
+explain +16.7 either. Remaining suspects: SMC variance @B=64 mutation-limited, or noisy-MH bias from
+per-config lq trajectory noise (std ~0.2-0.5 across integrator settings). -> 3-seed replicates.

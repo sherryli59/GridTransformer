@@ -40,8 +40,9 @@ DEV = "cuda"
 N, B = 64, 64
 L = (N / RHO_STAR) ** (1 / 3)
 beta = 1.0 / T_STAR
+SEED = int(os.environ.get("SMC_SEED", "1"))          # replicate seed (weights/resampling/mutation)
 CKPT = "liquid_coupling_flow/mw/artifacts/mw_ersi_N64_checkpoints/last.ckpt"
-ART = "liquid_coupling_flow/mw/artifacts/mw_flow_smc_geo_N64.pt"
+ART = f"liquid_coupling_flow/mw/artifacts/mw_flow_smc_geo_N64_s{SEED}.pt"
 N_GLOBAL = 8          # global moves per rung
 MAX_RUNGS = 150
 THRESH = -1.60        # arm-S comparison threshold (U/N)
@@ -99,8 +100,8 @@ state["tests"] = {"lam0": (u_before, u_after, acc0), "lam1_acc": acc1}
 save()
 
 # ---------- the geometric-path SMC ----------
-print("\n=== geometric-path SMC (flow base, global moves) ===", flush=True)
-gen = torch.Generator(device=DEV).manual_seed(1)
+print(f"\n=== geometric-path SMC (flow base, global moves)  seed {SEED} ===", flush=True)
+gen = torch.Generator(device=DEV).manual_seed(SEED)
 x = fb.sample(B, gen)
 U = mw_energy(x, L)
 lq = fb.log_q(x)
@@ -135,19 +136,23 @@ while lam < 1.0 and rung < MAX_RUNGS:
     x, U, lq, acc, se = global_moves(x, U, lq, lam, sigma, N_GLOBAL, gen)
     se_cum += se
 
-    # rung guard (c): carried vs fresh (full-batch lq; U on [:8], relative tol). Tolerance sits above
-    # the MEASURED reverse-ODE nondeterminism floor (same-batch repeat eval: max|d| 1.1e-3, tail 5.6e-3
-    # across B=64 — scatter-add atomics amplified by the expanding reverse trajectory; diag 2026-07-11)
-    # and far below O(1)-nat bookkeeping errors the guard exists to catch.
+    # rung guard (c): carried vs fresh (full-batch lq; U on [:8], relative tol). MEDIAN-based: repeat
+    # evals of the reverse-ODE log_q are reproducible to ~3e-5 for typical configs but have RARE
+    # per-config bistability (kNN-tie flips bifurcating the trajectory: isolated max|d| up to ~3e-2,
+    # no trend with perturbation — diag2 2026-07-11). A bookkeeping bug is SYSTEMATIC and shifts the
+    # median; bifurcation noise is sporadic and only moves the max (tracked, not asserted).
     lq_fresh = fb.log_q(x)
-    assert float((lq - lq_fresh).abs().max()) < 5e-2, "carried log_q drifted"
+    lq_dmed = float((lq - lq_fresh).abs().median())
+    lq_dmax = float((lq - lq_fresh).abs().max())
+    assert lq_dmed < 1e-3, f"carried log_q SYSTEMATICALLY drifted (median {lq_dmed:.2e})"
     U_fresh = mw_energy(x[:8], L)
     assert float((U[:8] - U_fresh).abs().max()) < 1e-4 * max(1.0, float(U_fresh.abs().max())), "carried U drifted"
 
     um = float(U.mean()) / N
     hist.append({"rung": rung, "lam": lam, "dlam": dlam, "ess": cur_ess, "resampled": resampled,
                  "acc": acc, "sigma": sigma, "U_mean": um, "U_std": float((U / N).std()),
-                 "lq_mean": float(lq.mean()), "se_cum": se_cum, "logZ": logZ})
+                 "lq_mean": float(lq.mean()), "se_cum": se_cum, "logZ": logZ,
+                 "lq_guard_med": lq_dmed, "lq_guard_max": lq_dmax})
     if crossed is None and lam >= 1.0 and um <= THRESH:
         crossed = se_cum
     print(f"rung {rung:3d} lam {lam:.4f} (d {dlam:.4f}) ess {cur_ess:5.1f}{' R' if resampled else '  '} "

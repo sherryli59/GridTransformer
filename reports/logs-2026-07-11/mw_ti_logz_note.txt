@@ -1,0 +1,4 @@
+TI verdict: logZ_TI = 994 is INVALID — naive beta-space trapezoid diverges at the hot end for SW
+(<U>_uniform = +20,604 at b=0 from the exp(1/(r-a)) near-singularity; first interval alone carries
+~-200 nats of convexity error). Naive temperature TI needs an alchemical soft-core path for this
+class of potential. Kept as an informative negative; the cold leg (b>=0.05) is smooth/valid.

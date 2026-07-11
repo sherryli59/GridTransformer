@@ -1,0 +1,7 @@
+ cfg  sum logdetJ (exact)  -int div dt (claimed)  gap (exact-claimed)
+   0               -94.17                 -94.27                 0.10
+   1               -96.15                 -96.25                 0.10
+   2               -77.90                 -78.00                 0.10
+   3               -93.77                 -93.89                 0.12
+
+mean gap +0.10 nats (+0.0016/particle)   [logZ offset to explain: ~ +23.5 => predicted gap ~ -23 to -30 if this is the bug]

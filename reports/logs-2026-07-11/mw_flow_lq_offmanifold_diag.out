@@ -1,0 +1,2 @@
+flow-samples (ON) : lq40 mean   -226.1  | d80 mean   -0.11 std   0.22  | d160 mean   -0.13 std   0.22
+bank configs (OFF): lq40 mean   -208.8  | d80 mean   -0.25 std   0.16  | d160 mean   -0.31 std   0.14

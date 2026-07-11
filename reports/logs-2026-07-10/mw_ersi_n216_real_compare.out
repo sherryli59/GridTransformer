@@ -1,0 +1,5 @@
+N=216 real equilibrium (independent anneal): U/N -1.6255
+N=216 zero-shot flow raw: U/N -1.3582
+PLOT: reports/logs-2026-07-10/mw_ersi_n216_real_compare.png
+shell1(1.19): real-eq 2.13  flow 1.61
+shell2(1.85): real-eq 1.17  flow 1.15

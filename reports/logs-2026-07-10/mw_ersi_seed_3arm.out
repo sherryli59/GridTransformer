@@ -1,0 +1,11 @@
+seed uniform : U/N +192.6510
+seed exclvol : U/N -0.9072
+seed flow    : U/N -1.3980
+[uniform] start rung 0 (beta 0.50)  final U/N -1.5773  evals 2,359,296
+[exclvol] start rung 3 (beta 1.14)  final U/N -1.5767  evals 1,769,472
+[flow] start rung 8 (beta 4.54)  final U/N -1.5798  evals 786,432
+
+=== AMORTIZATION (energy-evals to equilibrium; uniform=baseline) ===
+  uniform :  2,359,296 evals  final U/N -1.5773  (1.00x vs uniform)
+  exclvol :  1,769,472 evals  final U/N -1.5767  (1.33x vs uniform)
+  flow    :    786,432 evals  final U/N -1.5798  (3.00x vs uniform)

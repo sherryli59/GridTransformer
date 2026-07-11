@@ -22,9 +22,17 @@ interior) => heavy-tailed weights. The known one-shot-ESS=1 wall.
 Geometric path pi_t ~ q^{1-lam}(e^{-bU})^{lam}, lam 0->1. Incremental weight = dlam*(-bU-logq_full);
 mutation = block move with MH log-accept SCALED by lam (= exact block-MTM at lam=1, higher acceptance at
 broad rungs where the interior CAN rearrange). All exact, reuses block_log_prob/sample_block/energy.
-**R=1.6 (M=48, T=40, nmut=4, ncav=4): SMC q_PTS=0.731 at ESS 77% (eff ~37/48), vs naive-IS q=0.507 at
-ESS 2.1% (eff ~1).** ESS(lam) climbs 2%->56%->...->77% and HOLDS -- the anneal splits Var(log w) into 40
-low-variance pieces with mutation between. (R=2.0, 2.4 computing.)
+**PTS overlap q(R) (M=48, T=40, nmut=4, ncav=4) -- monotonic decay = the point-to-set signal:**
+| R | q_PTS (SMC) | ESS | naive-IS (biased low, ESS 2.1%) |
+|---|-------------|-----|---------------------------------|
+| 1.6 | 0.731 | 77% | 0.507 |
+| 2.0 | 0.562 | 83% | 0.432 |
+| 2.4 | 0.494 | 91% | 0.325 |
+q_PTS decays 0.73->0.56->0.49 toward the random floor (~0.12) as the cavity grows -- amorphous order
+weakening with R. SMC ESS healthy at every R; naive-IS stuck at 2.1% and biased LOW (heavy tails miss the
+typical set). ESS(lam) shows larger cavities need the anneal to work harder early (R=2.4 sits at 2% until
+lam~0.4 then climbs to 59%) -> ADAPTIVE lambda schedule is the next efficiency lever. Overlap still >> floor
+at R=2.4, so xi_PTS exceeds the box-limited range (R<=~2.5). Plot: pts_qR.png.
 
 ## Remaining gaps
 1. COST: ~54 min/R at M48/T40/ncav4 -- M x T x (1+nmut) sequential full-context generator passes.

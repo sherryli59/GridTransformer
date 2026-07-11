@@ -53,3 +53,25 @@ at R=2.4, so xi_PTS exceeds the box-limited range (R<=~2.5). Plot: pts_qR.png.
 The K=4 generator CANNOT compute PTS on its own (local MCMC won't rearrange; one-shot IS won't converge),
 but as the base+mutation of an SMC it DOES: healthy ESS and a stable-ish q_PTS. SMC is the required wrapper,
 exactly the campaign's ARM-1 conclusion. Files: ka3d_pts_ebm.py, focused_is_converge.py, ka3d_pts_smc.py.
+
+## MATCHED to Berthier-Charbonneau-Yaida 2016 (JChemPhys 144 024501), T=0.51, their exact core G_PTS
+ka3d_pts_batched.py (batched-over-M SMC, ~50-100x speedup, GPU saturated; exact vs unbatched 1.9e-5).
+Observable = their core <q_c> (same-species Gaussian b=0.2, |r|<0.5 field-integrated). 8 cavities, M=48, T=48.
+| R | my G_PTS(core) | paper est (A0.85,xi2.8,eta3) | q_whole | qc_pair | ESS |
+|---|----------------|------------------------------|---------|---------|-----|
+| 1.4 | 0.752 | ~0.81 | 0.946 | 0.862 | 87% |
+| 1.7 | 0.196 | ~0.74 | 0.700 | 0.883 | 86% |
+| 2.0 | 0.152 | ~0.65 | 0.631 | 0.988 | 71% |
+| 2.3 | 0.186 | ~0.55 | 0.484 | 0.923 | 90% |
+Plot: pts_paper_compare.png.
+
+VERDICT: MATCH at R=1.4 (single-basin, 0.75 vs 0.81); FAIL at R>=1.7 (core crashes to ~bulk vs paper's
+gentle decay). Diagnosis (from the 3 columns): qc_pair stays 0.86-0.99 (samples cluster with EACH OTHER =
+degenerate, one basin) while G_PTS(vs reference) ~ bulk (samples FAR from reference) -> SMC converged to a
+WRONG basin at the cavity CORE and can't reach the reference's. q_whole decays smoothly only because the
+boundary-pinned shell holds; the CORE (furthest from pinning, where multiple states emerge) breaks. ROOT
+CAUSE: K=4 local mutation can't cross glassy basins + the annealing path q->e^{-bU} interpolates toward the
+MODEL PROPOSAL, not a MELTED high-T ensemble -> no basin-hopping. This is exactly the multi-basin regime the
+paper needed temperature-PT (+ shrinkage, ~xi_PTS replicas) for. FIX = add TEMPERATURE annealing (melt-then-
+cool) to the SMC path and/or basin-crossing moves (swap/cluster); local-move + constraint-anneal alone is
+insufficient beyond the single-basin regime.

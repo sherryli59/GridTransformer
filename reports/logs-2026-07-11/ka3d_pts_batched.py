@@ -46,6 +46,7 @@ def ess_frac(logw):
     w = torch.softmax(logw, 0); return float(1.0 / (w ** 2).sum() / w.shape[0])
 
 
+@torch.no_grad()
 def smc_batched(m, xo, so, bnd, s_bnd, R, beta, M, T, n_mut, K, resamp, gen):
     n = xo.shape[0]; allmask = torch.ones(n, dtype=torch.bool, device=dev)
     Xb, Sb, _ = m.sample_block_b(xo[None].expand(M, n, 3).clone(), so[None].expand(M, n).clone(),

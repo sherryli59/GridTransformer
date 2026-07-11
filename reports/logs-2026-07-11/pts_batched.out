@@ -1,0 +1,11 @@
+R=1.4 (116s, ESS 87%): G_PTS(core)=0.752 qc_pair=0.862 q_whole=0.946 G_bulk=0.084
+R=1.7 (153s, ESS 86%): G_PTS(core)=0.196 qc_pair=0.883 q_whole=0.700 G_bulk=0.076
+R=2.0 (195s, ESS 71%): G_PTS(core)=0.152 qc_pair=0.988 q_whole=0.631 G_bulk=0.066
+R=2.3 (252s, ESS 90%): G_PTS(core)=0.186 qc_pair=0.923 q_whole=0.484 G_bulk=0.055
+
+=== batched matched G_PTS(R) vs Berthier-Charbonneau-Yaida 2016 (T~0.51) ===
+  R=1.4: G_PTS=0.752 (paper est ~0.81) qc_pair=0.862 ESS 87%
+  R=1.7: G_PTS=0.196 (paper est ~0.74) qc_pair=0.883 ESS 86%
+  R=2.0: G_PTS=0.152 (paper est ~0.65) qc_pair=0.988 ESS 71%
+  R=2.3: G_PTS=0.186 (paper est ~0.55) qc_pair=0.923 ESS 90%
+saved reports/logs-2026-07-11/pts_batched.pt

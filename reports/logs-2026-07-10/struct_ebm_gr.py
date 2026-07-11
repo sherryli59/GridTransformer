@@ -28,18 +28,8 @@ bc = me._bin_center(torch.arange(me.n_bins, device=dev))
 edges = torch.linspace(0, RMAX, NB + 1, device=dev); dr = float(edges[1] - edges[0]); rc = (edges[:-1] + edges[1:]) / 2
 
 
-@torch.no_grad()
 def sample_ebm(pos0, sp0, k, B):
-    pos = pos0[None].expand(B, N, 2).clone(); sp = sp0[None].expand(B, N).clone()
-    for j in range(N - k, N):
-        h, origin, nr, nsp, val = me._step_ebm(pos, sp, sc[j], j, L)
-        la = F.softmax(me.head_a(h), -1); ba = torch.multinomial(la, 1).squeeze(-1)
-        V = me._V_b(ba, nr, nsp, val, sp[:, j], arc, bc)
-        lb = F.softmax(me.head_b(h + me.bin_a_emb(ba)) - V, -1); bb = torch.multinomial(lb, 1).squeeze(-1)
-        a = me._bin_center(ba) + (torch.rand(B, device=dev) - 0.5) * me.bin_w
-        b = me._bin_center(bb) + (torch.rand(B, device=dev) - 0.5) * me.bin_w
-        pos[:, j] = torch.remainder(origin + torch.stack([a, b], -1) * arc, L)
-    return pos
+    return me.block_sample_suffix(pos0, sp0, k, B, sc, L, return_logq=False)
 
 
 @torch.no_grad()

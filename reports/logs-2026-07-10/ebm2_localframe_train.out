@@ -1,0 +1,13 @@
+/home/sherryli/xsli/softwares/anaconda3/envs/lightning/lib/python3.11/site-packages/torch/nn/modules/transformer.py:379: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+warm-start liquid_coupling_flow/artifacts/ka_localframe_ebm_N100.pt: 7 new params (phi/pair_emb), 0 unused
+  step     0 -logq/N -1.3293  (1s)
+  step   500 -logq/N -1.3789  (191s)
+  step  1000 -logq/N -1.3629  (381s)
+  step  1500 -logq/N -1.2502  (571s)
+  step  2000 -logq/N -1.3125  (761s)
+  step  2500 -logq/N -1.3904  (951s)
+  step  3000 -logq/N -1.4000  (1140s)
+  step  3500 -logq/N -1.3773  (1330s)
+  step  4000 -logq/N -1.3278  (1520s)
+saved liquid_coupling_flow/artifacts/ka_localframe_ebm2_N100.pt

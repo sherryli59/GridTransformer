@@ -26,6 +26,18 @@ acceptance (k=4 65->85, k=6 20->40) — the proposal crossed back over the thres
 | g_BB | 1.27 | 0.74 / 0.207 | **0.82 / 0.152** |
 Potential improves ALL three peaks + L2, incl. g_BB (historically the stubborn one). Plot: `ebm_block_gr.png`.
 
+## a-axis tilt (full 2D sharpening) — `ka_localframe_ebm2_N100.pt`
+Extended the same learned potential to also tilt the a-axis (separate 1D phi_a on neighbour a-projections,
+warm-started from the b-only EBM, +4k steps, -logq/N 1.33->1.38). Both tilts now active; helps most at the
+HARD end (N_trials=64, the reliable column):
+| k | factorized N64 | b-only EBM N64 | a+b EBM N64 |
+|---|---------------|----------------|-------------|
+| 4 | 60% | 85% | 85% |
+| 6 | 20% | 40% | **45%** |
+| 8 | 5%  | 10% | **25%** |
+g(r) all peaks higher / L2 lower than b-only: g_AA 1.34/0.199, g_AB 2.06/0.310, g_BB 0.86/0.134.
+Verdict: a-tilt is a modest but consistent win; the a+b model is the 2D model to port. (2D thesis closed.)
+
 ## Caveats
 1. `<U_prop-U_true>` energy diagnostic in sweep_ebm_ksweep.py is UNINFORMATIVE: raw mean over LJ r^-12
    tail, dominated by rare near-overlaps (~1e15). Use median/core-clamped energy instead. MTM acceptance

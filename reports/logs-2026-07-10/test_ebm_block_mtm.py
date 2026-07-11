@@ -22,37 +22,12 @@ sc = m.geo._scaffold(N, dev); arc = m._arc_scale(N)
 bc = m._bin_center(torch.arange(m.n_bins, device=dev))
 
 
-@torch.no_grad()
 def block_sample(pos0, sp0, k, B):
-    pos = pos0[None].expand(B, N, 2).clone(); sp = sp0[None].expand(B, N).clone()
-    logq = torch.zeros(B, device=dev)
-    for j in range(N - k, N):
-        h, origin, nr, nsp, val = m._step_ebm(pos, sp, sc[j], j, L)
-        la = F.log_softmax(m.head_a(h), -1); ba = torch.multinomial(la.exp(), 1).squeeze(-1)
-        base_b = m.head_b(h + m.bin_a_emb(ba))
-        V = m._V_b(ba, nr, nsp, val, sp[:, j], arc, bc)
-        lb = F.log_softmax(base_b - V, -1); bb = torch.multinomial(lb.exp(), 1).squeeze(-1)
-        logq += la.gather(-1, ba[:, None]).squeeze(-1) + lb.gather(-1, bb[:, None]).squeeze(-1)
-        a = m._bin_center(ba) + (torch.rand(B, device=dev) - 0.5) * m.bin_w
-        b = m._bin_center(bb) + (torch.rand(B, device=dev) - 0.5) * m.bin_w
-        pos[:, j] = torch.remainder(origin + torch.stack([a, b], -1) * arc, L)
-    return pos, logq
+    return m.block_sample_suffix(pos0, sp0, k, B, sc, L)
 
 
-@torch.no_grad()
 def block_logp(pos_in, sp0, k):
-    """logq of the block in pos_in (any config) under the same tilted head. Works for B trials."""
-    B = pos_in.shape[0]; pos = pos_in.clone(); sp = sp0[None].expand(B, N).clone()
-    lp = torch.zeros(B, device=dev)
-    for j in range(N - k, N):
-        h, origin, nr, nsp, val = m._step_ebm(pos, sp, sc[j], j, L)
-        ab = _wrap_pm(pos[:, j] - origin, L) / arc
-        ba = m._bin(ab[..., 0]); bb = m._bin(ab[..., 1])
-        la = F.log_softmax(m.head_a(h), -1)
-        base_b = m.head_b(h + m.bin_a_emb(ba)); V = m._V_b(ba, nr, nsp, val, sp[:, j], arc, bc)
-        lb = F.log_softmax(base_b - V, -1)
-        lp += la.gather(-1, ba[:, None]).squeeze(-1) + lb.gather(-1, bb[:, None]).squeeze(-1)
-    return lp
+    return m.block_logp_suffix(pos_in, sp0, k, sc, L)
 
 
 def clash_in_block(pos, k):

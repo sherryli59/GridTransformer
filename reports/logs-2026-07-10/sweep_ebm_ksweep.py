@@ -28,31 +28,12 @@ def energy(pos, sp):
     return float(ka_energy(pos[None], sp.long()[None], L)[0])
 
 
-@torch.no_grad()
 def sample_ebm(pos0, sp0, k, B):
-    pos = pos0[None].expand(B, N, 2).clone(); sp = sp0[None].expand(B, N).clone(); logq = torch.zeros(B, device=dev)
-    for j in range(N - k, N):
-        h, origin, nr, nsp, val = me._step_ebm(pos, sp, sc[j], j, L)
-        la = F.log_softmax(me.head_a(h), -1); ba = torch.multinomial(la.exp(), 1).squeeze(-1)
-        V = me._V_b(ba, nr, nsp, val, sp[:, j], arc, bc)
-        lb = F.log_softmax(me.head_b(h + me.bin_a_emb(ba)) - V, -1); bb = torch.multinomial(lb.exp(), 1).squeeze(-1)
-        logq += la.gather(-1, ba[:, None]).squeeze(-1) + lb.gather(-1, bb[:, None]).squeeze(-1)
-        a = me._bin_center(ba) + (torch.rand(B, device=dev) - 0.5) * me.bin_w
-        b = me._bin_center(bb) + (torch.rand(B, device=dev) - 0.5) * me.bin_w
-        pos[:, j] = torch.remainder(origin + torch.stack([a, b], -1) * arc, L)
-    return pos, logq
+    return me.block_sample_suffix(pos0, sp0, k, B, sc, L)
 
 
-@torch.no_grad()
 def logp_ebm(pos_in, sp0, k):
-    B = pos_in.shape[0]; pos = pos_in.clone(); sp = sp0[None].expand(B, N).clone(); lp = torch.zeros(B, device=dev)
-    for j in range(N - k, N):
-        h, origin, nr, nsp, val = me._step_ebm(pos, sp, sc[j], j, L)
-        ab = _wrap_pm(pos[:, j] - origin, L) / arc; ba = me._bin(ab[..., 0]); bb = me._bin(ab[..., 1])
-        la = F.log_softmax(me.head_a(h), -1); V = me._V_b(ba, nr, nsp, val, sp[:, j], arc, bc)
-        lb = F.log_softmax(me.head_b(h + me.bin_a_emb(ba)) - V, -1)
-        lp += la.gather(-1, ba[:, None]).squeeze(-1) + lb.gather(-1, bb[:, None]).squeeze(-1)
-    return lp
+    return me.block_logp_suffix(pos_in, sp0, k, sc, L)
 
 
 @torch.no_grad()

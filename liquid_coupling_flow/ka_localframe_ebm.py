@@ -37,17 +37,37 @@ class KALocalFrameEBM(KALocalFrameModel):
         self.phi = nn.Sequential(nn.Linear(n_rbf + pair_emb, phi_hidden), nn.SiLU(),
                                  nn.Linear(phi_hidden, phi_hidden), nn.SiLU(),
                                  nn.Linear(phi_hidden, 1))
-        # init phi near zero so the model starts == the factorized head (stable warm start)
+        # a-axis (1D) tilt: separate learned potential on the neighbours' a-projections (|a - a_i|).
+        self.pair_emb_a = nn.Embedding(self.n_species * self.n_species, pair_emb)
+        self.phi_a = nn.Sequential(nn.Linear(n_rbf + pair_emb, phi_hidden), nn.SiLU(),
+                                   nn.Linear(phi_hidden, phi_hidden), nn.SiLU(),
+                                   nn.Linear(phi_hidden, 1))
+        # init both potential heads near zero so the model starts == its warm-start (stable)
         for p in self.phi[-1].parameters():
+            nn.init.zeros_(p)
+        for p in self.phi_a[-1].parameters():
             nn.init.zeros_(p)
 
     # ---- learned pairwise potential over the b-column at a fixed a-bin ----
-    def _phi_pair(self, dist, sj, nbr_sp):
-        """dist [...,K], sj [...], nbr_sp [...,K] -> phi [...,K] (learned pairwise energy contribution)."""
+    def _phi_pair(self, dist, sj, nbr_sp, net=None, emb=None):
+        """dist [...,K], sj [...], nbr_sp [...,K] -> phi [...,K] (learned pairwise energy contribution).
+        net/emb default to the 2D b-tilt heads; pass phi_a/pair_emb_a for the 1D a-tilt."""
+        net = self.phi if net is None else net; emb = self.pair_emb if emb is None else emb
         r = torch.exp(-((dist[..., None] - self.rbf_mu) ** 2) / (2 * self.rbf_w ** 2))       # [...,K,n_rbf]
         pair = (sj[..., None] * self.n_species + nbr_sp).clamp(0, self.n_species ** 2 - 1)   # [...,K]
-        pe = self.pair_emb(pair)                                                             # [...,K,pair_emb]
-        return self.phi(torch.cat([r, pe], -1)).squeeze(-1)                                  # [...,K]
+        pe = emb(pair)                                                                       # [...,K,pair_emb]
+        return net(torch.cat([r, pe], -1)).squeeze(-1)                                       # [...,K]
+
+    def _V_a(self, nbr_rel, nbr_sp, valid, sj, arc, acenters):
+        """1D a-axis tilt: V over the n_bins a-bins from the neighbours' a-projections |a - a_i|.
+        Returns V [...,n_bins]. Same short-range knn_pot cutoff as the b-tilt."""
+        K = min(self.knn_pot, nbr_rel.shape[-2])
+        nr, ns, vv = nbr_rel[..., :K, 0], nbr_sp[..., :K], valid[..., :K].float()            # neighbour a-coord
+        a_phys = acenters * arc                                                              # [n_bins]
+        da = (a_phys[..., None] - nr[..., None, :]).abs()                                    # [...,n_bins,K]
+        phi = self._phi_pair(da, sj[..., None].expand(da.shape[:-1]), ns[..., None, :].expand(da.shape),
+                             net=self.phi_a, emb=self.pair_emb_a)
+        return (phi * vv[..., None, :]).sum(-1)                                              # [...,n_bins]
 
     def _V_b(self, ba, nbr_rel, nbr_sp, valid, sj, arc, bcenters):
         """V over the 192 b-bins at the chosen a-bin `ba`. nbr_rel [...,K,2] neighbour coords in the LOCAL
@@ -99,14 +119,16 @@ class KALocalFrameEBM(KALocalFrameModel):
         context, origin, nbr_rel, nbr_sp, valid = self._local_ebm(xo, so, sc, L, N)
         ab = _wrap_pm(xo - origin, L) / arc
         ba, bb = self._bin(ab[..., 0]), self._bin(ab[..., 1])
-        la = F.log_softmax(self.head_a(context), -1)
-        base_b = self.head_b(context + self.bin_a_emb(ba))                                    # [B,N,n_bins]
         bc = self._bin_center(torch.arange(self.n_bins, device=x.device))
-        V = torch.zeros_like(base_b)
+        base_a = self.head_a(context)                                                         # [B,N,n_bins]
+        base_b = self.head_b(context + self.bin_a_emb(ba))                                    # [B,N,n_bins]
+        Va, Vb = torch.zeros_like(base_a), torch.zeros_like(base_b)
         for c0 in range(0, N, n_chunk):                                                       # chunk N for memory
             sl = slice(c0, c0 + n_chunk)
-            V[:, sl] = self._V_b(ba[:, sl], nbr_rel[:, sl], nbr_sp[:, sl], valid[:, sl], so[:, sl], arc, bc)
-        lb = F.log_softmax(base_b - V, -1)
+            Va[:, sl] = self._V_a(nbr_rel[:, sl], nbr_sp[:, sl], valid[:, sl], so[:, sl], arc, bc)
+            Vb[:, sl] = self._V_b(ba[:, sl], nbr_rel[:, sl], nbr_sp[:, sl], valid[:, sl], so[:, sl], arc, bc)
+        la = F.log_softmax(base_a - Va, -1)
+        lb = F.log_softmax(base_b - Vb, -1)
         lp_ab = la.gather(-1, ba[..., None]).squeeze(-1) + lb.gather(-1, bb[..., None]).squeeze(-1)
         s_logits = self.head_species(context)
         if self.canonical if canonical is None else canonical:
@@ -135,3 +157,39 @@ class KALocalFrameEBM(KALocalFrameModel):
         h = self.tr(torch.cat([self.query.expand(B, 1, -1), feat], 1))[:, 0]
         valid = torch.ones(B, k, dtype=torch.bool, device=pos.device)
         return h, origin, nbr_rel, nbr_sp, valid
+
+    # ---- centralized suffix-blob block samplers (both a- and b- tilts; single source of truth) ----
+    @torch.no_grad()
+    def block_sample_suffix(self, pos0, sp0, k, B, sc, L, return_logq=True):
+        """Regenerate the last-k curve particles for B trials (positions only, species fixed)."""
+        N, dev = pos0.shape[0], pos0.device; arc = self._arc_scale(N)
+        bc = self._bin_center(torch.arange(self.n_bins, device=dev))
+        pos = pos0[None].expand(B, N, 2).clone(); sp = sp0[None].expand(B, N).clone()
+        logq = torch.zeros(B, device=dev)
+        for j in range(N - k, N):
+            h, origin, nr, nsp, val = self._step_ebm(pos, sp, sc[j], j, L)
+            la = F.log_softmax(self.head_a(h) - self._V_a(nr, nsp, val, sp[:, j], arc, bc), -1)
+            ba = torch.multinomial(la.exp(), 1).squeeze(-1)
+            Vb = self._V_b(ba, nr, nsp, val, sp[:, j], arc, bc)
+            lb = F.log_softmax(self.head_b(h + self.bin_a_emb(ba)) - Vb, -1)
+            bb = torch.multinomial(lb.exp(), 1).squeeze(-1)
+            logq += la.gather(-1, ba[:, None]).squeeze(-1) + lb.gather(-1, bb[:, None]).squeeze(-1)
+            a = self._bin_center(ba) + (torch.rand(B, device=dev) - 0.5) * self.bin_w
+            b = self._bin_center(bb) + (torch.rand(B, device=dev) - 0.5) * self.bin_w
+            pos[:, j] = torch.remainder(origin + torch.stack([a, b], -1) * arc, L)
+        return (pos, logq) if return_logq else pos
+
+    @torch.no_grad()
+    def block_logp_suffix(self, pos_in, sp0, k, sc, L):
+        """logq of the last-k block in pos_in (any B configs) under the same doubly-tilted head."""
+        B, N, dev = pos_in.shape[0], pos_in.shape[1], pos_in.device; arc = self._arc_scale(N)
+        bc = self._bin_center(torch.arange(self.n_bins, device=dev))
+        pos = pos_in.clone(); sp = sp0[None].expand(B, N).clone(); lp = torch.zeros(B, device=dev)
+        for j in range(N - k, N):
+            h, origin, nr, nsp, val = self._step_ebm(pos, sp, sc[j], j, L)
+            ab = _wrap_pm(pos[:, j] - origin, L) / arc; ba = self._bin(ab[..., 0]); bb = self._bin(ab[..., 1])
+            la = F.log_softmax(self.head_a(h) - self._V_a(nr, nsp, val, sp[:, j], arc, bc), -1)
+            Vb = self._V_b(ba, nr, nsp, val, sp[:, j], arc, bc)
+            lb = F.log_softmax(self.head_b(h + self.bin_a_emb(ba)) - Vb, -1)
+            lp += la.gather(-1, ba[:, None]).squeeze(-1) + lb.gather(-1, bb[:, None]).squeeze(-1)
+        return lp

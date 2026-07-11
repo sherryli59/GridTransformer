@@ -1,5 +1,5 @@
 import torch
-from liquid_coupling_flow.ka3d_block_corrector import AffineCoupling
+from liquid_coupling_flow.ka3d_block_corrector import AffineCoupling, CageConditioner
 
 def test_affine_coupling_roundtrip_and_logdet():
     torch.manual_seed(0)
@@ -19,3 +19,14 @@ def test_affine_coupling_identity_when_params_zero():
     u_out, logdet = ac.forward(u, torch.zeros(4, 6))
     assert torch.allclose(u_out, u, atol=1e-6)
     assert torch.allclose(logdet, torch.zeros(4), atol=1e-6)
+
+def test_cage_conditioner_shape_and_zero_init():
+    torch.manual_seed(0)
+    cc = CageConditioner()
+    M, A, C = 4, 3, 20
+    ax = torch.randn(M, A, 3); asp = torch.randint(0, 2, (M, A))
+    cx = torch.randn(M, C, 3); csp = torch.randint(0, 2, (M, C))
+    p = cc.params(ax, asp, cx, csp, R=2.0)
+    assert p.shape == (M, A, 6)
+    # zero-init head => params all ~0 (identity coupling at init)
+    assert p.abs().max() < 1e-6

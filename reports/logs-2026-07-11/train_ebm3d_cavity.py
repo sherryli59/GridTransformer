@@ -109,7 +109,7 @@ def main():
         miss, unexp = m.load_state_dict(ck["state_dict"], strict=False); m.use_frame = False
         print(f"warm {a.warm}: {len(miss)} new, {len(unexp)} unused; frameless", flush=True)
     if a.freeze_phi:
-        params = [p for name, p in m.named_parameters() if not name.startswith("phi.")]
+        params = [p for name, p in m.named_parameters() if name.split(".")[0] not in ("phi", "phi_a", "phi_b")]
         print(f"FREEZE-PHI baseline: potential stays 0 (V_c==0); training {len(params)} param tensors", flush=True)
     else:
         params = list(m.parameters())

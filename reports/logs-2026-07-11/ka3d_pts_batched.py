@@ -57,6 +57,39 @@ def ess_frac(logw):
 
 
 @torch.no_grad()
+def mtm_jump_b(m, Xb, Sb, blk, bnd, s_bnd, R, beta, N, gen):
+    """MODEL-NATIVE basin jump: propose N large-block regens per config (one batched shot), accept the best
+    via the exact Liu-Liang-Wong independence-MTM ratio. The generator teleports to the best of N alternative
+    basins; exact log q filters it. No temperature/melting -- uses ONLY the learned proposal + exact likelihood."""
+    M, n, _ = Xb.shape
+    Xr, Sr = Xb.repeat_interleave(N, 0), Sb.repeat_interleave(N, 0)
+    Xp, Sp, lqf = m.sample_block_b(Xr, Sr, blk, bnd, s_bnd, R, gen=gen)              # [M*N] proposals
+    up = (-beta * energy_b(Xp, Sp, bnd, s_bnd) - lqf).reshape(M, N)                 # u(y_j)
+    u0 = -beta * energy_b(Xb, Sb, bnd, s_bnd) - m.block_log_prob_b(Xb, Sb, blk, bnd, s_bnd, R)  # u(x)
+    ar = torch.arange(M, device=Xb.device)
+    sfwd = torch.logsumexp(up, 1)
+    J = torch.multinomial(torch.softmax(up, 1), 1, generator=gen).squeeze(1)
+    lr = up.clone(); lr[ar, J] = u0; srev = torch.logsumexp(lr, 1)                  # S_rev = S_fwd - u(Y) + u(x)
+    acc = torch.rand(M, device=Xb.device, generator=gen).log() < (sfwd - srev)
+    Yx = Xp.reshape(M, N, n, 3)[ar, J]; Ys = Sp.reshape(M, N, n)[ar, J]
+    return torch.where(acc[:, None, None], Yx, Xb), torch.where(acc[:, None], Ys, Sb), acc.float().mean().item()
+
+
+@torch.no_grad()
+def mtm_sampler(m, xo, so, bnd, s_bnd, R, beta, M, sweeps, N, K, gen):
+    """Pure model-native sampler: M chains from independent full-regens, each doing large-block many-trial
+    MTM jumps at the COLD target (no anneal). Returns the population + acceptance trace."""
+    n = xo.shape[0]; allmask = torch.ones(n, dtype=torch.bool, device=dev)
+    Xb, Sb, _ = m.sample_block_b(xo[None].expand(M, n, 3).clone(), so[None].expand(M, n).clone(), allmask, bnd, s_bnd, R, gen=gen)
+    accs = []
+    for _ in range(sweeps):
+        for _ in range(max(1, n // K)):
+            blk = blob(n, R, K, gen)
+            Xb, Sb, a = mtm_jump_b(m, Xb, Sb, blk, bnd, s_bnd, R, beta, N, gen); accs.append(a)
+    return Xb, Sb, torch.ones(M, device=dev) / M, sum(accs) / max(len(accs), 1)
+
+
+@torch.no_grad()
 def smc_batched(m, xo, so, bnd, s_bnd, R, beta, M, T, n_mut, K, resamp, gen, kbig=0, core=None):
     n = xo.shape[0]; allmask = torch.ones(n, dtype=torch.bool, device=dev)
     Xb, Sb, _ = m.sample_block_b(xo[None].expand(M, n, 3).clone(), so[None].expand(M, n).clone(),
@@ -96,6 +129,9 @@ def main():
     ap.add_argument("--T", type=int, default=40); ap.add_argument("--nmut", type=int, default=4)
     ap.add_argument("--K", type=int, default=4); ap.add_argument("--resamp", type=float, default=0.5)
     ap.add_argument("--kbig", type=int, default=0, help="lambda-scheduled max blob size (0=fixed K)")
+    ap.add_argument("--mtm", type=int, default=0, help="model-native MTM-jump sampler: N trials/jump (0=use SMC)")
+    ap.add_argument("--jumpk", type=int, default=12, help="block size for MTM jumps")
+    ap.add_argument("--sweeps", type=int, default=8, help="MTM-jump sweeps")
     ap.add_argument("--core", action="store_true", help="CORE-region moves (regenerate slots within r_core of centre)")
     ap.add_argument("--core-lo", type=float, default=0.35, help="core radius fraction of R at lam=1 (small central refine)")
     ap.add_argument("--core-hi", type=float, default=0.85, help="core radius fraction of R at lam=0 (big core, cross basins)")
@@ -125,7 +161,10 @@ def main():
         t0 = time.time(); gc, qw, qp, ess, pops = [], [], [], [], []
         for (xo, so, bnd, sb) in cavs[:a.ncav]:
             core = (a.core_lo, a.core_hi) if a.core else None
-            Xb, Sb, w, e = smc_batched(m, xo, so, bnd, sb, R, a.beta, a.M, a.T, a.nmut, a.K, a.resamp, gen, a.kbig, core)
+            if a.mtm > 0:
+                Xb, Sb, w, e = mtm_sampler(m, xo, so, bnd, sb, R, a.beta, a.M, a.sweeps, a.mtm, a.jumpk, gen)
+            else:
+                Xb, Sb, w, e = smc_batched(m, xo, so, bnd, sb, R, a.beta, a.M, a.T, a.nmut, a.K, a.resamp, gen, a.kbig, core)
             gc.append(sum(float(w[k]) * core_qc(Xb[k], Sb[k], xo, so, gen) for k in range(a.M)))
             qw.append(sum(float(w[k]) * overlap_whole(Xb[k], xo) for k in range(a.M)))
             ii = torch.multinomial(w, 150, replacement=True, generator=gen); jj = torch.multinomial(w, 150, replacement=True, generator=gen)

@@ -1,0 +1,15 @@
+============================= test session starts ==============================
+platform linux -- Python 3.11.9, pytest-9.0.3, pluggy-1.6.0 -- /home/sherryli/xsli/softwares/anaconda3/envs/lightning/bin/python
+cachedir: .pytest_cache
+rootdir: /mnt/ssd/GridTransformer
+plugins: hydra-core-1.3.2, anyio-4.9.0
+collecting ... collected 4 items
+
+tests/test_mw_ersi_smoke.py::test_egnn_3d_forward_and_divergence_runs PASSED [ 25%]
+tests/test_mw_ersi_divergence.py::test_analytical_div_matches_bruteforce_3d[4] PASSED [ 50%]
+tests/test_mw_ersi_divergence.py::test_analytical_div_matches_bruteforce_3d[6] PASSED [ 75%]
+tests/test_mw_ersi_divergence.py::test_analytical_div_matches_bruteforce_3d[7] PASSED [100%]
+
+============================== 4 passed in 3.46s ===============================
+
+G-a verdict: PASS — 3D kNN-trimmed analytical divergence equals brute-force autodiff for K=4,6,7.

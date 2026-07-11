@@ -1,0 +1,28 @@
+mW eRSI G-b diagnostic (CPU, 2026-07-10)
+
+Configuration
+-------------
+N=2, L=1.636420029841, K=1, hidden_nf=8, n_layers=1
+128 synthetic uniformly distributed configurations; one RFM training step; seed=0
+likelihood solver: RK4, 40 time points
+
+Full-joint normalization test
+-----------------------------
+The check is midpoint quadrature over all six coordinates on a 4^6 grid.
+This is a real N=2 joint integral; an N=8 / 24-D "coarse quadrature" is not
+tractable and would not establish normalization.
+
+integral exp(log_q(x)) dx = 14.186451848
+expected = 1.0
+
+Solver scores at fixed configs
+------------------------------
+steps=10: [-0.2842812538, -0.2837259769, -0.2890052795, -0.3022308350]
+steps=20: [-0.2884476185, -0.2864961624, -0.2918462753, -0.3096508980]
+steps=40: [-0.2904264927, -0.2877478600, -0.2933278084, -0.3131098747]
+steps=80: [-0.2916014194, -0.2883572578, -0.2942490578, -0.3149795532]
+
+Verdict: FAIL / BLOCKED.  The sample-to-reverse-score round trip can pass while
+the composed density is non-normalized.  Do not use this proposal in one-shot
+importance sampling or launch N=64 training/evaluation until the periodic-flow
+normalization defect is resolved.

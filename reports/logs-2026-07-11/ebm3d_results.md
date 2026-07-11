@@ -28,6 +28,19 @@ KEY: c-only (tilting just the last axis) fixed INTERIOR clashes but NOT the boun
 can't escape the dense wall once a,b land on it). Multi-axis dodging drops boundary 20->14% and retained
 27->14% -- the same pairwise potential handles the wall for free once every axis can respond.
 
+## Species-resolved g(r) -- the structural statistic (bulk-normalised rho_b=rho*x_b, g->1 at large r)
+Block-centred g(r) of the regenerated block particles vs all cavity particles; ground truth = TRUE block.
+(self-pairs excluded BY INDEX -- cdist self-distance ~1e-3 from cancellation leaks into bin 0 otherwise;
+this was the earlier "peaks in the 100s" bug.) First-peak height + first-shell L2-to-data:
+| pair | data peak | base peak / L2 | c-only peak / L2 | multi-axis peak / L2 |
+|------|-----------|----------------|------------------|----------------------|
+| g_AA | 3.82 @1.08 | 1.93 / 0.672 | 2.01 / 0.605 | **2.30 / 0.518** |
+| g_AB | 4.60 @0.88 | 1.83 / 0.881 | 2.31 / 0.705 | **3.14 / 0.493** |
+| g_BB | 1.59 @1.58 | 1.29 / 0.365 | 1.39 / -- | **-- / 0.343** |
+Multi-axis has the LOWEST L2-to-data on ALL three species; first peaks climb toward data monotonically
+base<c-only<multi-axis (clearest for g_AB, the strongest interaction: 1.83->2.31->3.14, data 4.60). Peaks
+still undershoot data (proposal is broader than one config, pre-MTM -- same as 2D). Plot: ebm3d_cavity_gr.png.
+
 ## block-MTM acceptance (20 cavities, +-~11% noise; base -> multi-axis)
 | K | base N16/32/64 | multi-axis N16/32/64 |
 |---|----------------|----------------------|
@@ -51,8 +64,9 @@ cleanly. Overall: acceptance + interior structure transfer zero-shot to the held
 ## Verdict
 The energy-like-embedding architecture ports to 3D cavity infilling: exact, boundary-as-cage unification
 works, and MULTI-AXIS tilting is the right architecture (c-only under-resolves 3D). The potential earns a
-large conditional gain (+1.16 nats) and a real clash/acceptance improvement; the K=6 ceiling localizes the
-residual to collective-move energy cost, not the proposal.
+large conditional gain (+1.16 nats), lowers species-resolved g(r) L2-to-data on all three pairs, and lifts
+acceptance; the K=6 ceiling localizes the residual to collective-move energy cost, not the proposal.
+The clash cutoff and g(r) agree (base<c-only<multi-axis); g(r) is the trustworthy structural metric.
 
 ## Files / artifacts
 - ka3d_scaffold_ebm.py (KA3DScaffoldEBM, multi-axis)

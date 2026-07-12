@@ -1,0 +1,18 @@
+  cav 1: A(ARpos+ARsp)    +47.2  B(ARpos+DATAsp)  +47.16  C(DATApos+ARsp)     -0.5  D -0.46  | sp-mismatch 0%
+  cav 2: A(ARpos+ARsp)   +160.0  B(ARpos+DATAsp) +249.96  C(DATApos+ARsp)     +6.7  D -0.85  | sp-mismatch 52%
+  cav 3: A(ARpos+ARsp) +24600462579206.5  B(ARpos+DATAsp) +24600669498203.84  C(DATApos+ARsp)     +3.8  D -0.64  | sp-mismatch 17%
+  cav 4: A(ARpos+ARsp)   +133.0  B(ARpos+DATAsp) +185.58  C(DATApos+ARsp)     +2.1  D -0.51  | sp-mismatch 38%
+  cav 5: A(ARpos+ARsp)   +328.4  B(ARpos+DATAsp) +311.04  C(DATApos+ARsp)     +1.4  D -0.59  | sp-mismatch 29%
+  cav 6: A(ARpos+ARsp)    +43.5  B(ARpos+DATAsp)  +52.48  C(DATApos+ARsp)     +2.4  D -0.82  | sp-mismatch 23%
+  cav 7: A(ARpos+ARsp)    +81.7  B(ARpos+DATAsp)  +91.58  C(DATApos+ARsp)     +0.3  D -0.73  | sp-mismatch 15%
+  cav 8: A(ARpos+ARsp)    +40.3  B(ARpos+DATAsp)  +40.11  C(DATApos+ARsp)     +4.1  D -0.73  | sp-mismatch 33%
+  cav 9: A(ARpos+ARsp)   +128.4  B(ARpos+DATAsp) +121.70  C(DATApos+ARsp)     +3.8  D -0.55  | sp-mismatch 42%
+  cav 10: A(ARpos+ARsp)    +21.8  B(ARpos+DATAsp)  +22.04  C(DATApos+ARsp)     +0.5  D -0.84  | sp-mismatch 17%
+
+K=12, 10 cavities  (median dE/block-particle above equilibrium)
+  A  AR pos   + AR species     +105.03
+  B  AR pos   + DATA species   +106.64   (LOW => AR species is the culprit)
+  C  DATA pos + AR species       +2.25   (HIGH => AR species incompatible even w/ perfect pos)
+  D  DATA pos + DATA species     -0.68   (control)
+  species mismatch (AR vs data, per slot): 26%
+VERDICT: POSITION/TOPOLOGY frustration persists even with data species -> deeper than species

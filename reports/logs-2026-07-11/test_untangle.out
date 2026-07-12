@@ -1,0 +1,17 @@
+  cav 1: (1)direct    +47.6  (2)soft->LBFGS     +9.2  (3)langevin->LBFGS     +8.0  | C(DATApos) -0.46
+  cav 2: (1)direct    +68.8  (2)soft->LBFGS     +2.3  (3)langevin->LBFGS     +2.8  | C(DATApos) +0.59
+  cav 3: (1)direct   +366.7  (2)soft->LBFGS     +8.8  (3)langevin->LBFGS     +8.6  | C(DATApos) +3.09
+  cav 4: (1)direct   +101.6  (2)soft->LBFGS     +6.5  (3)langevin->LBFGS     +6.0  | C(DATApos) +3.17
+  cav 5: (1)direct    +78.5  (2)soft->LBFGS     +4.3  (3)langevin->LBFGS     +3.8  | C(DATApos) +1.14
+  cav 6: (1)direct    +35.7  (2)soft->LBFGS     +7.8  (3)langevin->LBFGS     +7.2  | C(DATApos) -0.82
+  cav 7: (1)direct   +392.7  (2)soft->LBFGS     +7.4  (3)langevin->LBFGS     +7.4  | C(DATApos) +0.36
+  cav 8: (1)direct    +16.6  (2)soft->LBFGS     +3.8  (3)langevin->LBFGS     +3.8  | C(DATApos) +2.48
+  cav 9: (1)direct    +19.9  (2)soft->LBFGS     +4.6  (3)langevin->LBFGS     +4.6  | C(DATApos) -0.71
+  cav 10: (1)direct   +157.7  (2)soft->LBFGS     +7.6  (3)langevin->LBFGS     +7.4  | C(DATApos) +4.32
+
+K=12, 10 cavities  (median dE/block-particle above equilibrium; good basin ~ +2)
+  (1) LBFGS direct                +73.63
+  (2) softcore-declash -> LBFGS    +6.94   (LOW => tangles are SLIDABLE, det. corrector works)
+  (3) langevin-anneal  -> LBFGS    +6.60   (only-this LOW => genuine overlaps, need stochastic)
+  C   DATApos+ARspecies            +0.87   (the good basin exists)
+VERDICT: SLIDABLE -> soft-then-hard deterministic corrector reaches the good basin (make it exact next)

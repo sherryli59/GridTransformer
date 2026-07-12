@@ -1,0 +1,17 @@
+  cav 1: raw +2.5e+09  AR-floor  +47.16  data-floor  -0.46  /part
+  cav 2: raw +2.5e+08  AR-floor +160.04  data-floor  -0.85  /part
+  cav 3: raw +5.7e+16  AR-floor +24600462579206.50  data-floor  -0.64  /part
+  cav 4: raw +2.6e+09  AR-floor +133.03  data-floor  -0.51  /part
+  cav 5: raw +3.7e+10  AR-floor +328.43  data-floor  -0.59  /part
+  cav 6: raw +2.2e+08  AR-floor  +43.46  data-floor  -0.82  /part
+  cav 7: raw +2.5e+07  AR-floor  +81.71  data-floor  -0.73  /part
+  cav 8: raw +1.5e+08  AR-floor  +40.29  data-floor  -0.73  /part
+  cav 9: raw +3.5e+13  AR-floor +128.35  data-floor  -0.55  /part
+  cav 10: raw +9.5e+09  AR-floor  +21.83  data-floor  -0.84  /part
+
+K=12, 10 cavities  (LBFGS position-only relaxation on TRUE KA energy)
+  dE/block-particle above equilibrium:
+    raw AR         +5.66e+15
+    AR-floor       +2460046258019.08   (position-relaxed AR block, AR species kept)
+    data-floor       -0.67   (control: relaxed data block => LBFGS sanity)
+VERDICT: SPECIES/TOPOLOGY frustration: position relaxation floors HIGH -> fix the base, not a position corrector

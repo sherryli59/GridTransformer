@@ -1,0 +1,37 @@
+pool=8  raw clash=40%  (full-cage floor 29%, half-cage 57%)
+sweeping 32 configs...
+
+p=3 a=0.35 w=2 eta=8e-04 T= 30 | clash   14% div  51% | logdet   -13.63 vs fd   -13.48 OK  <== declash+exact
+p=3 a=0.35 w=2 eta=8e-04 T= 60 | clash   10% div  55% | logdet   -20.43 vs fd   -19.16 XX
+p=3 a=0.35 w=2 eta=2e-03 T= 30 | clash    9% div  56% | logdet   -14.03 vs fd   -12.75 XX
+p=3 a=0.35 w=2 eta=2e-03 T= 60 | clash    7% div  61% | logdet   -21.38 vs fd   -15.46 XX
+p=3 a=0.35 w=6 eta=8e-04 T= 30 | clash    8% div  57% | logdet   -14.12 vs fd   -10.40 XX
+p=3 a=0.35 w=6 eta=8e-04 T= 60 | clash    6% div  62% | logdet   -20.16 vs fd   -15.50 XX
+p=3 a=0.35 w=6 eta=2e-03 T= 30 | clash    4% div  59% | logdet    +2.45 vs fd    +3.62 XX
+p=3 a=0.35 w=6 eta=2e-03 T= 60 | clash    4% div  64% | logdet    -2.34 vs fd    -0.70 XX
+p=3 a=0.45 w=2 eta=8e-04 T= 30 | clash   18% div  50% | logdet   -12.91 vs fd   -12.88 OK  <== declash+exact
+p=3 a=0.45 w=2 eta=8e-04 T= 60 | clash   14% div  54% | logdet   -18.11 vs fd   -17.99 OK  <== declash+exact
+p=3 a=0.45 w=2 eta=2e-03 T= 30 | clash   12% div  55% | logdet   -18.83 vs fd   -18.96 OK  <== declash+exact
+p=3 a=0.45 w=2 eta=2e-03 T= 60 | clash    9% div  61% | logdet   -26.57 vs fd   -22.63 XX
+p=3 a=0.45 w=6 eta=8e-04 T= 30 | clash   11% div  55% | logdet   -17.52 vs fd   -17.97 OK  <== declash+exact
+p=3 a=0.45 w=6 eta=8e-04 T= 60 | clash    8% div  61% | logdet   -25.57 vs fd   -20.74 XX
+p=3 a=0.45 w=6 eta=2e-03 T= 30 | clash    8% div  60% | logdet   -15.72 vs fd   -11.47 XX
+p=3 a=0.45 w=6 eta=2e-03 T= 60 | clash    7% div  65% | logdet   -21.83 vs fd   -15.96 XX
+p=4 a=0.35 w=2 eta=8e-04 T= 30 | clash    7% div  53% | logdet    +8.79 vs fd   +11.93 XX
+p=4 a=0.35 w=2 eta=8e-04 T= 60 | clash    5% div  57% | logdet    +3.27 vs fd   +10.13 XX
+p=4 a=0.35 w=2 eta=2e-03 T= 30 | clash    3% div  55% | logdet    +0.88 vs fd    +4.70 XX
+p=4 a=0.35 w=2 eta=2e-03 T= 60 | clash    3% div  58% | logdet    -2.43 vs fd    +3.11 XX
+p=4 a=0.35 w=6 eta=8e-04 T= 30 | clash    3% div  54% | logdet    +7.81 vs fd    +6.88 XX
+p=4 a=0.35 w=6 eta=8e-04 T= 60 | clash    2% div  58% | logdet    +4.75 vs fd    +5.14 XX
+p=4 a=0.35 w=6 eta=2e-03 T= 30 | clash    0% div  47% | logdet   +17.57 vs fd   +17.45 OK  <== declash+exact
+p=4 a=0.35 w=6 eta=2e-03 T= 60 | clash    0% div  48% | logdet   +13.74 vs fd   +13.64 OK  <== declash+exact
+p=4 a=0.45 w=2 eta=8e-04 T= 30 | clash   13% div  51% | logdet   -12.85 vs fd   -12.75 OK  <== declash+exact
+p=4 a=0.45 w=2 eta=8e-04 T= 60 | clash    9% div  55% | logdet   -20.34 vs fd   -19.37 XX
+p=4 a=0.45 w=2 eta=2e-03 T= 30 | clash    8% div  54% | logdet   -14.23 vs fd    -9.02 XX
+p=4 a=0.45 w=2 eta=2e-03 T= 60 | clash    6% div  59% | logdet   -21.46 vs fd   -13.60 XX
+p=4 a=0.45 w=6 eta=8e-04 T= 30 | clash    8% div  56% | logdet    -9.36 vs fd    -2.63 XX
+p=4 a=0.45 w=6 eta=8e-04 T= 60 | clash    6% div  61% | logdet   -14.75 vs fd    -7.01 XX
+p=4 a=0.45 w=6 eta=2e-03 T= 30 | clash    3% div  55% | logdet    +6.89 vs fd    +7.12 OK  <== declash+exact
+p=4 a=0.45 w=6 eta=2e-03 T= 60 | clash    3% div  58% | logdet    +3.04 vs fd    +3.54 XX
+
+BEST: (0.13020833721384406, 0.95, 0.35, 6.0, 4, 30, 0.002)

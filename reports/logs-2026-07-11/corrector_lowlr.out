@@ -1,0 +1,12 @@
+pool=1800
+step     0 -logq/K -2.7934 (1s)
+step   500 -logq/K +3.1373 (486s)
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/mnt/ssd/GridTransformer/reports/logs-2026-07-11/train_corrector.py", line 76, in <module>
+    main()
+  File "/mnt/ssd/GridTransformer/reports/logs-2026-07-11/train_corrector.py", line 71, in main
+    assert loss.item() < first, f"overfit smoke FAILED: loss did not decrease ({first:.3f}->{loss.item():.3f})"
+           ^^^^^^^^^^^^^^^^^^^
+AssertionError: overfit smoke FAILED: loss did not decrease (-2.793->3.137)

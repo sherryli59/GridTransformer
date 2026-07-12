@@ -1,0 +1,11 @@
+pool=200 K=12 M=16
+step    0 MSE 0.3803 (0s)
+step  100 MSE 0.1247 (16s)
+step  200 MSE 0.1281 (31s)
+step  300 MSE 0.2650 (47s)
+step  400 MSE 0.1806 (62s)
+
+MSE 0.380 -> 0.181  (loss decrease: PASS)
+clash:  raw 48%  ->  corrected 88%   (target < 57%)
+cross-chain overlap (diversity; ->1 = collapsed): raw 38%  corrected 66%
+SMOKE VERDICT: FAIL (see which gate)

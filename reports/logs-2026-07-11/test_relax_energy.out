@@ -1,0 +1,6 @@
+K=12, 12 equilibrium cavities  (flow p=3 a=0.45 w=6 eta=8e-04 T=30)
+  dE/block-particle ABOVE equilibrium:  raw +2363152345485995.00  ->  relaxed +190.35
+  clash:     raw  69%  ->  relaxed  37%   (full-cage floor 29%)
+  diversity: raw  29%  ->  relaxed  35%   (->100 = collapsed)
+  INJECTIVITY (min per-step eig of I-eta*H over all cavities): -9.3069  (FOLD -> not exact)
+VERDICT: see gates

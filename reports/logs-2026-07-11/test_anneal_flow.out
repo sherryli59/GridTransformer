@@ -1,0 +1,16 @@
+  cav 1: flow-alone    +74.8  flow->LBFGS  +44.14  min-eig -1.797
+  cav 2: flow-alone   +160.9  flow->LBFGS +125.33  min-eig -7572.055
+  cav 3: flow-alone   +211.2  flow->LBFGS +161.67  min-eig -2.669
+  cav 4: flow-alone   +106.8  flow->LBFGS  +95.18  min-eig -28882922.000
+  cav 5: flow-alone +96949.1  flow->LBFGS +135.45  min-eig -6075714.000
+  cav 6: flow-alone    +59.6  flow->LBFGS  +38.71  min-eig -2.146
+  cav 7: flow-alone    +74.5  flow->LBFGS  +59.51  min-eig -659.293
+  cav 8: flow-alone    +26.8  flow->LBFGS  +10.18  min-eig -1.684
+  cav 9: flow-alone    +74.1  flow->LBFGS  +48.25  min-eig -471.906
+  cav 10: flow-alone    +22.9  flow->LBFGS  +11.03  min-eig -3439.416
+
+K=12, 10 cavities  (soft->hard annealed FIXED-STEP flow; good basin ~ +1)
+  flow-alone (deployable, exact-able)    +74.67   (vs +6.9 soft->LBFGS, +0.9 ideal)
+  flow->LBFGS polish (diagnostic)        +53.88
+  INJECTIVITY min per-step eig I-eta*H  -28882922.0000   (FOLD at hard end -> backward-Euler)
+VERDICT: flow-alone too hot -> tune schedule/steps

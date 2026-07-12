@@ -1,0 +1,2 @@
+cavity R=1.6 n_in=18 n_bnd=320  chain-B start ov(B,C0)=0.56  K=4 ntrials=32 mv/sweep=36
+  sweep   0: qA=1.00 qB=0.67 qAB=0.72 accept 19%/47%  (95s)

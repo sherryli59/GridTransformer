@@ -152,22 +152,20 @@ class CorrectedBlockModel(nn.Module):
         order, n_ret, ay_blk = self._geom(xo, block_mask, bnd, s_bnd, R)
         xo_re = xo[:, order]; so_re = so[:, order]
         xb1 = xo_re[:, n_ret:]
-        y1, ld_xy = ball_unsquash(xb1, R)                                               # unsquash of x1 (given config)
+        y1, ld_yx = ball_unsquash(xb1, R)                                               # unsquash of x1 (given config)
         u1 = y1 - ay_blk[None]
         cage_x, cage_s = self._cage(xo_re, so_re, n_ret, bnd, s_bnd)
         u0, ldFinv = self.corrector.inverse(u1, so_re[:, n_ret:], ay_blk, cage_x, cage_s, R)
-        xb0, ld_yx = ball_squash(u0 + ay_blk[None], R)
+        xb0, ld_xy = ball_squash(u0 + ay_blk[None], R)
         x0_re = xo_re.clone(); x0_re[:, n_ret:] = xb0
         x0 = torch.empty_like(xo); x0[:, order] = x0_re
-        # The frozen base's forward pass is NOT run-to-run invariant to grad-tracking mode: scoring an
-        # x0 that carries an autograd graph (via the corrector's trainable params) selects a different
-        # attention-kernel path than scoring a plain (requires_grad=False) tensor, at ~2e-3 magnitude on
-        # this cavity -- confirmed by A/B: base.block_log_prob_b(x, ...) on BIT-IDENTICAL x differs by
-        # 2.0e-3 solely based on x.requires_grad, with no torch.no_grad() (verified: neither .detach() on
-        # x0 alone, nor position precision, mattered -- only the ambient torch.is_grad_enabled() state
-        # did). The base is frozen (all params requires_grad_(False)); match the gate's own no-grad call.
-        with torch.no_grad():
-            lq0 = base.block_log_prob_b(x0, so, block_mask, bnd, s_bnd, R)
+        # Grad-transparent: x0 depends on the corrector's trainable params (via u0 = corrector.inverse(...)),
+        # so scoring it through the frozen base must stay inside the ambient grad context -- the MLE loss
+        # is -block_log_prob_corrected(x_data), and d[log q_base(x0)]/d[corrector] is exactly the gradient
+        # that teaches the corrector to map data onto base-mass. Do NOT wrap this in torch.no_grad(): the
+        # base's own params are already frozen (requires_grad_(False) in load_base_and_cavity / the
+        # training setup), so no base-parameter gradient leaks; only the x0-dependence differentiates.
+        lq0 = base.block_log_prob_b(x0, so, block_mask, bnd, s_bnd, R)
         # Inverse-path sign: ball_unsquash(x) and ball_squash(y) evaluated at corresponding points are exact
         # negatives of each other (log|dy/dx| == -log|dx/dy|), and ldFinv == -ldF exactly. Substituting those
         # identities into the sample-path formula (lq0 - ld_S1 - ldF - ld_U0) flips BOTH ball-map terms to

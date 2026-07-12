@@ -61,11 +61,52 @@ def test_composition_exactness_and_identity_reproduces_base():
     corr = BlockCorrector(n_layers=6).to(dev)
     model = CorrectedBlockModel(base, corr)
     xo, so, blk, bnd, sb, R = cav
-    # (a) identity-init: corrected block_log_prob == base block_log_prob_b (to fp)
-    lp_corr = model.block_log_prob_corrected(xo, so, blk, bnd, sb, R)
-    lp_base = base.block_log_prob_b(xo, so, blk, bnd, sb, R)
-    assert (lp_corr - lp_base).abs().max() < 1e-3
-    # (b) exactness round-trip: sample logq == score logq (inherits base 8e-3)
-    xn, sn, lq_s = model.sample_block_corrected(xo, so, blk, bnd, sb, R, gen=torch.Generator(dev).manual_seed(1))
-    lq_score = model.block_log_prob_corrected(xn, sn, blk, bnd, sb, R)
-    assert (lq_s - lq_score).abs().max() < 1e-2
+    # Outer no_grad: the two compared calls in each part below must share grad-mode (the frozen base's
+    # forward pass is not exactly run-to-run invariant to grad-tracking mode, ~2e-3 magnitude) -- this is
+    # a property of the comparison, not of block_log_prob_corrected itself (which must stay grad-transparent
+    # for training; see test_corrector_receives_base_gradient).
+    with torch.no_grad():
+        # (a) identity-init: corrected block_log_prob == base block_log_prob_b (to fp)
+        lp_corr = model.block_log_prob_corrected(xo, so, blk, bnd, sb, R)
+        lp_base = base.block_log_prob_b(xo, so, blk, bnd, sb, R)
+        assert (lp_corr - lp_base).abs().max() < 1e-3
+        # (b) exactness round-trip: sample logq == score logq (inherits base 8e-3)
+        xn, sn, lq_s = model.sample_block_corrected(xo, so, blk, bnd, sb, R, gen=torch.Generator(dev).manual_seed(1))
+        lq_score = model.block_log_prob_corrected(xn, sn, blk, bnd, sb, R)
+        assert (lq_s - lq_score).abs().max() < 1e-2
+
+
+def test_composition_exactness_perturbed_corrector():
+    # The identity-init test above cannot discriminate the ball-map logdet sign convention: at coincident
+    # points (identity corrector) the unsquash/squash logdet terms cancel regardless of sign. Perturb the
+    # corrector so F is non-identity -- a sign bug would fail this by ~2*logdet, not float noise.
+    dev = "cuda"
+    base, cav = load_base_and_cavity(dev, ci=900, R=2.0, K=6, M=6)
+    from liquid_coupling_flow.ka3d_block_corrector import BlockCorrector
+    corr = BlockCorrector(n_layers=6).to(dev)
+    for p in corr.parameters():
+        p.data += torch.randn_like(p) * 0.05
+    model = CorrectedBlockModel(base, corr)
+    xo, so, blk, bnd, sb, R = cav
+    with torch.no_grad():
+        xn, sn, lq_sample = model.sample_block_corrected(xo, so, blk, bnd, sb, R, gen=torch.Generator(dev).manual_seed(2))
+        lq_score = model.block_log_prob_corrected(xn, sn, blk, bnd, sb, R)
+        assert (lq_sample - lq_score).abs().max() < 1e-2
+
+
+def test_corrector_receives_base_gradient():
+    # Proves Finding 1 is fixed: the base-density term (through x0 = corrector.inverse(...)) must
+    # propagate a gradient into the corrector's trainable params, or the MLE loss can never teach the
+    # corrector to map data onto base-mass.
+    dev = "cuda"
+    base, cav = load_base_and_cavity(dev, ci=900, R=2.0, K=6, M=6)
+    from liquid_coupling_flow.ka3d_block_corrector import BlockCorrector
+    corr = BlockCorrector(n_layers=6).to(dev)
+    for p in corr.parameters():
+        p.data += torch.randn_like(p) * 0.05
+    model = CorrectedBlockModel(base, corr)
+    xo, so, blk, bnd, sb, R = cav
+    loss = -model.block_log_prob_corrected(xo, so, blk, bnd, sb, R).sum()
+    loss.backward()
+    grads = [p.grad for p in corr.parameters() if p.requires_grad]
+    assert any(g is not None and g.abs().max() > 0 for g in grads)

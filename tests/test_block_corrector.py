@@ -30,3 +30,24 @@ def test_cage_conditioner_shape_and_zero_init():
     assert p.shape == (M, A, 6)
     # zero-init head => params all ~0 (identity coupling at init)
     assert p.abs().max() < 1e-6
+
+from liquid_coupling_flow.ka3d_block_corrector import BlockCorrector
+
+def test_block_corrector_roundtrip_and_identity_init():
+    torch.manual_seed(0)
+    bc = BlockCorrector(n_layers=6)
+    M, K, C = 3, 8, 30; R = 2.0
+    u = torch.randn(M, K, 3) * 0.5
+    s = torch.randint(0, 2, (M, K)); ay = torch.randn(K, 3) * 0.5
+    cx = torch.randn(M, C, 3); cs = torch.randint(0, 2, (M, C))
+    # identity at init (zero-init heads): forward == input, logdet == 0
+    u_out, logdet = bc.forward(u, s, ay, cx, cs, R)
+    assert torch.allclose(u_out, u, atol=1e-5)
+    assert logdet.abs().max() < 1e-5
+    # perturb params so it is non-trivial, then check invertibility + logdet sign
+    for p in bc.parameters():
+        p.data += torch.randn_like(p) * 0.05
+    u_out, ld_f = bc.forward(u, s, ay, cx, cs, R)
+    u_back, ld_i = bc.inverse(u_out, s, ay, cx, cs, R)
+    assert torch.allclose(u_back, u, atol=1e-4)
+    assert torch.allclose(ld_f, -ld_i, atol=1e-4)

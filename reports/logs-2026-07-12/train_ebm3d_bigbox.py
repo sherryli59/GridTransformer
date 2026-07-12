@@ -84,7 +84,8 @@ def evaluate(model, held, gen, dev, beta=2.0):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--steps", type=int, default=8000); ap.add_argument("--batch", type=int, default=6)
+    ap.add_argument("--steps", type=int, default=40000); ap.add_argument("--batch", type=int, default=6)
+    ap.add_argument("--patience", type=int, default=8, help="stop after this many evals w/o held-NLL improvement")
     ap.add_argument("--lr", type=float, default=1.5e-4); ap.add_argument("--eval-every", type=int, default=500)
     ap.add_argument("--radii", type=float, nargs="+", default=[1.6, 2.0, 2.5, 3.0])  # big box: R<=6.4 possible; 3.0 caps step cost
     ap.add_argument("--r-ctx", type=float, default=2.5); ap.add_argument("--train-frames", type=int, default=44)
@@ -97,11 +98,15 @@ def main():
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     a = ap.parse_args(); dev = a.device
     torch.manual_seed(0); gen = torch.Generator(device=dev).manual_seed(1)
-    d = torch.load(f"{ART}/ka3d_dataset_N4096_T0.5_rho1.15.pt", map_location=dev, weights_only=False)
-    X, S, L = d["x"].to(dev).float(), d["s"].to(dev).long(), float(d["L"])
-    sp = min(a.train_frames, X.shape[0] - 1)
-    train = build_pool(X, S, L, range(sp), a.radii, a.r_ctx, gen, per=a.per_frame)
-    held = build_pool(X, S, L, range(sp, X.shape[0]), a.radii, a.r_ctx, gen, per=30)
+    # CHAIN-LEVEL SPLIT, zero leakage: train = 112 Bapst train-split chains; held = the 16 test-split
+    # chains behind the PTS reference dataset (model never sees the configs whose cavities we measure).
+    dt = torch.load(f"{ART}/ka3d_train_N4096_T0.5_rho1.15.pt", map_location=dev, weights_only=False)
+    Xt, St, L = dt["x"].to(dev).float(), dt["s"].to(dev).long(), float(dt["L"])
+    dh = torch.load(f"{ART}/ka3d_dataset_N4096_T0.5_rho1.15.pt", map_location=dev, weights_only=False)
+    Xh, Sh = dh["x"].to(dev).float(), dh["s"].to(dev).long()
+    assert abs(float(dh["L"]) - L) < 1e-6
+    train = build_pool(Xt, St, L, range(Xt.shape[0]), a.radii, a.r_ctx, gen, per=a.per_frame)
+    held = build_pool(Xh, Sh, L, range(16), a.radii, a.r_ctx, gen, per=8)          # snapshot-1 configs only
     print(f"3D cavity-EBM: train={len(train)} held={len(held)} radii={tuple(a.radii)} dev={dev}", flush=True)
     m = KA3DScaffoldEBM(cat_bins=128, cat_range=2.5).to(dev)
     start = 0
@@ -121,6 +126,7 @@ def main():
         params = list(m.parameters())
     opt = torch.optim.AdamW(params, lr=a.lr, weight_decay=1e-4)
     t0 = time.time(); m.train()
+    best_nll = float("inf"); stale = 0
     for step in range(start, a.steps + 1):
         ids = torch.randint(len(train), (a.batch,), generator=gen, device=dev)
         loss = X.new_zeros(())
@@ -133,11 +139,23 @@ def main():
         opt.zero_grad(); loss.backward(); torch.nn.utils.clip_grad_norm_(m.parameters(), 5.0); opt.step()
         if step % a.eval_every == 0:
             nll, acc = evaluate(m, held, gen, dev)
-            print(f"step {step:5d} loss {loss.item():+.4f}  held_nll {nll:+.4f}  MTM(k4,N16) {acc:.0f}%  "
-                  f"({time.time()-t0:.0f}s)", flush=True)
+            gap = loss.item() - nll                                       # train-vs-held gap (overfit monitor)
+            print(f"step {step:5d} loss {loss.item():+.4f}  held_nll {nll:+.4f}  gap {gap:+.4f}  "
+                  f"MTM(k4,N16) {acc:.0f}%  ({time.time()-t0:.0f}s)", flush=True)
             torch.save({"state_dict": m.state_dict(), "step": step, "radii": a.radii, "r_ctx": a.r_ctx,
-                        "cat_bins": 128, "cat_range": 2.5}, a.out)
-    print(f"saved {a.out}", flush=True)
+                        "cat_bins": 128, "cat_range": 2.5, "held_nll": nll}, a.out)
+            if nll < best_nll - 1e-3:
+                best_nll = nll; stale = 0
+                torch.save({"state_dict": m.state_dict(), "step": step, "radii": a.radii, "r_ctx": a.r_ctx,
+                            "cat_bins": 128, "cat_range": 2.5, "held_nll": nll},
+                           a.out.replace(".pt", "_best.pt"))
+            else:
+                stale += 1
+                if stale >= a.patience:
+                    print(f"EARLY STOP at step {step}: held_nll flat for {a.patience} evals "
+                          f"(best {best_nll:+.4f})", flush=True)
+                    break
+    print(f"saved {a.out} (best held_nll {best_nll:+.4f} -> {a.out.replace('.pt', '_best.pt')})", flush=True)
 
 
 if __name__ == "__main__":

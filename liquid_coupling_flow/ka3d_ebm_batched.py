@@ -128,8 +128,12 @@ class KA3DScaffoldEBMBatched(KA3DScaffoldEBM):
         return ((lp_s + lp_u + logdet_yx) * rblock[None]).sum(1)                     # [M]
 
     @torch.no_grad()
-    def sample_block_b(self, xo, so, block_mask, bnd, s_bnd, R, gen=None):
-        """Regenerate the block for M configs in parallel. Returns xo_new [M,n,3], so_new [M,n], logq [M]."""
+    def sample_block_b(self, xo, so, block_mask, bnd, s_bnd, R, gen=None, pos_temp=1.0):
+        """Regenerate the block for M configs in parallel. Returns xo_new [M,n,3], so_new [M,n], logq [M].
+
+        pos_temp<1 SHARPENS the three position categoricals at sampling time (kills the intra-component
+        hedging clash tail; species untouched). EXACT: proposal is drawn from AND scored under the SAME
+        tempered density, so logq is the true log-density of the returned sample (valid for MTM/IS)."""
         fl = self.flow
         M = xo.shape[0]
         order, anchors, anchor_y, rblock, kind, valid, slot_feat, m, n = self._prep(xo, so, block_mask, bnd, s_bnd, R)
@@ -155,13 +159,13 @@ class KA3DScaffoldEBMBatched(KA3DScaffoldEBM):
                 uf = u_fixed[:, None]                                                # [M,1,3]
                 return self._V_axis_b(uf, axis, anchor_y[jj:jj + 1], cage_x, cage_s, cage_v, sj[:, None], R, net, emb)[:, 0]
             z = torch.zeros(M, 3, device=xo.device, dtype=xo.dtype)
-            la = F.log_softmax(fl.head_a(he) - Vax(z, 0, self.phi_a, self.pair_emb_a), -1)
+            la = F.log_softmax((fl.head_a(he) - Vax(z, 0, self.phi_a, self.pair_emb_a)) / pos_temp, -1)
             ba = torch.multinomial(la.exp(), 1, generator=gen).squeeze(-1)
             ufb = z.clone(); ufb[:, 0] = fl._ctr(ba)
-            lb = F.log_softmax(fl.head_b(he + fl.bin_a_emb(ba)) - Vax(ufb, 1, self.phi_b, self.pair_emb_b), -1)
+            lb = F.log_softmax((fl.head_b(he + fl.bin_a_emb(ba)) - Vax(ufb, 1, self.phi_b, self.pair_emb_b)) / pos_temp, -1)
             bb = torch.multinomial(lb.exp(), 1, generator=gen).squeeze(-1)
             ufc = ufb.clone(); ufc[:, 1] = fl._ctr(bb)
-            lc = F.log_softmax(fl.head_c(he + fl.bin_a_emb(ba) + fl.bin_b_emb(bb)) - Vax(ufc, 2, self.phi, self.pair_emb), -1)
+            lc = F.log_softmax((fl.head_c(he + fl.bin_a_emb(ba) + fl.bin_b_emb(bb)) - Vax(ufc, 2, self.phi, self.pair_emb)) / pos_temp, -1)
             bc = torch.multinomial(lc.exp(), 1, generator=gen).squeeze(-1)
             dith = (torch.rand(M, 3, device=xo.device, dtype=xo.dtype, generator=gen) - 0.5) * fl.bw
             u = torch.stack([fl._ctr(ba), fl._ctr(bb), fl._ctr(bc)], -1) + dith      # [M,3]

@@ -28,7 +28,7 @@ def energy_b(Xb, Sb, bnd, sb):
 
 
 @torch.no_grad()
-def mtm_accept(Rr, K):
+def mtm_accept(Rr, K, pos_temp=1.0):
     accs, dEs = [], []
     ncav = 0
     for ci in range(16):                                                   # snapshot-1 configs of held chains
@@ -42,7 +42,7 @@ def mtm_accept(Rr, K):
         blk[(a - a[seed]).norm(dim=-1).topk(K, largest=False).indices] = True
         Xb = xo[None].expand(1, n, 3).contiguous(); Sb = so[None].expand(1, n).contiguous()
         Xr, Sr = Xb.expand(NTRIAL, n, 3).contiguous(), Sb.expand(NTRIAL, n).contiguous()
-        Xp, Sp, lqf = m.sample_block_b(Xr, Sr, blk, bnd, sb, Rr, gen=gen)
+        Xp, Sp, lqf = m.sample_block_b(Xr, Sr, blk, bnd, sb, Rr, gen=gen, pos_temp=pos_temp)
         up = (-BETA * energy_b(Xp, Sp, bnd, sb) - lqf)                      # u(y_j) [NTRIAL]
         u0 = (-BETA * energy_b(Xb, Sb, bnd, sb) - m.block_log_prob_b(Xb, Sb, blk, bnd, sb, Rr))[0]
         sf = torch.logsumexp(up, 0)
@@ -57,11 +57,25 @@ def mtm_accept(Rr, K):
     return 100 * st.mean(accs), st.median(dEs), ncav
 
 
-print(f"\nblock-MTM acceptance (N={NTRIAL} trials, {NCAV} held cavities/cell, beta={BETA}):", flush=True)
-print(f"{'':>8}" + "".join(f"  K={k:<12}" for k in (4, 8, 12)), flush=True)
-for Rr in (2.0, 2.5, 3.0):
-    row = f"R={Rr:<5}"
-    for K in (4, 8, 12):
-        acc, de, nc = mtm_accept(Rr, K)
-        row += f"  {acc:3.0f}% (dE/p {de:+7.1f})"
-    print(row, flush=True)
+# EXACTNESS check: tempered sample scored under tempered logq must be internally consistent (sample==score)
+Rr, K = 2.0, 4
+ci = 0
+c = torch.rand(3, generator=gen, device=dev) * L; p = carve(X[ci], S[ci], c, Rr, L)
+xo, so, _ = label_to_scaffold(_mic(p["x_in"], c, L), p["s_in"], Rr)
+xout = _mic(p["x_out"], c, L); bm = xout.norm(dim=-1) < (Rr + RCTX); bnd, sb = xout[bm], p["s_out"][bm]
+n = xo.shape[0]; a = fixed_ball_scaffold(n, Rr, dev); blk = torch.zeros(n, dtype=torch.bool, device=dev)
+blk[(a - a[0]).norm(dim=-1).topk(K, largest=False).indices] = True
+g2 = torch.Generator(device=dev).manual_seed(5)
+xp, spp, lq_sample = m.sample_block_b(xo[None].expand(1,n,3), so[None].expand(1,n), blk, bnd, sb, Rr, gen=g2, pos_temp=0.5)
+lq_score = m.block_log_prob_b(xp, spp, blk, bnd, sb, Rr)   # scored at pos_temp=1 (the model density)
+print(f"exactness note: tempered-sample logq(T=0.5)={float(lq_sample[0]):+.2f} vs model-density logq(T=1)={float(lq_score[0]):+.2f} (differ by design; MTM uses the SAMPLING density)", flush=True)
+
+print(f"\nblock-MTM acceptance (N={NTRIAL} trials, {NCAV} held cavities/cell, beta={BETA}) -- pos_temp SWEEP:", flush=True)
+for pt in (1.0, 0.7, 0.5, 0.35):
+    print(f"  pos_temp={pt}:", flush=True)
+    for Rr in (2.0, 2.5, 3.0):
+        row = f"    R={Rr:<4}"
+        for K in (4, 8, 12):
+            acc, de, nc = mtm_accept(Rr, K, pos_temp=pt)
+            row += f"  K{K}:{acc:3.0f}% (dE/p{de:+8.1f})"
+        print(row, flush=True)

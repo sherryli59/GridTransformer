@@ -52,3 +52,77 @@ class CavityCondEGNN(nn.Module):
         vel, divpp = self.egnn.forward_and_perparticle_divergence(cloud, t, sp, differentiable=diff)  # [B,P,3],[B,P]
         vel, div = vel[:, :k], divpp[:, :k].sum(-1)                                # mover velocities + div
         return (vel, div) if diff else (vel.detach(), div.detach())
+
+
+class CavityBlockFlow(nn.Module):
+    """Task 2: augmented-ODE (dopri5) integrator + composed exact log-q on top of Task-1's CavityCondEGNN.
+    Wraps the [x_block, logdet] ODE (adapted from EGNNClusterFlow._dopri5_integrate in ka_cluster_egnn.py,
+    lines ~164-186) for the 3D ISOLATED (non-periodic) cavity: no torch.remainder / minimum-image anywhere
+    (raw coordinates), cage frozen (only the first k cloud rows -- the movers -- are integrated).
+
+    Sign convention: `logdet` returned by `flow()` is defined so that the composed log-q is a plain SUM
+    (matching the design spec's `logq_composed = logq_AR(x0) + integral_0^1 -div v dt` and this task's
+    brief verbatim: `logq = logq_ar + logdet`) -- i.e. the auxiliary ODE state accumulates dl/dt = -div v
+    (the NEGATIVE of vel_div's raw divergence), not the raw ∫div v dt that EGNNClusterFlow.sample subtracts.
+    Forward (t: 0->1, base->corrected) and reverse (t: 1->0, corrected->base) integrate the SAME func, so
+    running both directions on a round trip makes the two logdets cancel to ~ode_rtol (time-reversal of the
+    dopri5 trajectory), independent of this sign choice.
+
+    R (cavity radius) handling: CavityCondEGNN.vel_div / EGNN_dynamics.forward(t, xs, a=None) (see
+    egnn_traceable.py) has NO global-feature argument beyond (t, positions, species) -- Task 1 did not add
+    one. Per the brief, we do NOT invent an interface Task 1 doesn't have: `flow`/`composed_logq` accept
+    `R` for forward-compatibility (and so callers don't need an if-branch) but currently ignore it -- the
+    AR base already conditions on R, so the flow only needs to correct RELATIVE structure. Wiring R into
+    the velocity (e.g. as an extra global feature) is a follow-up if the trained flow underfits across R."""
+
+    def __init__(self, n_cage, k, r_c=2.5, hidden_nf=64, n_layers=4, n_species=2, max_neighbors=None,
+                 rep_prior=False, ode_rtol=1e-6, ode_atol=1e-6, max_steps=100000):
+        super().__init__()
+        self.n_cage = n_cage; self.k = k
+        # rtol/atol default 1e-6: tight enough that the composed log-q is exact far below the AR base's ~8e-3
+        # leak, but robust. AVOID 1e-8: an untrained/stiff velocity field has high-frequency content dopri5
+        # cannot resolve to 1e-8, so its adaptive step-size collapses and the solve never terminates (measured).
+        # max_steps bounds the solver so a stiff PROPOSAL raises instead of hanging the SMC/PT loop (deployment).
+        self.ode_rtol = ode_rtol; self.ode_atol = ode_atol; self.max_steps = int(max_steps)
+        self.ce = CavityCondEGNN(n_cage=n_cage, k=k, r_c=r_c, hidden_nf=hidden_nf, n_layers=n_layers,
+                                  n_species=n_species, max_neighbors=max_neighbors, rep_prior=rep_prior)
+        with torch.no_grad():   # flow-matching init: untrained velocity == 0 -> identity flow (x1==x0, logdet==0)
+            self.ce.egnn.pot_model[-1].weight.zero_()
+            self.ce.egnn.pot_model[-1].bias.zero_()
+
+    def _dopri5_integrate(self, cloud, sp, k, reverse):
+        """Adapted from EGNNClusterFlow._dopri5_integrate (ka_cluster_egnn.py) with the periodic
+        torch.remainder(x, L) wrap dropped (isolated cavity, raw coordinates). Augmented ODE [x_block, l]:
+        dx/dt = v(x,t | cage), dl/dt = -div v(x,t | cage) (see class docstring for the sign convention)."""
+        from torchdiffeq import odeint
+        dev = cloud.device; B = cloud.shape[0]
+        cl = cloud[:, :k]; cage = cloud[:, k:]
+
+        def func(t, y):
+            x, _ = y
+            v, div = self.ce.vel_div(torch.cat([x, cage], 1), t, sp, k)
+            return (v, -div)
+
+        t_span = torch.tensor([1.0, 0.0] if reverse else [0.0, 1.0], device=dev, dtype=cloud.dtype)
+        ld0 = torch.zeros(B, device=dev, dtype=cloud.dtype)
+        xf, ldf = odeint(func, (cl, ld0), t_span, method="dopri5", rtol=self.ode_rtol, atol=self.ode_atol,
+                         options={"max_num_steps": self.max_steps})
+        return xf[-1], ldf[-1]
+
+    @torch.no_grad()   # inference path (MTM/SMC weight); training is flow-matching, never through this ODE
+    def flow(self, x0_block, cage_x, sp_block, sp_cage, R=None, reverse=False):
+        """x0_block[B,k,3], cage_x[B,m,3], sp_block[B,k], sp_cage[B,m] -> (x1[B,k,3], logdet[B]). Cage rows
+        are concatenated into the cloud for message passing but only the first k (movers) are ever advanced
+        by the ODE -- cage_x itself is never read back out or mutated, so it is unchanged by construction.
+        reverse=False: t 0->1 (base->corrected); reverse=True: t 1->0 (corrected->base)."""
+        cloud = torch.cat([x0_block, cage_x], dim=1)
+        sp = torch.cat([sp_block, sp_cage], dim=1)
+        x1, logdet = self._dopri5_integrate(cloud, sp, self.k, reverse)
+        return x1, logdet
+
+    @torch.no_grad()
+    def composed_logq(self, x0_block, logq_ar, cage_x, sp_block, sp_cage, R=None):
+        """Carry-the-latent composed log-q: logq(x1) = logq_AR(x0) + integral_0^1 -div v dt. Always runs the
+        FORWARD flow (t 0->1) on the given x0 -- no inversion needed. Returns (x1[B,k,3], logq[B])."""
+        x1, logdet = self.flow(x0_block, cage_x, sp_block, sp_cage, R=R, reverse=False)
+        return x1, logq_ar + logdet

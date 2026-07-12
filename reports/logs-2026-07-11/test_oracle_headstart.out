@@ -1,0 +1,16 @@
+  cav 1 (n=73) done
+  cav 2 (n=76) done
+  cav 3 (n=86) done
+  cav 4 (n=87) done
+  cav 5 (n=80) done
+
+R=2.5 whole-interior oracle heat-bath, 5 cavities, 12 sweeps  (median dE/particle)
+  seed energies: AR +59579830028936.0   UNIF +5479922104.9
+  sweep:       1       2       3       4       5       6       7       8       9      10      11      12
+  AR   :  +13.33   +4.92   +3.40   +2.79   +2.44   +2.20   +2.03   +1.87   +1.74   +1.63   +1.60   +1.50
+  UNIF :  +20.15   +6.47   +4.19   +3.37   +2.92   +2.57   +2.35   +2.17   +2.02   +1.89   +1.80   +1.70
+  DATA :   +0.02   +0.01   -0.00   +0.01   -0.00   -0.02   +0.02   +0.02   -0.00   +0.01   -0.01   +0.00
+  sweeps-to dE<3.0: AR 4  UNIF 5  -> AR saves 1
+  sweeps-to dE<2.0: AR 8  UNIF 10  -> AR saves 2
+  sweeps-to dE<1.5: AR 13  UNIF 13  -> AR saves 0
+READOUT: AR head-start = 2 sweeps (of a ~74-site oracle heat-bath) at the max measurable radius

@@ -1,0 +1,15 @@
+whole-interior oracle heat-bath R-scan (M=8, 192 cands, 6 sweeps, beta=2.0)
+
+R=2.5  n_in~74  (5 cavities)
+  dE/part @sweep6:  AR  +2.29   UNIF  +2.44   DATA-ctl  -0.03
+  sweeps-to-basin(<2): AR 7   UNIF 7
+  rearr vs data:       AR   5%  UNIF   7%  DATA-ctl   0%
+Traceback (most recent call last):
+  File "/mnt/ssd/GridTransformer/reports/logs-2026-07-11/test_oracle_rscan.py", line 83, in <module>
+    c = torch.rand(3, generator=gen, device=dev) * L; p = carve(X[ci], S[ci], c, Rr, L)
+                                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mnt/ssd/GridTransformer/liquid_coupling_flow/ka3d_cavity_carve.py", line 16, in carve
+    assert_cavity_valid(R, L)
+  File "/mnt/ssd/GridTransformer/liquid_coupling_flow/ka3d_pt_cavity.py", line 21, in assert_cavity_valid
+    raise AssertionError(f"periodic cavity invalid: 2R+r_cut={needed:.4f} exceeds L={float(L):.4f}")
+AssertionError: periodic cavity invalid: 2R+r_cut=8.5000 exceeds L=7.5283

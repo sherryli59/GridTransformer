@@ -76,13 +76,18 @@ class CavityBlockFlow(nn.Module):
     the velocity (e.g. as an extra global feature) is a follow-up if the trained flow underfits across R."""
 
     def __init__(self, n_cage, k, r_c=2.5, hidden_nf=64, n_layers=4, n_species=2, max_neighbors=None,
-                 rep_prior=False, ode_rtol=1e-6, ode_atol=1e-6, max_steps=100000):
+                 rep_prior=False, ode_rtol=1e-6, ode_atol=1e-6, max_steps=10000):
         super().__init__()
         self.n_cage = n_cage; self.k = k
         # rtol/atol default 1e-6: tight enough that the composed log-q is exact far below the AR base's ~8e-3
         # leak, but robust. AVOID 1e-8: an untrained/stiff velocity field has high-frequency content dopri5
         # cannot resolve to 1e-8, so its adaptive step-size collapses and the solve never terminates (measured).
-        # max_steps bounds the solver so a stiff PROPOSAL raises instead of hanging the SMC/PT loop (deployment).
+        # max_steps BOUNDS the solver (odeint raises AssertionError when exceeded) so a stiff proposal can't hang
+        # forever. IMPORTANT (verified by review): rtol=1e-6 does NOT *eliminate* the step-collapse for a
+        # sufficiently rough field -- it only raises the roughness threshold; max_steps is the real backstop.
+        # "Bounded" != "fail-fast": exceeding max_steps can still take tens of seconds. DEPLOYMENT (Task 7) must
+        # wrap flow moves in try/except -> reject the proposal (weight -> -inf) on AssertionError, and consider a
+        # wall-clock budget. A trained smooth field integrates in a few hundred steps (<< max_steps).
         self.ode_rtol = ode_rtol; self.ode_atol = ode_atol; self.max_steps = int(max_steps)
         self.ce = CavityCondEGNN(n_cage=n_cage, k=k, r_c=r_c, hidden_nf=hidden_nf, n_layers=n_layers,
                                   n_species=n_species, max_neighbors=max_neighbors, rep_prior=rep_prior)

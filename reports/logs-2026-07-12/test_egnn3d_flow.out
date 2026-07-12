@@ -1,0 +1,8 @@
+[zero-init identity] max|x1-x0| = 7.216e-16   max|logdet| = 0.000e+00
+[cage frozen] cage byte-identical after flow(): True
+[round trip]   max|x0_rec-x0| = 9.248e-08
+[logdet cancel] max|logdet_fwd+logdet_rev| = 4.100e-07
+  logdet_fwd = [-0.14866502793971503, -0.013659344967401472, -0.10267249715230843]
+  logdet_rev = [0.1486646179406328, 0.013658978501095435, 0.10267214903414348]
+[composed_logq] max|logq_c - (logq_ar+logdet_fwd)| = 0.000e+00
+PASS

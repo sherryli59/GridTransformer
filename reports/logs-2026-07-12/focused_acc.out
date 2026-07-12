@@ -1,0 +1,19 @@
+ckpt step 35500 held_nll -2.6360  M_REP=24 N_CAV=12 beta=2.0
+
+=== EXACT (pos_temp=1.0) block-MTM acceptance, N=16 trials ===
+         K=4                 K=6                 K=8               
+R=2.0   14.9+-2.1% (dE  +6.6)   1.0+-0.6% (dE+2300.2)   0.0+-0.0% (dE+1016.5)  [n=288]
+R=2.5    6.6+-1.5% (dE  +8.1)   0.0+-0.0% (dE+1783.3)   0.0+-0.0% (dE+814.2)  [n=288]
+R=3.0    7.6+-1.6% (dE+391.1)   0.0+-0.0% (dE+1714.7)   0.0+-0.0% (dE+9361.5)  [n=288]
+
+=== N-TRIAL LADDER (K=4, R=2.0, exact): acceptance vs #trials ===
+  N=  4 trials:  acc  1.7 +- 0.8%   (n=288)
+  N=  8 trials:  acc 15.6 +- 2.1%   (n=288)
+  N= 16 trials:  acc 16.0 +- 2.2%   (n=288)
+  N= 32 trials:  acc 13.2 +- 2.0%   (n=288)
+  N= 64 trials:  acc 21.9 +- 2.4%   (n=288)
+
+=== SHARPENED PROPOSAL ENERGY (pos_temp) at K=4 -- dE only (temp<1 acc not exact) ===
+R=2.0   T=1.0:dE   +7.4  T=0.5:dE  +51.3  T=0.35:dE   +1.5
+R=2.5   T=1.0:dE  +41.2  T=0.5:dE   +7.7  T=0.35:dE  +30.2
+R=3.0   T=1.0:dE+1123.5  T=0.5:dE  +24.7  T=0.35:dE   +3.8

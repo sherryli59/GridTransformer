@@ -131,3 +131,50 @@ class CavityBlockFlow(nn.Module):
         FORWARD flow (t 0->1) on the given x0 -- no inversion needed. Returns (x1[B,k,3], logq[B])."""
         x1, logdet = self.flow(x0_block, cage_x, sp_block, sp_cage, R=R, reverse=False)
         return x1, logq_ar + logdet
+
+
+@torch.no_grad()
+def sample_corrected_block(ar_model, flow_model, xo, so, block_mask, bnd, s_bnd, R, gen=None, pos_temp=1.0):
+    """Task 3: wire the frozen AR base (`KA3DScaffoldEBMBatched`) to a `CavityBlockFlow` block corrector.
+
+    xo[M,n,3], so[M,n] -- full configs (`block_mask[n]` bool, shared across the batch, marks the movers).
+    bnd[m,3], s_bnd[m] -- frozen exterior boundary shell (never touched).
+
+    Steps: (1) AR-sample the block (`ar_model.sample_block_b`), which gives an updated full config
+    `xo_ar/so_ar` (retained slots pass through unchanged) plus the exact AR block log-density `logq_ar`.
+    (2) Assemble the flow's cage = boundary + the RETAINED interior slots of `xo_ar` (frozen context, never
+    entered into the divergence -- matches `CavityBlockFlow`'s contract). (3) Extract the AR-sampled block
+    (the `block_mask==True` slots) and run it through `flow_model.composed_logq`, which integrates the
+    augmented ODE and returns the corrected block position + `logq_ar + logdet` (exact composed log-q; no
+    inversion needed since the AR pre-image `x0` is carried through, per the design spec's carry-the-latent
+    scheme). (4) Write the corrected block back into the full config; retained slots and species are
+    untouched by the flow (species are FIXED from the AR, per the design spec).
+
+    Species order within the block/cage does not matter for correctness (EGNN message passing is
+    permutation-equivariant per particle) as long as positions and species stay slot-aligned, which the
+    boolean masking below preserves by construction; only the mover COUNT (`block_mask.sum()`) and cage size
+    (`bnd.shape[0] + (~block_mask).sum()`) must match `flow_model`'s fixed `k`/`n_cage`.
+
+    dtype/device: the AR base runs in float32 (its native precision); the flow may run in a different dtype
+    (e.g. double, for a tight dopri5 solve) -- the block+cage positions are cast to `flow_model`'s parameter
+    dtype for the ODE and the corrected block is cast back to the AR's dtype on write-back. Device is left
+    alone (AR and flow are expected to already share a device, e.g. both on CUDA).
+
+    Returns (x_full[M,n,3], s_full[M,n], logq_composed[M]).
+    """
+    xo_ar, so_ar, logq_ar = ar_model.sample_block_b(xo, so, block_mask, bnd, s_bnd, R, gen=gen, pos_temp=pos_temp)
+    M = xo_ar.shape[0]
+    x0_block = xo_ar[:, block_mask]                                    # [M,k,3] AR-sampled movers
+    sp_block = so_ar[:, block_mask]                                    # [M,k]
+    ret_x = xo_ar[:, ~block_mask]                                      # [M,n_ret,3] retained interior (unchanged)
+    ret_s = so_ar[:, ~block_mask]
+    cage_x = torch.cat([bnd[None].expand(M, -1, -1), ret_x], dim=1)    # [M,n_cage,3] frozen: boundary + retained
+    sp_cage = torch.cat([s_bnd[None].expand(M, -1), ret_s], dim=1)     # [M,n_cage]
+
+    flow_dtype = next(flow_model.parameters()).dtype
+    x1_block, logq_composed = flow_model.composed_logq(
+        x0_block.to(flow_dtype), logq_ar.to(flow_dtype), cage_x.to(flow_dtype), sp_block, sp_cage, R=R)
+
+    x_full = xo_ar.clone()
+    x_full[:, block_mask] = x1_block.to(xo_ar.dtype)
+    return x_full, so_ar, logq_composed.to(xo_ar.dtype)

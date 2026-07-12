@@ -1,0 +1,18 @@
+row_E == ka_energy convention: verified
+  cav 1: raw +2497167705.7 -> hb1  +28.99 hb3  +3.57 hb6  +1.44 | guard  75% rearr   1% (ctl   0%) ctlE +0.35
+  cav 2: raw +27263098.1 -> hb1  +25.14 hb3  +2.46 hb6  +0.29 | guard 100% rearr   0% (ctl   0%) ctlE +0.29
+  cav 3: raw +5036546232.1 -> hb1  +31.61 hb3  +3.41 hb6  +0.85 | guard 100% rearr   4% (ctl   0%) ctlE -0.25
+  cav 4: raw +249240890.2 -> hb1  +16.61 hb3  +2.59 hb6  +0.80 | guard 100% rearr   1% (ctl   0%) ctlE -0.39
+  cav 5: raw +176797286578.5 -> hb1  +28.46 hb3  +4.40 hb6  +0.43 | guard 100% rearr   0% (ctl   0%) ctlE +0.12
+  cav 6: raw +18531854.7 -> hb1  +27.89 hb3  +6.17 hb6  +4.28 | guard  25% rearr   4% (ctl   0%) ctlE +0.23
+  cav 7: raw +21912067.3 -> hb1  +15.21 hb3  +4.81 hb6  +2.30 | guard  62% rearr   3% (ctl   0%) ctlE +0.04
+  cav 8: raw +77928304662107664.0 -> hb1  +43.70 hb3  +5.51 hb6  +2.99 | guard  50% rearr   1% (ctl   0%) ctlE +0.27
+  cav 9: raw +3410293939.2 -> hb1  +42.86 hb3  +7.25 hb6  +2.65 | guard  62% rearr   4% (ctl   0%) ctlE -0.10
+  cav 10: raw +553612426084532.4 -> hb1  +42.16 hb3  +5.66 hb6  +3.44 | guard  62% rearr   3% (ctl   0%) ctlE +0.03
+
+K=12, 10 cavities, ORACLE full-cage heat-bath (beta=2.0, 256 cands, 6 sweeps)
+  dE/particle: raw +2953730822.5 -> sweep1 +28.72 -> sweep3  +4.60 -> sweep6  +1.87   (target < +2)
+  CONTROL (data-start, 6 sweeps):  +0.08   (must stay ~0 => heat-bath holds equilibrium)
+  guard-survival (dE<3/part): 74%   cross-chain div: 79%
+  rearrangement vs data block: AR-start 2%  vs  data-start intrinsic 0%
+GATE: PASS -> full-cage placement + guard reaches the basin; Option B GO (train the flow to amortize this)

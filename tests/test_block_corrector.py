@@ -1,5 +1,6 @@
 import torch
 from liquid_coupling_flow.ka3d_block_corrector import AffineCoupling, CageConditioner
+from liquid_coupling_flow.ka3d_block_corrector import CorrectedBlockModel, load_base_and_cavity
 
 def test_affine_coupling_roundtrip_and_logdet():
     torch.manual_seed(0)
@@ -51,3 +52,20 @@ def test_block_corrector_roundtrip_and_identity_init():
     u_back, ld_i = bc.inverse(u_out, s, ay, cx, cs, R)
     assert torch.allclose(u_back, u, atol=1e-4)
     assert torch.allclose(ld_f, -ld_i, atol=1e-4)
+
+
+def test_composition_exactness_and_identity_reproduces_base():
+    dev = "cuda"
+    base, cav = load_base_and_cavity(dev, ci=900, R=2.0, K=6, M=6)  # helper builds one cavity + block
+    from liquid_coupling_flow.ka3d_block_corrector import BlockCorrector
+    corr = BlockCorrector(n_layers=6).to(dev)
+    model = CorrectedBlockModel(base, corr)
+    xo, so, blk, bnd, sb, R = cav
+    # (a) identity-init: corrected block_log_prob == base block_log_prob_b (to fp)
+    lp_corr = model.block_log_prob_corrected(xo, so, blk, bnd, sb, R)
+    lp_base = base.block_log_prob_b(xo, so, blk, bnd, sb, R)
+    assert (lp_corr - lp_base).abs().max() < 1e-3
+    # (b) exactness round-trip: sample logq == score logq (inherits base 8e-3)
+    xn, sn, lq_s = model.sample_block_corrected(xo, so, blk, bnd, sb, R, gen=torch.Generator(dev).manual_seed(1))
+    lq_score = model.block_log_prob_corrected(xn, sn, blk, bnd, sb, R)
+    assert (lq_s - lq_score).abs().max() < 1e-2

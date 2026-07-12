@@ -88,4 +88,42 @@ assert retained_err < 1e-9, f"retained slots must be byte-identical (never touch
 assert species_match, "species must be exactly the AR species (flow never touches species)"
 assert logq_err < 1e-5, f"logq_composed != logq_ar under identity flow: {logq_err:.3e} >= 1e-5"
 
-print("PASS")
+print("identity-composition checks PASS")
+
+
+# ---- permutation-invariance regression (the ordering guarantee the identity flow CANNOT verify) ----
+# The identity flow (v==0) returns x0 regardless of cage content or ordering, so it can't prove that the
+# block/cage boolean-mask split is order-correct. Verify permutation-equivariance directly with a NON-identity
+# (perturbed) flow: permuting the mover rows (and un-permuting the output), or permuting the cage rows, must
+# leave the per-particle result unchanged. This is what actually justifies masking on the AR's slot order.
+print("\n[permutation-invariance regression]", flush=True)
+import torch as _t
+from liquid_coupling_flow.ka3d_cavity_egnn import CavityBlockFlow as _CBF
+_g = _t.Generator().manual_seed(3)
+_k, _ncage = 6, 14
+_x0 = _t.randn(2, _k, 3, generator=_g, dtype=_t.float64) * 0.7
+_cage = _t.randn(2, _ncage, 3, generator=_g, dtype=_t.float64); _cage = _cage / _cage.norm(dim=-1, keepdim=True) * 2.0
+_spb = _t.randint(0, 2, (2, _k), generator=_g); _spc = _t.randint(0, 2, (2, _ncage), generator=_g)
+_flow = _CBF(n_cage=_ncage, k=_k, r_c=2.5, hidden_nf=32, n_layers=3, n_species=2, max_neighbors=10,
+             ode_rtol=1e-7, ode_atol=1e-7).double()
+_pg = _t.Generator().manual_seed(11)
+with _t.no_grad():
+    for _p in _flow.ce.egnn.pot_model.parameters():
+        _p.add_(0.01 * _t.randn(_p.shape, generator=_pg, dtype=_p.dtype))   # off zero-init -> non-identity
+_x1, _ld = _flow.flow(_x0, _cage, _spb, _spc)
+# (a) permute mover rows, run, un-permute output -> must match baseline
+_perm = _t.randperm(_k, generator=_t.Generator().manual_seed(4))
+_inv = _t.argsort(_perm)
+_x1p, _ldp = _flow.flow(_x0[:, _perm], _cage, _spb[:, _perm], _spc)
+_mover_err = (_x1p[:, _inv] - _x1).abs().max().item()
+_mld_err = (_ldp - _ld).abs().max().item()
+# (b) permute cage rows only -> movers' result must be unchanged
+_cperm = _t.randperm(_ncage, generator=_t.Generator().manual_seed(5))
+_x1c, _ldc = _flow.flow(_x0, _cage[:, _cperm], _spb, _spc[:, _cperm])
+_cage_err = (_x1c - _x1).abs().max().item()
+print(f"  mover-permute (un-permuted) max|dx| = {_mover_err:.2e}  logdet dev = {_mld_err:.2e}", flush=True)
+print(f"  cage-permute               max|dx| = {_cage_err:.2e}", flush=True)
+assert _mover_err < 1e-9 and _mld_err < 1e-9, f"mover-order NOT permutation-equivariant: dx {_mover_err:.2e}"
+assert _cage_err < 1e-9, f"cage-order NOT permutation-equivariant: dx {_cage_err:.2e}"
+print("  permutation-invariance PASS (masking on AR slot order is justified)", flush=True)
+print("\nALL PASS")

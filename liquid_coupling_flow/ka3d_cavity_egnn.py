@@ -150,10 +150,13 @@ def sample_corrected_block(ar_model, flow_model, xo, so, block_mask, bnd, s_bnd,
     scheme). (4) Write the corrected block back into the full config; retained slots and species are
     untouched by the flow (species are FIXED from the AR, per the design spec).
 
-    Species order within the block/cage does not matter for correctness (EGNN message passing is
-    permutation-equivariant per particle) as long as positions and species stay slot-aligned, which the
-    boolean masking below preserves by construction; only the mover COUNT (`block_mask.sum()`) and cage size
-    (`bnd.shape[0] + (~block_mask).sum()`) must match `flow_model`'s fixed `k`/`n_cage`.
+    Ordering within the block/cage does not matter for correctness because EGNN message passing is
+    permutation-equivariant per particle (verified structurally + by a non-identity permutation probe --
+    see test_egnn3d_cavity.py's permutation-invariance check; NOT provable by the identity-flow test, which
+    with v==0 is blind to cage content and ordering). `sample_block_b` un-permutes its internal
+    retained-first reorder before returning, so `xo_ar` is slot-aligned with the input `xo`/`block_mask` and
+    the boolean masking below is valid. Only the mover COUNT (`block_mask.sum()`) and cage size
+    (`bnd.shape[0] + (~block_mask).sum()`) must match `flow_model`'s fixed `k`/`n_cage` -- asserted below.
 
     dtype/device: the AR base runs in float32 (its native precision); the flow may run in a different dtype
     (e.g. double, for a tight dopri5 solve) -- the block+cage positions are cast to `flow_model`'s parameter
@@ -162,6 +165,11 @@ def sample_corrected_block(ar_model, flow_model, xo, so, block_mask, bnd, s_bnd,
 
     Returns (x_full[M,n,3], s_full[M,n], logq_composed[M]).
     """
+    k = int(block_mask.sum()); n_cage = int(bnd.shape[0] + (~block_mask).sum())
+    if k != flow_model.k or n_cage != flow_model.n_cage:
+        raise ValueError(f"shape mismatch: block_mask has {k} movers + {n_cage} cage "
+                         f"(bnd {bnd.shape[0]} + retained {int((~block_mask).sum())}), "
+                         f"but flow_model expects k={flow_model.k}, n_cage={flow_model.n_cage}")
     xo_ar, so_ar, logq_ar = ar_model.sample_block_b(xo, so, block_mask, bnd, s_bnd, R, gen=gen, pos_temp=pos_temp)
     M = xo_ar.shape[0]
     x0_block = xo_ar[:, block_mask]                                    # [M,k,3] AR-sampled movers

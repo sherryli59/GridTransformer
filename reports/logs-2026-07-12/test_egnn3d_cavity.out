@@ -1,0 +1,15 @@
+[cavity] R=2.0 n_in=45 K=4 n_ret=41 n_bnd=395 n_cage=436
+[identity: block pos]     max|x_full_blk - xo_ar_blk|     = 0.000e+00
+[identity: retained pos]  max|x_full_ret - xo_ar_ret|     = 0.000e+00
+[identity: species]       s_full == so_ar (all M,n)       = True
+[identity: logq]          max|logq_composed - logq_ar|    = 0.000e+00
+  logq_ar        = [18.60944175720215, 18.972970962524414, 20.289274215698242, 19.883352279663086]
+  logq_composed  = [18.60944175720215, 18.972970962524414, 20.289274215698242, 19.883352279663086]
+identity-composition checks PASS
+
+[permutation-invariance regression]
+  mover-permute (un-permuted) max|dx| = 1.37e-14  logdet dev = 1.05e-15
+  cage-permute               max|dx| = 0.00e+00
+  permutation-invariance PASS (masking on AR slot order is justified)
+
+ALL PASS

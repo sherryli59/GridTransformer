@@ -3,16 +3,24 @@ See docs/superpowers/specs/2026-07-12-egnn-cavity-block-flow-corrector-design.md
 
 Mirrors liquid_coupling_flow.ka_cluster_egnn.ConditionalEGNN's contract exactly (movers message-pass with
 each other AND the frozen cage; cage never moves and is NOT in the divergence) but for a 3D, isolated
-(non-periodic) cavity instead of a 2D periodic box: no minimum-image, no `L`, raw Euclidean distances. The
-non-periodic inner branch of EGNN_dynamics is the one the design spec calls out as bug-free (the periodic
-branch had a frame-mix defect fixed 2026-07-02 per the traceable-egnn memory); we never pass `L` here so
-that branch is never touched.
+(non-periodic) cavity instead of a 2D periodic box: no minimum-image, no `L`, raw Euclidean distances. We
+never pass `L`, so only the isolated (L=None) branch of EGNN_dynamics is used. NOTE: this wrapper is the
+FIRST isolated-branch consumer of forward_and_perparticle_divergence, and building it exposed a latent sign
+bug in that branch (it returned the divergence of -vel; fixed 2026-07-12, commit 79c91ed). Do NOT assume the
+isolated branch is more battle-tested than the periodic one -- it was effectively unexercised before this.
 
 Exactness contract: `vel_div` returns (vel, div) from `EGNN_dynamics.forward_and_perparticle_divergence`,
 which is the SAME field both used for the velocity and differentiated (via autograd on the radial pot) for
 the divergence -- so (vel, div) are self-consistent by construction: div is the exact analytic trace of
 d(vel)/d(cloud) restricted to the mover block, to floating-point precision. See
 reports/logs-2026-07-12/test_egnn3d_exact.py for the brute-force verification.
+
+CAVEAT (velocity completeness): `vel` here is the PAIRWISE central-force term only. In isolated mode
+EGNN_dynamics.forward() additionally adds a `com_pot * source_xs_com` COM-directed term that
+forward_and_perparticle_divergence does NOT include. This is intentional and exactness-preserving -- the flow
+uses vel_div consistently for BOTH sampling and scoring, so self-consistency (not a match to forward()) is
+what the log-det needs -- but it means the velocity field is pairwise-only. If the trained flow underfits the
+cavity structure, adding a differentiable per-particle COM term is the first expressiveness lever.
 """
 from __future__ import annotations
 import torch

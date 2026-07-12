@@ -290,13 +290,18 @@ class EGNN_dynamics(nn.Module):
                 pot + (diffij * dpotdr * diffij / (rij_reshaped + 1e-8))
             ).sum((-1, -2))
 
-        divergence = -divergence_term.sum(-1)
+        # divergence_term is sign-blind (diffij enters squared) and equals +Sum_j[D*pot + r*dpotdr].
+        # Periodic (L set): diffij = x_j - x_i => div(vel) = -divergence_term. Isolated (L None): diffij flips
+        # sign => vel flips => div(vel) = +divergence_term. Keep (vel, div) self-consistent per branch.
+        div_sign = 1.0 if self.L is None else -1.0
+        divergence = div_sign * divergence_term.sum(-1)
         self.counter += 1
         return vel, divergence
 
     def forward_and_perparticle_divergence(self, xs, t, a=None, differentiable=True):
         """Same as forward_and_divergence but returns per-particle divergence [B,P] (sum(-1) == the scalar div).
-        Periodic (L set) branch only — the KA cluster flow uses L."""
+        Self-consistent (vel, div) in BOTH branches: periodic (L set) and isolated (L None). The div_sign
+        below accounts for the L-dependent diffij sign convention in _compute_common_terms."""
         common = self._compute_common_terms(xs, t, a)
         diffij = common['diffij']; h_final = common['h_final']; B = common['B']; P = common['P']
         n_neighbors = diffij.shape[2]
@@ -312,7 +317,8 @@ class EGNN_dynamics(nn.Module):
             dpotdr = torch.autograd.grad(pot.sum(), rij, create_graph=differentiable, retain_graph=differentiable)[0]
             dpotdr = dpotdr.reshape(B, P, n_neighbors, 1); rij_r = rij.reshape(B, P, n_neighbors, 1)
             divergence_term = (pot + (diffij * dpotdr * diffij / (rij_r + 1e-8))).sum((-1, -2))   # [B,P]
-        return vel, -divergence_term                                                             # [B,P,2],[B,P]
+        div_sign = 1.0 if self.L is None else -1.0                                               # see forward_and_divergence
+        return vel, div_sign * divergence_term                                                   # [B,P,D],[B,P]
 
     def divergence(self, xs, t, a=None, differentiable=True):
         common = self._compute_common_terms(xs, t, a)

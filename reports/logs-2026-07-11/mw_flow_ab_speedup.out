@@ -1,0 +1,34 @@
+generating shared seeds (forward logq accumulated free)...
+seeds: U/N -1.4017  lq mean -225.9
+[baseline] rung  7 beta   3.45  U/N -1.3916  se/cfg    768
+[baseline] rung  8 beta   4.54  U/N -1.4464  se/cfg  1,536
+[baseline] rung  9 beta   5.98  U/N -1.4971  se/cfg  2,304
+[baseline] rung 10 beta   7.88  U/N -1.5429  se/cfg  3,072
+[baseline] rung 11 beta  10.38  U/N -1.5814  se/cfg  3,840
+[armA] entry ESS 2.9/256  distinct ancestors after resample 11/256
+[armA] rung  7 beta   3.45  U/N -1.3833  se/cfg    768
+[armA] rung  8 beta   4.54  U/N -1.4613  se/cfg  1,536
+[armA] rung  9 beta   5.98  U/N -1.5146  se/cfg  2,304
+[armA] rung 10 beta   7.88  U/N -1.5614  se/cfg  3,072
+[armA] rung 11 beta  10.38  U/N -1.6089  se/cfg  3,840
+[armB] entry ESS 2.9/256  distinct ancestors after resample 11/256
+[armB] rung  7 beta   3.45  U/N -1.3871  se/cfg    768  acc_ind 0.010
+[armB] rung  8 beta   4.54  U/N -1.4540  se/cfg  1,536  acc_ind 0.000
+[armB] rung  9 beta   5.98  U/N -1.5091  se/cfg  2,304  acc_ind 0.000
+[armB] rung 10 beta   7.88  U/N -1.5644  se/cfg  3,072  acc_ind 0.000
+[armB] rung 11 beta  10.38  U/N -1.6073  se/cfg  3,840  acc_ind 0.000
+arms done (333s)
+
+=== acceptance-vs-beta diagnostic (arm-B rung populations + bank at target) ===
+  pop     7  beta   3.45  E[min(1,e^la)] 0.0000  median logalpha    -61.9
+  pop     8  beta   4.54  E[min(1,e^la)] 0.0000  median logalpha    -61.6
+  pop     9  beta   5.98  E[min(1,e^la)] 0.0000  median logalpha    -67.2
+  pop    10  beta   7.88  E[min(1,e^la)] 0.0000  median logalpha    -86.2
+  pop    11  beta  10.38  E[min(1,e^la)] 0.0000  median logalpha   -121.4
+  pop  bank  beta  10.38  E[min(1,e^la)] 0.0000  median logalpha   -131.4
+
+=== VERDICT (se/cfg to U/N <= -1.60; baseline champion was 3,072) ===
+  baseline: not reached  final shells 1.98/1.03
+  armA    : 3840  final shells 2.04/1.18
+  armB    : 3840  final shells 2.02/1.08
+DONE

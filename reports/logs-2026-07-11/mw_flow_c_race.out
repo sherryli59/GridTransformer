@@ -1,0 +1,24 @@
+start pop U/N -1.5780
+roundtrip |T(R(x))-x|: mean 0.0012 median 0.0003 max 0.1603 sigma-units | U/N after projection -1.5778
+
+=== sigma calibration (acceptance, median logalpha, mean |dx|) ===
+  sig 0.005  acc 0.5286  med-logalpha    -0.87  |dx| 0.0152
+  sig 0.010  acc 0.3086  med-logalpha    -2.53  |dx| 0.0279
+  sig 0.020  acc 0.0904  med-logalpha    -7.71  |dx| 0.0544
+  sig 0.050  acc 0.0001  med-logalpha   -27.77  |dx| 0.1398
+  sig 0.100  acc 0.0000  med-logalpha   -50.66  |dx| 0.2676
+  sig 0.200  acc 0.0000  med-logalpha   -72.09  |dx| 0.4745
+picked SIG = 0.02
+
+=== race: 300 rounds x N se/cfg each ===
+[sweeps  ] final U/N -1.6249  shells 2.12/1.16  cross(-1.622) 15040 se/cfg  cross(-1.625) 16640
+[plain-RW] final U/N -1.5828  shells 1.85/1.04  acc 0.314  cross(-1.622) — se/cfg  cross(-1.625) —
+  [C] round 50/300  U/N -1.5857  acc so far 0.120  (239s)
+  [C] round 100/300  U/N -1.5894  acc so far 0.120  (494s)
+  [C] round 150/300  U/N -1.5921  acc so far 0.119  (776s)
+  [C] round 200/300  U/N -1.5948  acc so far 0.117  (1054s)
+  [C] round 250/300  U/N -1.5986  acc so far 0.115  (1334s)
+  [C] round 300/300  U/N -1.6014  acc so far 0.116  (1610s)
+[C-move  ] final U/N -1.6014  shells 1.85/1.15  acc 0.116  cross(-1.622) — se/cfg  cross(-1.625) —
+PLOT: reports/logs-2026-07-11/mw_flow_c_race.png
+DONE

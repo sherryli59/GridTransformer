@@ -1,0 +1,22 @@
+=== FULL OUTPUT ===
+R=2.5 cav=0 n=  73 | ALIEN: gap+0.165 qc0.34 x | MSEED: gap+0.221 qc0.13 x | MSEED_MOVE: gap+0.232 qc0.22 x |  (1 min)
+R=2.5 cav=1 n=  78 | ALIEN: gap+0.198 qc0.06 x | MSEED: gap+0.260 qc0.16 x | MSEED_MOVE: gap+0.372 qc0.11 x |  (3 min)
+R=2.5 cav=2 n=  73 | ALIEN: gap+0.299 qc0.17 x | MSEED: gap+0.264 qc0.16 x | MSEED_MOVE: gap+0.190 qc0.23 x |  (5 min)
+R=2.5 cav=3 n=  70 | ALIEN: gap+0.218 qc0.22 x | MSEED: gap+0.147 qc0.05 OK | MSEED_MOVE: gap+0.137 qc0.25 OK |  (6 min)
+R=2.5 cav=4 n=  75 | ALIEN: gap+0.193 qc0.20 x | MSEED: gap+0.073 qc0.58 OK | MSEED_MOVE: gap+0.012 qc0.42 OK |  (8 min)
+R=2.5 cav=5 n=  73 | ALIEN: gap+0.301 qc0.40 x | MSEED: gap+0.320 qc0.67 x | MSEED_MOVE: gap+0.274 qc0.17 x |  (9 min)
+R=3.0 cav=0 n= 133 | ALIEN: gap+0.205 qc0.04 x | MSEED: gap+0.179 qc0.16 x | MSEED_MOVE: gap+0.234 qc0.14 x |  (12 min)
+R=3.0 cav=1 n= 127 | ALIEN: gap+0.190 qc0.09 x | MSEED: gap+0.211 qc0.08 x | MSEED_MOVE: gap+0.177 qc0.15 x |  (15 min)
+R=3.0 cav=2 n= 125 | ALIEN: gap+0.067 qc0.14 OK | MSEED: gap+0.154 qc0.16 x | MSEED_MOVE: gap+0.091 qc0.35 OK |  (19 min)
+R=3.0 cav=3 n= 129 | ALIEN: gap+0.298 qc0.10 x | MSEED: gap+0.220 qc0.12 x | MSEED_MOVE: gap+0.151 qc0.20 x |  (22 min)
+R=3.0 cav=4 n= 137 | ALIEN: gap+0.196 qc0.02 x | MSEED: gap+0.233 qc0.05 x | MSEED_MOVE: gap+0.307 qc0.10 x |  (25 min)
+R=3.0 cav=5 n= 126 | ALIEN: gap+0.232 qc0.21 x | MSEED: gap+0.159 qc0.30 x | MSEED_MOVE: gap+0.100 qc0.46 OK |  (28 min)
+
+=== SUMMARY (convergence to DATA reference, gap<0.15) ===
+  R=2.5 ALIEN      : 0/6 converged  qc_med=0.222  gap_med=+0.218
+  R=2.5 MSEED      : 2/6 converged  qc_med=0.158  gap_med=+0.260
+  R=2.5 MSEED_MOVE : 2/6 converged  qc_med=0.235  gap_med=+0.232
+  R=3.0 ALIEN      : 1/6 converged  qc_med=0.102  gap_med=+0.205
+  R=3.0 MSEED      : 0/6 converged  qc_med=0.158  gap_med=+0.211
+  R=3.0 MSEED_MOVE : 2/6 converged  qc_med=0.196  gap_med=+0.177
+[done] -> liquid_coupling_flow/artifacts/frontier_threearm_N4096.pt  (28 min)

@@ -1,0 +1,7 @@
+ckpt step 18000 held_nll -2.5193
+
+block-MTM acceptance (N=16 trials, 8 held cavities/cell, beta=2.0):
+          K=4             K=8             K=12          
+R=2.0      0% (dE/p    +3.6)    0% (dE/p  +823.6)    0% (dE/p +2983.9)
+R=2.5      0% (dE/p   +19.2)    0% (dE/p +2169.4)    0% (dE/p +4258.9)
+R=3.0      0% (dE/p  +730.6)    0% (dE/p +14691.7)    0% (dE/p +168781.2)

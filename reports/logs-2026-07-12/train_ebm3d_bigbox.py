@@ -129,7 +129,7 @@ def main():
     best_nll = float("inf"); stale = 0
     for step in range(start, a.steps + 1):
         ids = torch.randint(len(train), (a.batch,), generator=gen, device=dev)
-        loss = X.new_zeros(())
+        loss = Xt.new_zeros(())
         for i in ids:
             c = train[int(i)]; Q = rand_rot(gen, dev)
             xo, so, _ = label_to_scaffold(clamp_ball(c["xin"] @ Q.T, c["R"]), c["sin"], c["R"])

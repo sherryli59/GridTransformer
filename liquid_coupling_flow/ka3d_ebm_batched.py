@@ -73,7 +73,7 @@ class KA3DScaffoldEBMBatched(KA3DScaffoldEBM):
                              cage_s[:, :, None, :].expand(M, S, nb, cage_s.shape[-1]), net, emb)
         return (phi * cage_v[:, :, None, :]).sum(-1)                                # [M,S,nb]
 
-    def _tilted_lp_u_b(self, h_e, u, anchor_y, cage_x, cage_s, cage_v, sj, R, s_chunk=4):
+    def _tilted_lp_u_b(self, h_e, u, anchor_y, cage_x, cage_s, cage_v, sj, R, s_chunk=4, pos_temp=1.0):
         fl = self.flow
         M, S, _ = u.shape
         ba, bb, bc = fl._bin(u[..., 0]), fl._bin(u[..., 1]), fl._bin(u[..., 2])
@@ -90,9 +90,13 @@ class KA3DScaffoldEBMBatched(KA3DScaffoldEBM):
             Va[:, sl] = self._V_axis_b(z[:, sl], 0, *ar, self.phi_a, self.pair_emb_a)
             Vb[:, sl] = self._V_axis_b(ufb[:, sl], 1, *ar, self.phi_b, self.pair_emb_b)
             Vc[:, sl] = self._V_axis_b(ufc[:, sl], 2, *ar, self.phi, self.pair_emb)
-        la = F.log_softmax(base_a - Va, -1).gather(-1, ba[..., None]).squeeze(-1)
-        lb = F.log_softmax(base_b - Vb, -1).gather(-1, bb[..., None]).squeeze(-1)
-        lc = F.log_softmax(base_c - Vc, -1).gather(-1, bc[..., None]).squeeze(-1)
+        # pos_temp mirrors sample_block_b's tempered categoricals EXACTLY (logits/T inside the same
+        # normalization; species untempered there, so untempered here too) -> block_log_prob_b(pos_temp=T)
+        # is the true log-density of a pos_temp=T sample at an ARBITRARY point (needed for the MTM
+        # current-state term; the pos_temp<1 sweep in mtm_early_read.py predates this and mixed densities).
+        la = F.log_softmax((base_a - Va) / pos_temp, -1).gather(-1, ba[..., None]).squeeze(-1)
+        lb = F.log_softmax((base_b - Vb) / pos_temp, -1).gather(-1, bb[..., None]).squeeze(-1)
+        lc = F.log_softmax((base_c - Vc) / pos_temp, -1).gather(-1, bc[..., None]).squeeze(-1)
         return la + lb + lc - fl._logbw3                                            # [M,S]
 
     def _prep(self, xo, so, block_mask, bnd, s_bnd, R):
@@ -110,8 +114,9 @@ class KA3DScaffoldEBMBatched(KA3DScaffoldEBM):
         anchor_y, _ = ball_unsquash(anchors, R)
         return order, anchors, anchor_y, reordered_block, kind, valid, slot_feat, m, n
 
-    def block_log_prob_b(self, xo, so, block_mask, bnd, s_bnd, R):
-        """Exact log q(block | retained+boundary) for M configs at once. xo [M,n,3] -> [M]."""
+    def block_log_prob_b(self, xo, so, block_mask, bnd, s_bnd, R, pos_temp=1.0):
+        """Exact log q(block | retained+boundary) for M configs at once. xo [M,n,3] -> [M].
+        pos_temp: score under the SAME tempered position density sample_block_b(pos_temp=...) draws from."""
         M = xo.shape[0]
         order, anchors, anchor_y, rblock, kind, valid, slot_feat, m, n = self._prep(xo, so, block_mask, bnd, s_bnd, R)
         xo, so = xo[:, order], so[:, order]
@@ -124,7 +129,8 @@ class KA3DScaffoldEBMBatched(KA3DScaffoldEBM):
         y, logdet_yx = ball_unsquash(xo, R)
         u = y - anchor_y[None]                                                       # frameless
         cage_x, cage_s, cage_v = self._cage_knn_b(combined, scomb, valid, anchors)
-        lp_u = self._tilted_lp_u_b(h + self.sp_out_emb(so), u, anchor_y, cage_x, cage_s, cage_v, so, R)
+        lp_u = self._tilted_lp_u_b(h + self.sp_out_emb(so), u, anchor_y, cage_x, cage_s, cage_v, so, R,
+                                   pos_temp=pos_temp)
         return ((lp_s + lp_u + logdet_yx) * rblock[None]).sum(1)                     # [M]
 
     @torch.no_grad()

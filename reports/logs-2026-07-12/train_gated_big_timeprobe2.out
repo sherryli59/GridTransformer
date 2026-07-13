@@ -1,0 +1,5 @@
+[train] GATED base: sigma-scaled worst-pair cut=0.55 max_rounds=32
+[train] held eval pool: 4 fixed cavities
+[train] step     10  train 0.08238  held 0.10378  gap +0.02141  wall 115s
+[train] step     20  train 0.05598  held 0.10724  gap +0.05126  wall 212s
+[train] step     30  train 0.09063  held 0.07138  gap -0.01925  wall 300s

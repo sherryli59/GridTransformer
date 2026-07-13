@@ -70,6 +70,7 @@ import torch.nn.functional as F
 
 from liquid_coupling_flow.ka3d_ebm_batched import KA3DScaffoldEBMBatched
 from liquid_coupling_flow.ka3d_cavity_egnn import CavityBlockFlow
+from liquid_coupling_flow.ka3d_gated_base import GatedARBase
 
 from fm_data import carve_cavity_block, fm_batch
 
@@ -139,11 +140,20 @@ def fixed_size_cage(cage_x, sp_cage, block_centroid, n_cage, device, dtype):
 
 
 def build_cavity_rows(ar_model, cav, gen, K, n_cage, M, pos_temp):
-    """One cavity -> M training rows (x_t, t, target_v, sp_block, fixed-size cage/sp_cage)."""
+    """One cavity -> M training rows (x_t, t, target_v, sp_block, fixed-size cage/sp_cage).
+    With a GatedARBase, rows whose base draw never passed the gate within max_rounds are OUTSIDE the
+    truncated base's support and are dropped (returns None if no row survived -> caller skips)."""
     out = fm_batch(ar_model, cav, gen, pos_temp=pos_temp, M=M)
     assert out["n_identity_fallback"] == 0, (
         f"OT identity fallback should be impossible by construction (Task-4 carryover; species "
         f"coupling must be exact) -- got {out['n_identity_fallback']}/{M}")
+    if isinstance(ar_model, GatedARBase) and not ar_model.last_pass_mask.all():
+        keep = ar_model.last_pass_mask
+        if not keep.any():
+            return None
+        for kk in ("x_t", "t", "target_v", "sp_block", "cage_x", "sp_cage", "x0_block", "x1_block", "logq_ar"):
+            if kk in out:
+                out[kk] = out[kk][keep]
     device, dtype = out["cage_x"].device, out["cage_x"].dtype
     block_centroid = cav["xo"][cav["block_mask"]].mean(0)   # DATA block centroid, fixed per cavity
     cage_fix, sp_fix = fixed_size_cage(out["cage_x"], out["sp_cage"], block_centroid, n_cage, device, dtype)
@@ -158,7 +168,9 @@ def sample_training_batch(ar_model, X, S, L, gen, K, n_cage, radii, n_cav, M, po
         cav = carve_random_cavity(X, S, L, gen, K, radii)
         if cav is None:
             continue
-        rows.append(build_cavity_rows(ar_model, cav, gen, K, n_cage, M, pos_temp))
+        r = build_cavity_rows(ar_model, cav, gen, K, n_cage, M, pos_temp)
+        if r is not None:
+            rows.append(r)
     if not rows:
         raise RuntimeError("sample_training_batch: could not carve any valid cavity")
     return {k: torch.cat([r[k] for r in rows], dim=0) for k in rows[0]}
@@ -260,6 +272,8 @@ def eval_held(flow_model, ar_model, eval_cavities, gen, K, n_cage, M, pos_temp):
     losses, ns = [], []
     for cav in eval_cavities:
         rows = build_cavity_rows(ar_model, cav, gen, K, n_cage, M, pos_temp)
+        if rows is None:
+            continue
         l = fm_loss(flow_model, rows, K)
         losses.append(float(l.item()) * rows["x_t"].shape[0])
         ns.append(rows["x_t"].shape[0])
@@ -276,6 +290,10 @@ def run_train(args):
     gen_eval = torch.Generator(device=device).manual_seed(args.seed + 1)
 
     ar_model = load_ar_model(device)
+    if args.gate_cut is not None:
+        ar_model = GatedARBase(ar_model, cut=args.gate_cut, max_rounds=args.gate_rounds)
+        print(f"[train] GATED base: sigma-scaled worst-pair cut={args.gate_cut} "
+              f"max_rounds={args.gate_rounds}", flush=True)
     X_tr, S_tr, L_tr = load_split(TRAIN_DATA, device, expect_chains=112)
     X_he, S_he, L_he = load_split(HELD_DATA, device)
     assert abs(L_he - L_tr) < 1e-6, f"train/held L mismatch: {L_tr} vs {L_he}"
@@ -283,6 +301,11 @@ def run_train(args):
     flow_model = CavityBlockFlow(n_cage=args.n_cage, k=args.k, r_c=args.r_c, hidden_nf=args.hidden_nf,
                                   n_layers=args.n_layers, n_species=2,
                                   max_neighbors=args.max_neighbors).to(device)
+    if args.init_from:
+        ick = torch.load(args.init_from, map_location=device, weights_only=False)
+        flow_model.load_state_dict(ick["state_dict"])
+        print(f"[train] warm-start from {args.init_from} (step {ick.get('step')}, "
+              f"held {ick.get('held_loss', float('nan')):.5f})", flush=True)
     opt = torch.optim.AdamW(flow_model.parameters(), lr=args.lr)
 
     # FIXED held-cavity pool (chain-level split: X_he/S_he never touch the 112 training chains) so the
@@ -298,6 +321,10 @@ def run_train(args):
         f"could only carve {len(eval_cavities)}/{args.eval_n_cav} held cavities"
     print(f"[train] held eval pool: {len(eval_cavities)} fixed cavities", flush=True)
 
+    tag = f"_{args.out_tag}" if args.out_tag else ""
+    out_ckpt = REPO_ROOT / f"liquid_coupling_flow/artifacts/ka3d_cavity_egnn_flow{tag}.pt"
+    out_ckpt_best = REPO_ROOT / f"liquid_coupling_flow/artifacts/ka3d_cavity_egnn_flow{tag}_best.pt"
+
     best_held, best_step, patience_ctr = float("inf"), -1, 0
     history = []
     t0 = time.time()
@@ -305,11 +332,20 @@ def run_train(args):
         batch = sample_training_batch(ar_model, X_tr, S_tr, L_tr, gen, args.k, args.n_cage, args.radii,
                                        n_cav=args.n_cav, M=args.m, pos_temp=args.pos_temp)
         batch = augment_so3(batch, gen)
-        loss = fm_loss(flow_model, batch, args.k)
         opt.zero_grad(set_to_none=True)
-        loss.backward()
+        n_rows = batch["x_t"].shape[0]
+        # chunked accumulation: vel_div's divergence side-computation carries a create_graph autograd
+        # graph, which OOMs at hidden_nf>=192 with >~64 rows; summing per-chunk row-weighted losses and
+        # backward-ing each chunk is EXACTLY the full-batch MSE gradient with bounded memory.
+        chunk = args.chunk_rows if args.chunk_rows > 0 else n_rows
+        train_loss = 0.0
+        for lo in range(0, n_rows, chunk):
+            sl = slice(lo, min(lo + chunk, n_rows))
+            sub = {kk: (vv[sl] if torch.is_tensor(vv) else vv) for kk, vv in batch.items()}
+            l = fm_loss(flow_model, sub, args.k) * (sub["x_t"].shape[0] / n_rows)
+            l.backward()
+            train_loss += float(l.item())
         opt.step()
-        train_loss = float(loss.item())
         row = {"step": step, "train_loss": train_loss}
 
         if step % args.eval_every == 0 or step == args.steps:
@@ -323,10 +359,10 @@ def run_train(args):
 
             ckpt = {"state_dict": flow_model.state_dict(), "step": step, "held_loss": held_loss,
                     "train_loss": train_loss, "history": history + [row], "args": vars(args)}
-            torch.save(ckpt, OUT_CKPT)   # last -- checkpoint incrementally, every eval
+            torch.save(ckpt, out_ckpt)   # last -- checkpoint incrementally, every eval
             if held_loss < best_held:
                 best_held, best_step, patience_ctr = held_loss, step, 0
-                torch.save(ckpt, OUT_CKPT_BEST)
+                torch.save(ckpt, out_ckpt_best)
             else:
                 patience_ctr += 1
                 if patience_ctr >= args.patience:
@@ -352,6 +388,14 @@ def build_argparser():
     p.add_argument("--max_neighbors", type=int, default=16)
     p.add_argument("--radii", type=float, nargs="+", default=[1.6, 2.0, 2.5, 3.0])
     p.add_argument("--pos_temp", type=float, default=1.0)
+    # gated base (truncated AR: redraw until sigma-scaled worst-pair >= cut; None = raw base)
+    p.add_argument("--gate_cut", type=float, default=None)
+    p.add_argument("--gate_rounds", type=int, default=32)
+    p.add_argument("--out_tag", type=str, default="")
+    p.add_argument("--chunk_rows", type=int, default=0,
+                   help="grad-accumulation chunk (rows) for the memory-heavy vel_div loss; 0 = whole batch")
+    p.add_argument("--init_from", type=str, default="",
+                   help="warm-start state_dict from this checkpoint (crash resume for long runs)")
     # full-run loop
     p.add_argument("--steps", type=int, default=5000)
     p.add_argument("--n_cav", type=int, default=4)

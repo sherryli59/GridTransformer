@@ -1,0 +1,5 @@
+flow ckpt step 4600 held_fm 0.0934  (k=8 n_cage=48 hid=64 L=4)
+  cav 1: dE/p AR +1371615975.1 FLOW   +517.8 | floor AR  +2.54 FLOW  -0.44 DATA -0.44 | clash AR 28% FLOW 23% | div AR 0.65 FLOW 0.74
+  cav 2: dE/p AR +5155865.6 FLOW     +9.0 | floor AR  +0.31 FLOW  +0.31 DATA -0.71 | clash AR 25% FLOW 22% | div AR 0.70 FLOW 0.76
+  cav 3: dE/p AR +35550.8 FLOW  +1721.2 | floor AR  +7.67 FLOW  +2.33 DATA -0.96 | clash AR 30% FLOW 17% | div AR 0.58 FLOW 0.68
+  cav 4: dE/p AR   +549.1 FLOW  +5491.0 | floor AR  +0.39 FLOW  +0.63 DATA -0.60 | clash AR 33% FLOW 16% | div AR 0.75 FLOW 0.79

@@ -1,0 +1,44 @@
+[train] GATED base: sigma-scaled worst-pair cut=0.55 max_rounds=32
+[train] held eval pool: 4 fixed cavities
+Traceback (most recent call last):
+  File "/mnt/ssd/GridTransformer/reports/logs-2026-07-12/train_cavity_egnn_flow.py", line 410, in <module>
+    main()
+  File "/mnt/ssd/GridTransformer/reports/logs-2026-07-12/train_cavity_egnn_flow.py", line 406, in main
+    run_train(args)
+  File "/mnt/ssd/GridTransformer/reports/logs-2026-07-12/train_cavity_egnn_flow.py", line 330, in run_train
+    loss = fm_loss(flow_model, batch, args.k)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mnt/ssd/GridTransformer/reports/logs-2026-07-12/train_cavity_egnn_flow.py", line 217, in fm_loss
+    vel, _div = flow_model.ce.vel_div(cloud, batch["t"], sp, K)   # vel_div, NOT egnn.forward() -- see docstring
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mnt/ssd/GridTransformer/liquid_coupling_flow/ka3d_cavity_egnn.py", line 52, in vel_div
+    vel, divpp = self.egnn.forward_and_perparticle_divergence(cloud, t, sp, differentiable=diff)  # [B,P,3],[B,P]
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mnt/ssd/GridTransformer/liquid_coupling_flow/ipl44/learndiffeq/learndiffeq/particles/velocities/egnn_traceable.py", line 305, in forward_and_perparticle_divergence
+    common = self._compute_common_terms(xs, t, a)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mnt/ssd/GridTransformer/liquid_coupling_flow/ipl44/learndiffeq/learndiffeq/particles/velocities/egnn_traceable.py", line 174, in _compute_common_terms
+    h_final, x_final = self.egnn(h, x, edges, edge_attr=edge_attr)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/sherryli/xsli/softwares/anaconda3/envs/lightning/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1736, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/sherryli/xsli/softwares/anaconda3/envs/lightning/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1747, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mnt/ssd/GridTransformer/liquid_coupling_flow/ipl44/learndiffeq/learndiffeq/particles/velocities/egnn_traceable.py", line 447, in forward
+    h, x, _ = self._modules["gcl_%d" % i](
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/sherryli/xsli/softwares/anaconda3/envs/lightning/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1736, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/sherryli/xsli/softwares/anaconda3/envs/lightning/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1747, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mnt/ssd/GridTransformer/liquid_coupling_flow/ipl44/learndiffeq/learndiffeq/particles/velocities/egnn_traceable.py", line 574, in forward
+    edge_feat = self.edge_model(h[row], h[col], radial, edge_attr, edge_mask)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mnt/ssd/GridTransformer/liquid_coupling_flow/ipl44/learndiffeq/learndiffeq/particles/velocities/egnn_traceable.py", line 523, in edge_model
+    out = torch.cat([source, target, radial, edge_attr], dim=1)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 2.23 GiB. GPU 0 has a total capacity of 23.67 GiB of which 1.40 GiB is free. Process 416173 has 870.00 MiB memory in use. Including non-PyTorch memory, this process has 21.31 GiB memory in use. Of the allocated memory 20.91 GiB is allocated by PyTorch, and 57.11 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)

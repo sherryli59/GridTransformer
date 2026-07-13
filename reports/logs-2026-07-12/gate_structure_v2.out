@@ -1,0 +1,12 @@
+flow ckpt step 4600 held_fm 0.0934  (k=8 n_cage=48 hid=64 L=4)
+  cav 1: dE/p AR +1371615975.1 FLOW   +517.8 | floor AR  +2.54 FLOW  -0.44 DATA -0.44 | clash AR 28% FLOW 23% | div AR 0.65 FLOW 0.74
+  cav 2: dE/p AR +5155865.6 FLOW     +9.0 | floor AR  +0.31 FLOW  +0.31 DATA -0.71 | clash AR 25% FLOW 22% | div AR 0.70 FLOW 0.76
+  cav 3: dE/p AR +35550.8 FLOW  +1721.2 | floor AR  +7.67 FLOW  +2.33 DATA -0.96 | clash AR 30% FLOW 17% | div AR 0.58 FLOW 0.68
+  cav 4: dE/p AR   +549.1 FLOW  +5491.0 | floor AR  +0.39 FLOW  +0.63 DATA -0.60 | clash AR 33% FLOW 16% | div AR 0.75 FLOW 0.79
+  cav 5: dE/p AR    +94.9 FLOW   +278.1 | floor AR  -0.28 FLOW  -0.28 DATA -0.61 | clash AR 17% FLOW 17% | div AR 0.68 FLOW 0.83
+  cav 6: dE/p AR +29751.1 FLOW +294908.2 | floor AR  +1.04 FLOW  -0.74 DATA -0.74 | clash AR 42% FLOW 11% | div AR 0.67 FLOW 0.79
+  cav 7: dE/p AR +6254124.1 FLOW +4066335.8 | floor AR +55.23 FLOW +53.86 DATA -0.54 | clash AR 16% FLOW 16% | div AR 0.86 FLOW 0.87
+  cav 8: dE/p AR  +1895.5 FLOW     +2.8 | floor AR  -0.11 FLOW  -0.28 DATA -0.99 | clash AR 22% FLOW 12% | div AR 0.62 FLOW 0.67
+  cav 9: dE/p AR +1415835.8 FLOW     +2.3 | floor AR  +1.72 FLOW  -0.78 DATA -0.87 | clash AR 20% FLOW 12% | div AR 0.68 FLOW 0.90
+  cav 10: dE/p AR +860520.1 FLOW   +404.0 | floor AR  +0.11 FLOW  +0.23 DATA -0.74 | clash AR 39% FLOW 22% | div AR 0.58 FLOW 0.60
+  cav 11: dE/p AR +553241.2 FLOW +36533615.9 | floor AR +55.09 FLOW  +7.84 DATA -0.68 | clash AR 11% FLOW 22% | div AR 0.91 FLOW 0.87

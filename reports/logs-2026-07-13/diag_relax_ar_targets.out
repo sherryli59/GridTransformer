@@ -1,0 +1,7 @@
+=== FROZEN-CAGE T=0.5 RELAXATION OF AR BLOCKS (10 held cages, M=8, 80 sweeps) ===
+(A) energy/particle above data:  raw-AR median   +101.3   relaxed  +1.12   data 0.0
+    clash%<0.9:                   raw-AR 23.8%   relaxed 3.1%
+    g_BB peak r:                  raw-AR 1.42   relaxed 1.62   data 1.57
+(B) per-cage RMS spread across M: raw-AR 0.317   relaxed 0.344   (breadth for CFM)
+    valid-target yield (<0.5/part above data): 38% of relaxed blocks
+saved -> reports/logs-2026-07-13/diag_relax_ar_targets.pt

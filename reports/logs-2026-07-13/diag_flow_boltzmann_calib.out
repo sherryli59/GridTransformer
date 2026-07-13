@@ -1,0 +1,5 @@
+=== FLOW BOLTZMANN-CALIBRATION (16 held cages, M=24 trials) ===
+corr(logq, -bU): per-cage median +0.11  pooled(within-cage centered) +0.11
+   Boltzmann-calibrated => ~+1.0 ; collapsed map (logq = map Jacobian, not energy) => ~0
+VARIANCE COLLAPSE: per-cage RMS trial spread  flow 0.322  vs gated-AR base 0.340  ratio 0.95  (<<1 = contraction to a near-point)
+saved -> reports/logs-2026-07-13/diag_flow_boltzmann_calib.pt

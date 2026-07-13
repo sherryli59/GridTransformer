@@ -43,6 +43,9 @@ blk[(a - a[0]).norm(dim=-1).topk(K, largest=False).indices] = True
 Xb = xo[None].expand(M, n, 3).contiguous(); Sb = so[None].expand(M, n).contiguous()
 
 ok = True
+import sys
+
+# ===== FLOAT64 PASS (hard gates) =====
 with torch.no_grad():   # scoring is graph-free; block_log_prob_b has no @torch.no_grad() of its own and
                         # in float64 with the 4096-way coarse categorical the retained autograd graph
                         # blows up RSS -> wrap explicitly (diagnosed 2026-07-13, killed a 60GB+ run)
@@ -60,5 +63,38 @@ with torch.no_grad():   # scoring is graph-free; block_log_prob_b has no @torch.
                 gap = (lq_wrong - lq_sample).abs().median()
                 print(f"      T-mismatch control: median|score(T=1)-sample(T={T})| {gap:.2f} (must be >> 1e-3)")
                 ok &= gap.item() > 0.1
-print("PASS" if ok else "FAIL")
-assert ok
+
+# ===== FLOAT32 PASS (soft gate, reported not asserted) =====
+# KNOWN ISSUE (2026-07-13 code review): fp32 round-trip fragility from ball_squash/ball_unsquash
+# precision loss near bin boundaries. Deployed sampler is float32, so we gate this here with baseline-style
+# tolerance (median < 1e-3, >90% match) to expose any per-point failures. BINDING gate runs in Task 6
+# against trained checkpoint; if trained leak stays nats-scale, deployment must score in float64.
+print("\n--- Float32 round-trip (baseline-style soft gate) ---")
+fp32_passes = 0
+grid_points = []
+for T in (1.0, 0.4):
+    for min_sep in (None, 0.85):
+        grid_points.append((T, min_sep))
+
+with torch.no_grad():
+    m_fp32 = m.float()  # downcast model to float32
+    Xb_fp32 = Xb.float()
+    Sb_fp32 = Sb.long()
+    bnd_fp32 = bnd.float()
+
+    for T, min_sep in grid_points:
+        xs, ss, lq_sample = m_fp32.sample_block_b(Xb_fp32, Sb_fp32, blk, bnd_fp32, sb, R, gen=gen, pos_temp=T, min_sep=min_sep)
+        lq_score = m_fp32.block_log_prob_b(xs, ss, blk, bnd_fp32, sb, R, pos_temp=T, min_sep=min_sep)
+        diff = (lq_score - lq_sample).abs()
+        frac = float((diff < 1e-3).float().mean())
+        median_diff = diff.median().item()
+        passes_baseline = median_diff < 1e-3 and frac > 0.9
+        if passes_baseline:
+            fp32_passes += 1
+        print(f"fp32: T={T} min_sep={min_sep}: median {median_diff:.2e}  match>90% {100*frac:.1f}%  max {diff.max():.2e}  "
+              f"{'PASS' if passes_baseline else 'FAIL'}")
+
+print(f"fp32 gate: {fp32_passes}/4 points pass (baseline-style)")
+print("PASS (float64 hard assertions met; fp32 measured)" if ok else "FAIL (float64 gates failed)")
+assert ok  # only float64 is hard; float32 always exits 0
+sys.exit(0)

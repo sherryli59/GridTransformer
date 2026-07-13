@@ -1,0 +1,28 @@
+loaded liquid_coupling_flow/artifacts/ka3d_cavity_coarse.pt (step 1500): 0 missing / 0 unexpected keys (strict=False)
+loaded liquid_coupling_flow/artifacts/ka3d_cavity_ebm3ax_rho115_best.pt (step 35500): 0 missing / 0 unexpected keys (strict=False)
+held dataset: liquid_coupling_flow/artifacts/ka3d_dataset_N4096_T0.5_rho1.15.pt X=(48, 4096, 3) L=15.278093338012695
+
+=== G-NLL ===
+  n_cavities=2  coarse NLL/n=-2.3532  baseline NLL/n=-2.9189  target<=-2.636  FAIL
+
+=== G-CLASH ===
+  n_cavities=2 M=8  coarse clash=25.8% (33/128)  baseline clash=8.6% (11/128)  target<15.0%  FAIL
+
+=== G-DEFICIT ===
+  n_cavities=2 nrep=2 ntrial=16  coarse median sf-sr=-63.9  baseline median sf-sr=-27.4  FAIL (coarse>baseline)
+  coarse per-cavity medians: ['-52.1', '-75.7']
+  baseline per-cavity medians: ['-16.4', '-38.5']
+
+=== G-MASK (coarse arm, min_sep=0.85) ===
+  masked clash=43.0% (55/128)  vs unmasked coarse=25.8%  FAIL (strictly below)
+  fp32 round-trip: median|score-sample|=3.05e-05  match(<1e-3)=100.0%  bar: median<1e-3 and frac>90%  PASS
+
+=== SUMMARY ===
+gate       coarse                           baseline/ref         threshold                    result
+----------------------------------------------------------------------------------------------------
+G-NLL      -2.3532                          -2.9189              <= -2.636                    FAIL
+G-CLASH    25.8%                            8.6%                 < 15.0%                      FAIL
+G-DEFICIT  -63.9                            -27.4                coarse > baseline            FAIL
+G-MASK     masked=43.0% rt_frac=100%        unmasked=25.8%       masked<unmasked & rt frac>90% FAIL
+
+saved -> /tmp/claude-1002/-mnt-ssd-GridTransformer/0696bfd8-5433-4aea-9686-e999b2f41ff5/scratchpad/smoke_test.pt  (4s)

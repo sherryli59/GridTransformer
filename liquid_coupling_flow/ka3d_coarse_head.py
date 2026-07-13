@@ -376,7 +376,7 @@ class KA3DScaffoldEBMCoarse(KA3DScaffoldEBMBatched):
 
     @torch.no_grad()
     def sample_block_b(self, xo, so, block_mask, bnd, s_bnd, R, gen=None, pos_temp=1.0, min_sep=None,
-                       nested=False):
+                       nested=False, mask_knn=None):
         """Regenerate the block for M configs in parallel through the coarse-cell-then-fine-bin head.
         nested=True (with min_sep): full within-cell nested declash mask (fine-a/b/c by column availability
         over the nf^3 cube) -- the geometrically-correct min separation; block_log_prob_b MUST match.
@@ -406,14 +406,19 @@ class KA3DScaffoldEBMCoarse(KA3DScaffoldEBMBatched):
             sj = torch.multinomial(ls.exp(), 1, generator=gen).squeeze(-1)           # [M]
             he = h + self.sp_out_emb(sj)
             cage_x, cage_s, cage_v = self._cage_knn_b(combined, scomb, vj, anchors[jj:jj + 1])   # [M,1,K,*]
-            cx, cs, cv = cage_x[:, 0], cage_s[:, 0], cage_v[:, 0]
+            cx, cs, cv = cage_x[:, 0], cage_s[:, 0], cage_v[:, 0]                     # tilt cage (trained knn)
+            if min_sep is not None and mask_knn is not None:                         # separate, larger MASK cage
+                mcg = self._cage_knn_b(combined, scomb, vj, anchors[jj:jj + 1], k=mask_knn)
+                mcx, mcs, mcv = mcg[0][:, 0], mcg[1][:, 0], mcg[2][:, 0]
+            else:
+                mcx, mcs, mcv = cx, cs, cv
             ay = anchor_y[jj:jj + 1].expand(M, 3)
 
             # ---- coarse cell ----
             V_cell = coarse_tilt_V(self, ay, cx, cs, cv, sj, R, co)                  # [M,n_cells]
             logits_cell = co.head_coarse(he) - V_cell
             if min_sep is not None:
-                allowed_cell = cells_allowed(co, ay, sj, cx, cs, cv, R, min_sep)
+                allowed_cell = cells_allowed(co, ay, sj, mcx, mcs, mcv, R, min_sep)
                 logits_cell = logits_cell.masked_fill(~allowed_cell, float("-inf"))
             l_cell = F.log_softmax(logits_cell / pos_temp, -1)
             ci = torch.multinomial(l_cell.exp(), 1, generator=gen).squeeze(-1)       # [M]
@@ -426,7 +431,7 @@ class KA3DScaffoldEBMCoarse(KA3DScaffoldEBMBatched):
             # NESTED min-sep: the nf^3 within-cell clash-free cube -> mask fine-a by any(b,c), fine-b by
             # any(c|a), fine-c by (a,b). Forbids a clashing (a,b) column AT the a/b stage (the a,b-plane leak
             # the last-axis masks couldn't reach). fallback: all-clash row -> allow all (keeps normalization).
-            cube = fine_clashfree_cube(co, ay, ci, sj, cx, cs, cv, R, min_sep) if (min_sep is not None and nested) else None
+            cube = fine_clashfree_cube(co, ay, ci, sj, mcx, mcs, mcv, R, min_sep) if (min_sep is not None and nested) else None
 
             def _msk(logits, allow):
                 allow = allow | (~allow.any(-1, keepdim=True))
@@ -464,7 +469,7 @@ class KA3DScaffoldEBMCoarse(KA3DScaffoldEBMBatched):
             if cube is not None:
                 logits_fc = _msk(logits_fc, cube[ar, fa, fb_])                      # (a,b) fixed
             elif min_sep is not None:                                               # last-axis-only fine mask
-                fc_allow = fine_c_allowed(co, ay, ci, fa, fb_, sj, cx, cs, cv, R, min_sep)
+                fc_allow = fine_c_allowed(co, ay, ci, fa, fb_, sj, mcx, mcs, mcv, R, min_sep)
                 logits_fc = logits_fc.masked_fill(~fc_allow, float("-inf"))
             l_fc = F.log_softmax(logits_fc, -1)
             fc = torch.multinomial(l_fc.exp(), 1, generator=gen).squeeze(-1)

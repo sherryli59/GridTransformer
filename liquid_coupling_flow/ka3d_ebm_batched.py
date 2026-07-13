@@ -95,11 +95,11 @@ class KA3DScaffoldEBMBatched(KA3DScaffoldEBM):
                          ~v_i.reshape(M * S, ki), ~v_b.reshape(M * S, kb)], 1)
         return self.tr(seq, src_key_padding_mask=pad)[:, 0].reshape(M, S, -1)       # [M,S,d]
 
-    def _cage_knn_b(self, combined, scomb, valid_row, anchors):
+    def _cage_knn_b(self, combined, scomb, valid_row, anchors, k=None):
         M, P, _ = combined.shape
         S = valid_row.shape[0]
         d2 = (combined[:, None] - anchors[None, :, None]).square().sum(-1).masked_fill(~valid_row[None], 1e18)
-        K = min(self.knn_pot, P)
+        K = min(self.knn_pot if k is None else k, P)                                # k overrides for the mask cage
         idx = d2.topk(K, dim=2, largest=False).indices                             # [M,S,K]
         cage_x = torch.gather(combined[:, None].expand(M, S, P, 3), 2, idx[..., None].expand(-1, -1, -1, 3))
         cage_s = torch.gather(scomb[:, None].expand(M, S, P), 2, idx)

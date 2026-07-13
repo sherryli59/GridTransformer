@@ -1,0 +1,4 @@
+=== NESTED-MASK RESIDUAL DECOMPOSITION (coarse head, K=8, cut=0.9) ===
+none    : clash  30.4% | of clashes: earlier  17% later(future)  23% retained  38% boundary  23%
+NESTED  : clash  27.8% | of clashes: earlier  15% later(future)  22% retained  40% boundary  22%
+earlier/retained/boundary = mask SAW it (leak = anchor-kNN gap); later = future-blind for the placer

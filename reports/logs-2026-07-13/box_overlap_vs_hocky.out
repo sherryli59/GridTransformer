@@ -1,0 +1,30 @@
+=== PTS overlap in Hocky box-occupation convention on island-SMC populations ===
+    (q~ = q - q_bulk; q_bulk = ref-vs-independent-data; ceiling q(self)=rho=1.2)
+    ANCHOR (paper, LJ T=0.55, Fig 2c, by-eye +-0.05): {2.2: 0.33, 2.4: 0.29}
+    CAVEATS: paper T=0.55 vs ours 0.5 (ours colder -> q~ slightly higher); their box size l is an SI
+    detail we sweep. Non-species (Hocky) is the headline; species-resolved shown for reference.
+
+R=2.2 c=0  (8 islands, ref n_in=54)
+    l=0.2: q(self)=1.202  q_bulk=0.015  q_gen=0.186  -> q~_gen=+0.172
+    l=0.3: q(self)=1.220  q_bulk=0.015  q_gen=0.277  -> q~_gen=+0.262  [paper~0.33]
+    l=0.4: q(self)=1.256  q_bulk=0.062  q_gen=0.522  -> q~_gen=+0.460
+    l=0.5: q(self)=1.200  q_bulk=0.144  q_gen=0.726  -> q~_gen=+0.582
+    [species-resolved l=0.3]: q_bulk=0.011  q_gen=0.275  q~=+0.264
+    [old species-min-dist<0.3 q_island_reweighted]: 0.744
+
+R=2.2 c=1  (8 islands, ref n_in=61)
+    l=0.2: q(self)=1.358  q_bulk=0.011  q_gen=0.079  -> q~_gen=+0.068
+    l=0.3: q(self)=1.378  q_bulk=0.041  q_gen=0.030  -> q~_gen=-0.012  [paper~0.33]
+    l=0.4: q(self)=1.418  q_bulk=0.066  q_gen=0.148  -> q~_gen=+0.082
+    l=0.5: q(self)=1.356  q_bulk=0.100  q_gen=0.161  -> q~_gen=+0.061
+    [species-resolved l=0.3]: q_bulk=0.034  q_gen=0.024  q~=-0.010
+    [old species-min-dist<0.3 q_island_reweighted]: 0.404
+
+R=2.4 c=0  (4 islands, ref n_in=67)
+    l=0.2: q(self)=1.162  q_bulk=0.000  q_gen=0.005  -> q~_gen=+0.005
+    l=0.3: q(self)=1.140  q_bulk=0.037  q_gen=0.036  -> q~_gen=-0.001  [paper~0.29]
+    l=0.4: q(self)=1.148  q_bulk=0.046  q_gen=0.054  -> q~_gen=+0.008
+    l=0.5: q(self)=1.117  q_bulk=0.117  q_gen=0.062  -> q~_gen=-0.054
+    [species-resolved l=0.3]: q_bulk=0.026  q_gen=0.026  q~=+0.000
+    [old species-min-dist<0.3 q_island_reweighted]: nan
+

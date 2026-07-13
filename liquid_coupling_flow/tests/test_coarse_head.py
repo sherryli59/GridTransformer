@@ -1,7 +1,9 @@
 import torch
-from liquid_coupling_flow.ka3d_coarse_head import CoarseFineHead, coarse_tilt_V, cells_allowed
-from liquid_coupling_flow.ka3d_scaffold_ar import ball_squash
+from liquid_coupling_flow.ka3d_coarse_head import CoarseFineHead, coarse_tilt_V, cells_allowed, KA3DScaffoldEBMCoarse
+from liquid_coupling_flow.ka3d_scaffold_ar import ball_squash, label_to_scaffold
 from liquid_coupling_flow.ka3d_ebm_batched import KA3DScaffoldEBMBatched
+from liquid_coupling_flow.ka3d_cavity_ar import _mic
+from liquid_coupling_flow.ka3d_cavity_carve import carve
 from liquid_coupling_flow.ka_energy import SIGMA
 
 
@@ -88,3 +90,32 @@ def test_cells_allowed_never_forbids_a_truly_safe_cell():
     assert safe.sum() > 0, "test cage too dense: no safe points generated"
     row_allowed = allowed[torch.arange(S), cell_idx]
     assert row_allowed[safe].all()
+
+
+def test_scaffold_ebm_coarse_log_prob_pair_trains_coarse_head():
+    dev = "cpu"; R = 2.0; RCTX = 2.5
+    torch.manual_seed(0)
+    m = KA3DScaffoldEBMCoarse(cat_bins=128, cat_range=2.5).to(dev)
+    m.use_frame = False
+    # De-zero the phi nets' output layers -> tilts non-vacuous (zero-init makes them no-ops, Task 2).
+    for net in (m.phi, m.phi_a, m.phi_b):
+        torch.nn.init.normal_(net[-1].weight, std=1.0)
+        torch.nn.init.normal_(net[-1].bias, std=1.0)
+
+    d = torch.load("liquid_coupling_flow/artifacts/ka3d_dataset_N4096_T0.5_rho1.15.pt", map_location=dev, weights_only=False)
+    X, S, L = d["x"].to(dev).float(), d["s"].to(dev).long(), float(d["L"])
+    gen = torch.Generator(device=dev).manual_seed(0)
+
+    c = torch.rand(3, generator=gen, device=dev) * L
+    p = carve(X[0], S[0], c, R, L)
+    xo, so, _ = label_to_scaffold(_mic(p["x_in"], c, L), p["s_in"], R)
+    xout = _mic(p["x_out"], c, L); bm = xout.norm(dim=-1) < (R + RCTX); bnd, sb = xout[bm], p["s_out"][bm]
+    assert bnd.shape[0] < 600
+
+    lp = m.log_prob_pair(xo, so, bnd, sb, R, preordered=True)
+    assert torch.isfinite(lp)
+    (-lp).backward()
+    assert m.coarse.head_coarse.weight.grad is not None
+    assert m.coarse.head_coarse.weight.grad.abs().sum() > 0
+    assert m.phi[2].weight.grad is not None
+    assert m.phi[2].weight.grad.abs().sum() > 0

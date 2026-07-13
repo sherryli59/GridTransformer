@@ -11,7 +11,9 @@ from __future__ import annotations
 import math
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from liquid_coupling_flow.ka3d_scaffold_ar import ball_squash
+from liquid_coupling_flow.ka3d_ebm_batched import KA3DScaffoldEBMBatched
 from liquid_coupling_flow.ka_energy import SIGMA
 
 
@@ -123,3 +125,87 @@ def cells_allowed(head, anchor_y, sj, cage_x, cage_s, cage_v, R, cut, n_chunk=51
 
     allowed = allowed | (~allowed.any(-1, keepdim=True))
     return allowed
+
+
+def _V_fine_axis(model, anchor_y, cage_x, cage_s, cage_v, sj, R, u_fixed, axis, grid, net, emb):
+    """V over the 8 fine bins of `grid` on `axis`: candidate u = u_fixed with `axis` swept to `grid`
+    -> y = anchor_y + u (frameless) -> x = ball_squash(y, R) -> pairwise phi to the causal kNN cage.
+    Mirrors KA3DScaffoldEBM._V_axis / KA3DScaffoldEBMBatched._V_axis_b but takes the candidate grid
+    explicitly (the coarse-cell fine grid is a per-slot ABSOLUTE offset, not `flow`'s global bin grid).
+
+    anchor_y: [S,3]. u_fixed: [S,3] (off-axis coords already at their current partial position; the
+    `axis` entry is overwritten by `grid` and is otherwise ignored). grid: [S,nf]. cage_x: [S,Kc,3].
+    cage_s,cage_v: [S,Kc]. sj: [S]. Returns V: [S,nf]."""
+    S, nb = u_fixed.shape[0], grid.shape[1]
+    u = u_fixed[:, None, :].expand(S, nb, 3).clone()
+    u[:, :, axis] = grid
+    y = anchor_y[:, None, :] + u                                                # frameless
+    x, _ = ball_squash(y, R)
+    d = (x[:, :, None, :] - cage_x[:, None, :, :]).norm(dim=-1)                 # [S,nb,Kc]
+    phi = model._phi_pair(d, sj[:, None].expand(S, nb),
+                          cage_s[:, None, :].expand(S, nb, cage_s.shape[1]), net, emb)
+    return (phi * cage_v[:, None, :]).sum(-1)                                   # [S,nb]
+
+
+class KA3DScaffoldEBMCoarse(KA3DScaffoldEBMBatched):
+    """Unbatched scorer override that routes the inherited `log_prob_pair` training loss through the
+    coarse-cell-then-fine-bin factorization instead of the sequential per-axis Cat3Head. Everything
+    else (context transformer, species head, cage kNN, boundary handling) is inherited unchanged from
+    KA3DScaffoldEBMBatched -- only `_tilted_lp_u` (called by `log_prob_pair`/`block_log_prob`) is
+    overridden. `self.flow` (Cat3Head) is still constructed by the parent but unused by this path;
+    it is kept so sample_block/etc. on the parent class remain callable (not exact for this head)."""
+
+    def __init__(self, *args, **kw):
+        super().__init__(*args, **kw)
+        self.coarse = CoarseFineHead(self.d_model)
+
+    def _tilted_lp_u(self, h_e, u, frame, anchor_y, cage_x, cage_s, cage_v, sj, R, n_chunk=16):
+        """Exact log q(u) = log p(cell) + log p(fa|cell) + log p(fb|cell,fa) + log p(fc|cell,fa,fb)
+        - 3 log bwf, teacher-forced (S slots). `frame` is unused: cavity models are frameless."""
+        assert not self.use_frame
+        co = self.coarse
+        S, dev, dt = u.shape[0], u.device, u.dtype
+
+        ci = co.cell_index(u)                                                   # [S]
+        centers = co.cell_center(ci)                                            # [S,3]
+        cell_lo = centers - co.cw / 2.0
+        fa, fb_, fc = co.fine_bin(u, ci).unbind(-1)                             # [S] each
+
+        base_cell = co.head_coarse(h_e)                                         # [S,n_cells]
+        V_cell = u.new_zeros(S, co.n_cells)
+        grid8 = (torch.arange(co.nf, device=dev, dtype=dt) + 0.5) * co.bwf      # [nf]
+        grid_a = cell_lo[:, 0:1] + grid8[None, :]                               # [S,nf]
+        grid_b = cell_lo[:, 1:2] + grid8[None, :]
+        grid_c = cell_lo[:, 2:3] + grid8[None, :]
+
+        x_at_fa = cell_lo[:, 0] + (fa.to(dt) + 0.5) * co.bwf                    # [S]
+        y_at_fb = cell_lo[:, 1] + (fb_.to(dt) + 0.5) * co.bwf                   # [S]
+        zeros = torch.zeros(S, device=dev, dtype=dt)
+        u_fix_a = torch.stack([zeros, centers[:, 1], centers[:, 2]], -1)        # axis0 overwritten
+        u_fix_b = torch.stack([x_at_fa, zeros, centers[:, 2]], -1)              # axis1 overwritten
+        u_fix_c = torch.stack([x_at_fa, y_at_fb, zeros], -1)                    # axis2 overwritten
+
+        Vfa = u.new_zeros(S, co.nf)
+        Vfb = u.new_zeros(S, co.nf)
+        Vfc = u.new_zeros(S, co.nf)
+        for c0 in range(0, S, n_chunk):
+            sl = slice(c0, c0 + n_chunk)
+            args = (anchor_y[sl], cage_x[sl], cage_s[sl], cage_v[sl], sj[sl], R)
+            V_cell[sl] = coarse_tilt_V(self, *args, co)
+            Vfa[sl] = _V_fine_axis(self, *args, u_fix_a[sl], 0, grid_a[sl], self.phi_a, self.pair_emb_a)
+            Vfb[sl] = _V_fine_axis(self, *args, u_fix_b[sl], 1, grid_b[sl], self.phi_b, self.pair_emb_b)
+            Vfc[sl] = _V_fine_axis(self, *args, u_fix_c[sl], 2, grid_c[sl], self.phi, self.pair_emb)
+
+        lp_cell = F.log_softmax(base_cell - V_cell, -1).gather(-1, ci[:, None]).squeeze(-1)
+
+        cell_e = co.cell_emb(ci)
+        femb_a_v = co.femb_a(fa)
+        femb_b_v = co.femb_b(fb_)
+        logits_fa = co.head_fa(h_e + cell_e) - Vfa
+        logits_fb = co.head_fb(h_e + cell_e + femb_a_v) - Vfb
+        logits_fc = co.head_fc(h_e + cell_e + femb_a_v + femb_b_v) - Vfc
+        lp_fa = F.log_softmax(logits_fa, -1).gather(-1, fa[:, None]).squeeze(-1)
+        lp_fb = F.log_softmax(logits_fb, -1).gather(-1, fb_[:, None]).squeeze(-1)
+        lp_fc = F.log_softmax(logits_fc, -1).gather(-1, fc[:, None]).squeeze(-1)
+
+        return lp_cell + lp_fa + lp_fb + lp_fc - co._log_bwf3

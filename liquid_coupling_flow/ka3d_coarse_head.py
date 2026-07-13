@@ -127,6 +127,36 @@ def cells_allowed(head, anchor_y, sj, cage_x, cage_s, cage_v, R, cut, n_chunk=51
     return allowed
 
 
+def fine_c_allowed(head, anchor_y, ci, fa, fb, sj, cage_x, cage_s, cage_v, R, cut):
+    """Fine-stage hard min-separation mask on the LAST fine axis (c). Given the coarse cell `ci` and the
+    already-chosen fine bins (fa, fb), each candidate fine-c bin's 3D position is fully determined, so we
+    forbid the fine-c bins that place the particle within cut*sigma of any valid placed neighbour. Unlike
+    the conservative coarse `cells_allowed` (which forbids only fully-inside cells and so LEAKS straddling
+    cells -- the measured 'coarse-leak', 52-71% of clashes), this is fine-grained (bin width bwf~0.039) and
+    AGGRESSIVE: threshold cut*sigma + margin(=bwf*sqrt3/2, covers the sub-bin dither). It stays unbiased
+    because cut<=0.9 + margin < the 0.95 data min-gap floor, so no real data placement is forbidden.
+    Exactness: depends only on (ci, fa, fb, cage) -- all available at BOTH sample and score time. Returns
+    bool [*, head.nf]. Leading dims *L match the caller ([M] sampler / [M*s_chunk] scorer).
+    """
+    dev, dt = anchor_y.device, anchor_y.dtype
+    bwf = head.bwf
+    lo = head.cell_center(ci) - head.cw / 2.0                              # [*L,3]
+    fc_grid = (torch.arange(head.nf, device=dev, dtype=dt) + 0.5) * bwf    # [nf]
+    Lsh = ci.shape
+    u = torch.empty(*Lsh, head.nf, 3, device=dev, dtype=dt)
+    u[..., 0] = (lo[..., 0] + (fa.to(dt) + 0.5) * bwf)[..., None]
+    u[..., 1] = (lo[..., 1] + (fb.to(dt) + 0.5) * bwf)[..., None]
+    u[..., 2] = lo[..., 2:3] + fc_grid
+    pos, _ = ball_squash(anchor_y[..., None, :] + u, R)                    # [*L,nf,3]
+    d = torch.cdist(pos, cage_x)                                           # [*L,nf,Kc]
+    sig = torch.as_tensor(SIGMA, device=dev, dtype=dt)[sj.long()[..., None], cage_s.long()]  # [*L,Kc]
+    margin = bwf * (3.0 ** 0.5) / 2.0
+    thresh = (cut * sig + margin)[..., None, :]                            # [*L,1,Kc]
+    clash = ((d < thresh) & cage_v.bool()[..., None, :]).any(-1)          # [*L,nf]
+    allowed = ~clash
+    return allowed | (~allowed.any(-1, keepdim=True))                      # fallback: all-forbidden -> allow all
+
+
 def _V_fine_axis(model, anchor_y, cage_x, cage_s, cage_v, sj, R, u_fixed, axis, grid, net, emb):
     """V over the 8 fine bins of `grid` on `axis`: candidate u = u_fixed with `axis` swept to `grid`
     -> y = anchor_y + u (frameless) -> x = ball_squash(y, R) -> pairwise phi to the causal kNN cage.
@@ -248,6 +278,7 @@ class KA3DScaffoldEBMCoarse(KA3DScaffoldEBMBatched):
         Vfb = u.new_zeros(M, S, co.nf)
         Vfc = u.new_zeros(M, S, co.nf)
         allowed_full = torch.ones(M, S, co.n_cells, dtype=torch.bool, device=dev) if min_sep is not None else None
+        fc_allow_full = torch.ones(M, S, co.nf, dtype=torch.bool, device=dev) if min_sep is not None else None
 
         for c0 in range(0, S, s_chunk):
             sl = slice(c0, c0 + s_chunk)
@@ -270,6 +301,9 @@ class KA3DScaffoldEBMCoarse(KA3DScaffoldEBMBatched):
             if min_sep is not None:
                 allow = cells_allowed(co, ay, sjf, cx, cs, cv, R, min_sep)
                 allowed_full[:, sl] = allow.reshape(M, s_, co.n_cells)
+                fca = fine_c_allowed(co, ay, ci[:, sl].reshape(M * s_), fa[:, sl].reshape(M * s_),
+                                     fb_[:, sl].reshape(M * s_), sjf, cx, cs, cv, R, min_sep)
+                fc_allow_full[:, sl] = fca.reshape(M, s_, co.nf)
 
         logits_cell = (base_cell - V_cell) / pos_temp
         if min_sep is not None:
@@ -282,6 +316,8 @@ class KA3DScaffoldEBMCoarse(KA3DScaffoldEBMBatched):
         logits_fa = (co.head_fa(h_e + cell_e) - Vfa) / pos_temp
         logits_fb = (co.head_fb(h_e + cell_e + femb_a_v) - Vfb) / pos_temp
         logits_fc = (co.head_fc(h_e + cell_e + femb_a_v + femb_b_v) - Vfc) / pos_temp
+        if min_sep is not None:
+            logits_fc = logits_fc.masked_fill(~fc_allow_full, float("-inf"))
         lp_fa = F.log_softmax(logits_fa, -1).gather(-1, fa[..., None]).squeeze(-1)
         lp_fb = F.log_softmax(logits_fb, -1).gather(-1, fb_[..., None]).squeeze(-1)
         lp_fc = F.log_softmax(logits_fc, -1).gather(-1, fc[..., None]).squeeze(-1)
@@ -357,7 +393,11 @@ class KA3DScaffoldEBMCoarse(KA3DScaffoldEBMBatched):
             u_fix_c = torch.stack([x_at_fa, y_at_fb, zM[:, 2]], -1)
             grid_c = cell_lo[:, 2:3] + grid8[None, :]
             Vfc = _V_fine_axis(self, ay, cx, cs, cv, sj, R, u_fix_c, 2, grid_c, self.phi, self.pair_emb)
-            l_fc = F.log_softmax((co.head_fc(he + cell_e + femb_a_v + femb_b_v) - Vfc) / pos_temp, -1)
+            logits_fc = (co.head_fc(he + cell_e + femb_a_v + femb_b_v) - Vfc) / pos_temp
+            if min_sep is not None:                                                # fine-stage declash mask
+                fc_allow = fine_c_allowed(co, ay, ci, fa, fb_, sj, cx, cs, cv, R, min_sep)
+                logits_fc = logits_fc.masked_fill(~fc_allow, float("-inf"))
+            l_fc = F.log_softmax(logits_fc, -1)
             fc = torch.multinomial(l_fc.exp(), 1, generator=gen).squeeze(-1)
 
             dith = (torch.rand(M, 3, device=xo.device, dtype=xo.dtype, generator=gen) - 0.5) * co.bwf

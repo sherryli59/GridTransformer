@@ -1,0 +1,5 @@
+=== CAVITY BASIN STRUCTURE vs R (frozen-boundary T=0.5, B=12 seeds/cavity) ===
+R=2.0: overlap(uniform-relaxed, data) median 0.42  | largest-basin frac 0.44  n_basins 7.7  -> MULTI-BASIN
+R=3.0: overlap(uniform-relaxed, data) median 0.29  | largest-basin frac 0.08  n_basins 12.0  -> MULTI-BASIN
+R=4.0: overlap(uniform-relaxed, data) median 0.16  | largest-basin frac 0.08  n_basins 12.0  -> MULTI-BASIN
+saved

@@ -209,3 +209,169 @@ class KA3DScaffoldEBMCoarse(KA3DScaffoldEBMBatched):
         lp_fc = F.log_softmax(logits_fc, -1).gather(-1, fc[:, None]).squeeze(-1)
 
         return lp_cell + lp_fa + lp_fb + lp_fc - co._log_bwf3
+
+    # ---- batched-over-M scorer/sampler overrides (mirrors KA3DScaffoldEBMBatched) ----
+    def _tilted_lp_u_b(self, h_e, u, anchor_y, cage_x, cage_s, cage_v, sj, R, s_chunk=4, pos_temp=1.0,
+                       min_sep=None):
+        """Batched [M,S] exact scorer for the coarse-cell-then-fine-bin factorization. Mirrors the
+        unbatched `_tilted_lp_u` override's math, generalized to an extra leading M dim by flattening
+        M*s_chunk into the module-level `coarse_tilt_V`/`_V_fine_axis`/`cells_allowed` helpers' native
+        S-batch dim (anchor_y is shared across M -- frameless, same scaffold -- so it is tiled, not
+        indexed, before flattening). Shapes mirror KA3DScaffoldEBMBatched._tilted_lp_u_b exactly (h_e/u
+        [M,S,*], cage_* [M,S,Kc,*], sj [M,S]) so the inherited `block_log_prob_b` routes here unchanged.
+        pos_temp divides EVERY logits tensor (coarse + 3 fine) inside its log_softmax. min_sep applies
+        `cells_allowed` as a -inf mask on the COARSE logits only (no fine-c mask; brief 2026-07-13)."""
+        co = self.coarse
+        M, S, _ = u.shape
+        dev, dt = u.device, u.dtype
+
+        ci = co.cell_index(u)                                                  # [M,S]
+        centers = co.cell_center(ci)                                           # [M,S,3]
+        cell_lo = centers - co.cw / 2.0
+        fa, fb_, fc = co.fine_bin(u, ci).unbind(-1)                            # [M,S] each
+
+        base_cell = co.head_coarse(h_e)                                        # [M,S,n_cells]
+        V_cell = u.new_zeros(M, S, co.n_cells)
+        grid8 = (torch.arange(co.nf, device=dev, dtype=dt) + 0.5) * co.bwf     # [nf]
+        grid_a = cell_lo[..., 0:1] + grid8                                     # [M,S,nf]
+        grid_b = cell_lo[..., 1:2] + grid8
+        grid_c = cell_lo[..., 2:3] + grid8
+
+        x_at_fa = cell_lo[..., 0] + (fa.to(dt) + 0.5) * co.bwf                 # [M,S]
+        y_at_fb = cell_lo[..., 1] + (fb_.to(dt) + 0.5) * co.bwf                # [M,S]
+        zeros = torch.zeros(M, S, device=dev, dtype=dt)
+        u_fix_a = torch.stack([zeros, centers[..., 1], centers[..., 2]], -1)   # [M,S,3]
+        u_fix_b = torch.stack([x_at_fa, zeros, centers[..., 2]], -1)
+        u_fix_c = torch.stack([x_at_fa, y_at_fb, zeros], -1)
+
+        Vfa = u.new_zeros(M, S, co.nf)
+        Vfb = u.new_zeros(M, S, co.nf)
+        Vfc = u.new_zeros(M, S, co.nf)
+        allowed_full = torch.ones(M, S, co.n_cells, dtype=torch.bool, device=dev) if min_sep is not None else None
+
+        for c0 in range(0, S, s_chunk):
+            sl = slice(c0, c0 + s_chunk)
+            s_ = min(s_chunk, S - c0)
+            ay = anchor_y[sl][None].expand(M, s_, 3).reshape(M * s_, 3)        # tile shared anchor over M
+            cx = cage_x[:, sl].reshape(M * s_, cage_x.shape[2], 3)
+            cs = cage_s[:, sl].reshape(M * s_, cage_s.shape[2])
+            cv = cage_v[:, sl].reshape(M * s_, cage_v.shape[2])
+            sjf = sj[:, sl].reshape(M * s_)
+            V_cell[:, sl] = coarse_tilt_V(self, ay, cx, cs, cv, sjf, R, co).reshape(M, s_, co.n_cells)
+            Vfa[:, sl] = _V_fine_axis(self, ay, cx, cs, cv, sjf, R,
+                                      u_fix_a[:, sl].reshape(M * s_, 3), 0, grid_a[:, sl].reshape(M * s_, co.nf),
+                                      self.phi_a, self.pair_emb_a).reshape(M, s_, co.nf)
+            Vfb[:, sl] = _V_fine_axis(self, ay, cx, cs, cv, sjf, R,
+                                      u_fix_b[:, sl].reshape(M * s_, 3), 1, grid_b[:, sl].reshape(M * s_, co.nf),
+                                      self.phi_b, self.pair_emb_b).reshape(M, s_, co.nf)
+            Vfc[:, sl] = _V_fine_axis(self, ay, cx, cs, cv, sjf, R,
+                                      u_fix_c[:, sl].reshape(M * s_, 3), 2, grid_c[:, sl].reshape(M * s_, co.nf),
+                                      self.phi, self.pair_emb).reshape(M, s_, co.nf)
+            if min_sep is not None:
+                allow = cells_allowed(co, ay, sjf, cx, cs, cv, R, min_sep)
+                allowed_full[:, sl] = allow.reshape(M, s_, co.n_cells)
+
+        logits_cell = (base_cell - V_cell) / pos_temp
+        if min_sep is not None:
+            logits_cell = logits_cell.masked_fill(~allowed_full, float("-inf"))
+        lp_cell = F.log_softmax(logits_cell, -1).gather(-1, ci[..., None]).squeeze(-1)
+
+        cell_e = co.cell_emb(ci)
+        femb_a_v = co.femb_a(fa)
+        femb_b_v = co.femb_b(fb_)
+        logits_fa = (co.head_fa(h_e + cell_e) - Vfa) / pos_temp
+        logits_fb = (co.head_fb(h_e + cell_e + femb_a_v) - Vfb) / pos_temp
+        logits_fc = (co.head_fc(h_e + cell_e + femb_a_v + femb_b_v) - Vfc) / pos_temp
+        lp_fa = F.log_softmax(logits_fa, -1).gather(-1, fa[..., None]).squeeze(-1)
+        lp_fb = F.log_softmax(logits_fb, -1).gather(-1, fb_[..., None]).squeeze(-1)
+        lp_fc = F.log_softmax(logits_fc, -1).gather(-1, fc[..., None]).squeeze(-1)
+
+        return lp_cell + lp_fa + lp_fb + lp_fc - co._log_bwf3
+
+    @torch.no_grad()
+    def sample_block_b(self, xo, so, block_mask, bnd, s_bnd, R, gen=None, pos_temp=1.0, min_sep=None):
+        """Regenerate the block for M configs in parallel through the coarse-cell-then-fine-bin head.
+        Copy of KA3DScaffoldEBMBatched.sample_block_b (ka3d_ebm_batched.py:179-244) with ONLY the
+        position section (the old a/b/c Vax/la/lb/lc block) replaced by: coarse-cell categorical (tilted
+        by `coarse_tilt_V`, optionally `cells_allowed`-masked at COARSE granularity, /pos_temp) -> sample
+        cell -> three 8-way fine axes (tilted via `_V_fine_axis`, same net/off-axis convention as the
+        unbatched `_tilted_lp_u` override, conditioned via cell_emb/femb_a/femb_b) -> dither within the
+        fine bin -> u = fine center + dither -> y = anchor + u -> ball_squash -> position. Returns
+        xo_new [M,n,3], so_new [M,n], logq [M]."""
+        co = self.coarse
+        M = xo.shape[0]
+        order, anchors, anchor_y, rblock, kind, valid, slot_feat, m, n = self._prep(xo, so, block_mask, bnd, s_bnd, R)
+        n_ret = int((~block_mask).sum())
+        xo, so = xo[:, order].clone(), so[:, order].clone()
+        combined = torch.cat([bnd[None].expand(M, m, 3), xo], 1).clone()
+        scomb = torch.cat([s_bnd[None].expand(M, m), so], 1).clone()
+        blk_s = so[:, n_ret:]                                                        # per-config block species budget
+        rem = torch.stack([(blk_s == 0).sum(1).float(), (blk_s == 1).sum(1).float()], -1)   # [M,2]
+        rbias = self._r_bias(R, xo.device, xo.dtype)
+        ar = torch.arange(M, device=xo.device)
+        logq = xo.new_zeros(M)
+        for jj in range(n_ret, n):
+            vj = (torch.arange(m + n, device=xo.device) < (m + jj))[None]            # [1, m+n]
+            h = self._fc_batched(combined, scomb, kind, vj, anchors[jj:jj + 1], slot_feat[jj:jj + 1])[:, 0] + rbias  # [M,d]
+            ls = F.log_softmax(self.head_species(h).masked_fill(rem <= 0, float("-inf")), -1)
+            sj = torch.multinomial(ls.exp(), 1, generator=gen).squeeze(-1)           # [M]
+            he = h + self.sp_out_emb(sj)
+            cage_x, cage_s, cage_v = self._cage_knn_b(combined, scomb, vj, anchors[jj:jj + 1])   # [M,1,K,*]
+            cx, cs, cv = cage_x[:, 0], cage_s[:, 0], cage_v[:, 0]
+            ay = anchor_y[jj:jj + 1].expand(M, 3)
+
+            # ---- coarse cell ----
+            V_cell = coarse_tilt_V(self, ay, cx, cs, cv, sj, R, co)                  # [M,n_cells]
+            logits_cell = co.head_coarse(he) - V_cell
+            if min_sep is not None:
+                allowed_cell = cells_allowed(co, ay, sj, cx, cs, cv, R, min_sep)
+                logits_cell = logits_cell.masked_fill(~allowed_cell, float("-inf"))
+            l_cell = F.log_softmax(logits_cell / pos_temp, -1)
+            ci = torch.multinomial(l_cell.exp(), 1, generator=gen).squeeze(-1)       # [M]
+
+            cell_e = co.cell_emb(ci)
+            centers = co.cell_center(ci)                                            # [M,3]
+            cell_lo = centers - co.cw / 2.0
+            grid8 = (torch.arange(co.nf, device=xo.device, dtype=xo.dtype) + 0.5) * co.bwf   # [nf]
+            zM = torch.zeros(M, 3, device=xo.device, dtype=xo.dtype)
+
+            # ---- fine axis a ----
+            u_fix_a = torch.stack([zM[:, 0], centers[:, 1], centers[:, 2]], -1)
+            grid_a = cell_lo[:, 0:1] + grid8[None, :]
+            Vfa = _V_fine_axis(self, ay, cx, cs, cv, sj, R, u_fix_a, 0, grid_a, self.phi_a, self.pair_emb_a)
+            l_fa = F.log_softmax((co.head_fa(he + cell_e) - Vfa) / pos_temp, -1)
+            fa = torch.multinomial(l_fa.exp(), 1, generator=gen).squeeze(-1)
+            x_at_fa = cell_lo[:, 0] + (fa.to(xo.dtype) + 0.5) * co.bwf
+            femb_a_v = co.femb_a(fa)
+
+            # ---- fine axis b ----
+            u_fix_b = torch.stack([x_at_fa, zM[:, 1], centers[:, 2]], -1)
+            grid_b = cell_lo[:, 1:2] + grid8[None, :]
+            Vfb = _V_fine_axis(self, ay, cx, cs, cv, sj, R, u_fix_b, 1, grid_b, self.phi_b, self.pair_emb_b)
+            l_fb = F.log_softmax((co.head_fb(he + cell_e + femb_a_v) - Vfb) / pos_temp, -1)
+            fb_ = torch.multinomial(l_fb.exp(), 1, generator=gen).squeeze(-1)
+            y_at_fb = cell_lo[:, 1] + (fb_.to(xo.dtype) + 0.5) * co.bwf
+            femb_b_v = co.femb_b(fb_)
+
+            # ---- fine axis c ----
+            u_fix_c = torch.stack([x_at_fa, y_at_fb, zM[:, 2]], -1)
+            grid_c = cell_lo[:, 2:3] + grid8[None, :]
+            Vfc = _V_fine_axis(self, ay, cx, cs, cv, sj, R, u_fix_c, 2, grid_c, self.phi, self.pair_emb)
+            l_fc = F.log_softmax((co.head_fc(he + cell_e + femb_a_v + femb_b_v) - Vfc) / pos_temp, -1)
+            fc = torch.multinomial(l_fc.exp(), 1, generator=gen).squeeze(-1)
+
+            dith = (torch.rand(M, 3, device=xo.device, dtype=xo.dtype, generator=gen) - 0.5) * co.bwf
+            fine_ctr = co.fine_ctr(ci, torch.stack([fa, fb_, fc], -1))               # [M,3]
+            u = fine_ctr + dith
+            y = anchor_y[jj][None] + u                                              # frameless
+            pos, logdet_xy = ball_squash(y, R)                                      # [M,3], [M]
+            xo[:, jj], so[:, jj] = pos, sj
+            combined[:, m + jj], scomb[:, m + jj] = pos, sj
+            rem[ar, sj] -= 1
+            lp_u = (l_cell.gather(1, ci[:, None]).squeeze(1) + l_fa.gather(1, fa[:, None]).squeeze(1)
+                    + l_fb.gather(1, fb_[:, None]).squeeze(1) + l_fc.gather(1, fc[:, None]).squeeze(1)
+                    - co._log_bwf3)
+            logq = logq + ls.gather(1, sj[:, None]).squeeze(1) + lp_u - logdet_xy
+        xo_new, so_new = xo.new_empty(M, n, 3), so.new_empty(M, n)
+        xo_new[:, order], so_new[:, order] = xo, so
+        return xo_new, so_new, logq

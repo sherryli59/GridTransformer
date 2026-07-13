@@ -34,6 +34,9 @@ def test_coarse_tilt_matches_bruteforce():
     torch.manual_seed(0)
     model = KA3DScaffoldEBMBatched(cat_bins=128, cat_range=2.5)
     model.use_frame = False
+    # De-zero the phi net's output layer to make the test non-vacuous
+    torch.nn.init.normal_(model.phi[-1].weight, std=1.0)
+    torch.nn.init.normal_(model.phi[-1].bias, std=1.0)
     model.eval()
     head = CoarseFineHead(d_model=model.d_model)
     S, Kc, R = 5, 6, 4.5
@@ -47,6 +50,7 @@ def test_coarse_tilt_matches_bruteforce():
     with torch.no_grad():
         V = coarse_tilt_V(model, anchor_y, cage_x, cage_s, cage_v, sj, R, head)
     assert V.shape == (S, head.n_cells)
+    assert V.abs().max() > 0, "Tilt potential is zero (test is vacuous)"
 
     idxs = torch.randperm(head.n_cells)[:40]
     with torch.no_grad():

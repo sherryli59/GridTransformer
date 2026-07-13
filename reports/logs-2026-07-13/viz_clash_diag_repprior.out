@@ -1,0 +1,4 @@
+saved -> reports/logs-2026-07-13/viz_clash_diag_repprior.png
+  data: clash%<0.9   0.0  <0.85   0.0  <0.8   0.0  | worst-cavity min r/sig 0.95  median-cavity worst 0.98
+  ar  : clash%<0.9  19.7  <0.85  16.5  <0.8  13.9  | worst-cavity min r/sig 0.12  median-cavity worst 0.59
+  flow: clash%<0.9  10.2  <0.85   6.4  <0.8   4.9  | worst-cavity min r/sig 0.03  median-cavity worst 0.90

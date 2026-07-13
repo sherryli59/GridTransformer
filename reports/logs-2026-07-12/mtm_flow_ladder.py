@@ -42,6 +42,10 @@ P.add_argument("--R", type=float, default=2.0)
 P.add_argument("--beta", type=float, default=2.0)
 P.add_argument("--device", default="cuda")
 P.add_argument("--out_tag", default="")
+P.add_argument("--ode_max_steps", type=int, default=1000,
+               help="deployment dopri5 budget: healthy solves need a few hundred; stiff proposals get "
+                    "rejected fast instead of grinding to 10k (70-min-first-move lesson)")
+P.add_argument("--ode_double", action="store_true", help="double-precision ODE (default float32)")
 args = P.parse_args()
 dev = args.device; RCTX = 2.5; BIGL = 100.0; N_CAGE = 48; DUMMY_R = 50.0
 
@@ -52,11 +56,16 @@ ar.eval(); ar.use_frame = False
 base = GatedARBase(ar, cut=args.gate_cut) if args.gate_cut is not None else ar
 
 flow = None
+FLOW_DTYPE = torch.float64 if args.ode_double else torch.float32
 if args.arm == "flow":
     ck = torch.load(args.flow_ckpt, map_location=dev, weights_only=False)
     a = ck["args"]
     flow = CavityBlockFlow(k=a["k"], n_cage=a["n_cage"], r_c=a.get("r_c", 2.5), hidden_nf=a["hidden_nf"],
-                           n_layers=a["n_layers"], n_species=2, max_neighbors=a["max_neighbors"]).to(dev).double()
+                           n_layers=a["n_layers"], n_species=2, max_neighbors=a["max_neighbors"],
+                           rep_prior=a.get("rep_prior", False),
+                           ode_rtol=1e-6 if args.ode_double else 1e-5,
+                           ode_atol=1e-6 if args.ode_double else 1e-5,
+                           max_steps=args.ode_max_steps).to(dev).to(FLOW_DTYPE)
     flow.load_state_dict(ck["state_dict"]); flow.eval()
     print(f"flow ckpt step {ck['step']} held_fm {ck['held_loss']:.4f} "
           f"(hid={a['hidden_nf']} L={a['n_layers']} gate_cut(train)={a.get('gate_cut')})", flush=True)
@@ -98,7 +107,7 @@ def one_move(xo, so, blk, bnd, sb, K, gen):
         centroid = xo[blk].mean(0)
         cfx, cfs = fixed_size_cage(cage_x, cage_s, centroid, N_CAGE)
         try:
-            y_blk, ld = flow.flow(blk_x.double(), cfx.double(), blk_s, cfs, reverse=False)
+            y_blk, ld = flow.flow(blk_x.to(FLOW_DTYPE), cfx.to(FLOW_DTYPE), blk_s, cfs, reverse=False)
             Xp = Xp.clone(); Xp[:, blk] = y_blk.float()
             logdet_f = ld.float()
         except AssertionError as e:                       # stiff batch: all trials out of support
@@ -117,14 +126,19 @@ def one_move(xo, so, blk, bnd, sb, K, gen):
         cage0s = torch.cat([sb[None], so[None, ~blk]], 1)
         cfx0, cfs0 = fixed_size_cage(cage0, cage0s, xo[blk].mean(0), N_CAGE)
         try:
-            x0_rev, ld_rev = flow.flow(xo[None, blk].double(), cfx0.double(), so[None, blk], cfs0, reverse=True)
+            x0_rev, ld_rev = flow.flow(xo[None, blk].to(FLOW_DTYPE), cfx0.to(FLOW_DTYPE), so[None, blk], cfs0, reverse=True)
         except AssertionError as e:
             return False, {"rej": f"rev-ODE {e}"}       # q(x)=undefined -> reject conservatively
         x0f = x0_rev.float()
         if args.gate_cut is not None and not gate_pass(x0f, so[None, blk], cage0, cage0s, args.gate_cut)[0]:
             return False, {"rej": "reverse image outside gated support"}
         Xrev = xo[None].clone(); Xrev[:, blk] = x0f
-        lq_x = ar.block_log_prob_b(Xrev, Sb0, blk, bnd, sb, args.R, pos_temp=args.pos_temp) - ld_rev.float()
+        try:
+            # reverse image can exit the open ball (seen with the rep_prior field): AR density there is 0
+            # -> q(current)=0 -> conservative rejection, same class as the gate-fail branch above
+            lq_x = ar.block_log_prob_b(Xrev, Sb0, blk, bnd, sb, args.R, pos_temp=args.pos_temp) - ld_rev.float()
+        except ValueError as e:
+            return False, {"rej": f"reverse image outside ball ({e})"}
     else:
         if args.gate_cut is not None:
             cage0 = torch.cat([bnd[None], xo[None, ~blk]], 1)

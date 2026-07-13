@@ -1,0 +1,6 @@
+=== FLOW-LIKELIHOOD DIAGNOSTIC (repprior, 16 data states, K=8) ===
+C1 application round-trip |lq_rev - logq_fwd|: median 1.90e+00  max 2.49e+02  (n=122)  -> BUG if >>1e-2
+C2 data-state reverse-image categories: {'valid': 5, 'ode_fail': 0, 'outside_ball': 7, 'outside_gate': 4}
+C3 reverse->forward round-trip max|dx| on data: median 2.56e-03  max 5.17e-03  -> integrator inaccurate if >>1e-3
+C4 logq/particle: data-state median -54.15  flow-trial median +8.76  gap +62.90  -> overconfidence wall if flow>>data
+saved -> reports/logs-2026-07-13/diag_flow_likelihood.pt

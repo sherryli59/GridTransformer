@@ -111,15 +111,25 @@ shrinkage ladder provides externally (warmup + declash sweeps = a home-grown lad
 | per-axis c-axis min_sep mask | exact but inert (a,b-plane clashes) | `49de79b` |
 | conservative coarse-cell mask | inert (coarse-leak: straddling cells) | `27575b6` |
 | fine-c mask | 23.4→22.9%, a,b-plane wall (3rd confirm) | `5a9f2a0` |
-| **nested within-cell mask (the "correct" one)** | EXACT 1.4e-14, clash 30.4→27.8% — still ineffective | `86544e3` |
+| **nested within-cell mask (the "correct" one)** | EXACT 1.4e-14; clash 30.4→27.8% at knn=8 — but see CORRECTION below | `86544e3` |
 | top-p nucleus truncation | 16.7→14.3%, clash is in the CONFIDENT BULK not the tail; fp-fragile on GPU | `f36b872` |
 | enlarge mobile set (absorb retained) | clash RISES 20→31% (frozen-correct context was helping) | `d0e660a` |
 | flow corrector as cold-MTM proposal | 0/96, concentration wall (not a bug) | `2ed463b`,`c4696c7` |
 | oracle heat-bath basin scan (12 sweeps) | under-equilibrated; guard flagged it; needs ~150 sweeps | `9b3203a`,`05457b1` |
 
-Meta-lesson from the mask series: **geometric masking of the AR placement cannot remove clashes** — the
-clash is a placement-quality + causal-ordering property. Levers that could work must ADD information:
-training-side or a full-neighbourhood corrector, not remove support.
+**CORRECTION (commit `ed01f2b`, after the residual decomposition + knn isolation):** the nested-mask
+"ineffective" verdict was WRONG — it was **cage-starved**, not fundamentally broken. The mask cage was
+`knn_pot=8`-nearest, but a dense glass has 12–14 first-shell neighbours, so clash partners beyond the 8th
+were invisible to the mask (residual decomposition: retained 40% + boundary 22% dominate, only 22% is
+future-blind). With a complete mask cage the clash drops:
+  tilt=8 mask=8 → 27.8% · tilt=8 **mask=32** → 17.0% · **tilt=32** mask=32 → **10.7%** (near the future floor).
+Two separable deficits: (a) the MASK cage (fixed for free, inference-time separate cage; `mask_knn` param
+now on `KA3DScaffoldEBMCoarse.sample_block_b`; scorer wiring for SMC-exactness = TODO), and (b) the TILT
+cage — the learned energy embedding at knn=8 optimizes placement against ~8 of 14 neighbours → the
+confident-but-wrong placements that ARE the +1/particle structural-gap signature. So masking CAN get min
+separation right with a complete cage; and a **bigger-knn (~24–32) TILT RETRAIN** is the first lever with a
+credible path to the +22-nat acceptance floor itself (untested: does it move the L-BFGS structural floor?).
+This is the highest-value untried experiment — see §5 item 2 (fold it together with the relaxation-target retrain).
 
 ---
 

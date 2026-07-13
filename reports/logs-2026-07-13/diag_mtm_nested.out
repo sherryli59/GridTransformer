@@ -1,0 +1,4 @@
+=== coarse-head block-MTM acceptance: nested mask effect (pos_temp=1.0, N=16, 12 cav) ===
+  knn8  no-mask     :  R2.0K4: 16.7% (dE/p   +9.5)  R2.0K8:  0.0% (dE/p  +63.4)
+  knn24 no-mask     :  R2.0K4: 25.0% (dE/p   +1.7)  R2.0K8:  0.0% (dE/p   +4.6)
+  knn24 NESTED-mask :  R2.0K4: 25.0% (dE/p   +1.4)  R2.0K8:  0.0% (dE/p   +3.9)

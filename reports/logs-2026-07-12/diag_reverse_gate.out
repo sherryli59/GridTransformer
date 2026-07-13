@@ -1,0 +1,24 @@
+  cav 1: fwd min-ratio med 0.492 | rev min-ratio med 0.341
+  cav 2: fwd min-ratio med 0.644 | rev min-ratio med 0.290
+  cav 3: fwd min-ratio med 0.549 | rev min-ratio med 0.552
+  cav 4: fwd min-ratio med 0.709 | rev min-ratio med 0.441
+  cav 5: fwd min-ratio med 0.851 | rev min-ratio med 0.367
+  cav 6: fwd min-ratio med 0.428 | rev min-ratio med 0.367
+  cav 7: fwd min-ratio med 0.291 | rev min-ratio med 0.301
+  cav 8: fwd min-ratio med 0.715 | rev min-ratio med 0.468
+  cav 9: fwd min-ratio med 0.690 | rev min-ratio med 0.530
+  cav 10: fwd min-ratio med 0.510 | rev min-ratio med 0.365
+  cav 11: fwd min-ratio med 0.768 | rev min-ratio med 0.534
+  cav 12: fwd min-ratio med 0.485 | rev min-ratio med 0.570
+  cav 13: fwd min-ratio med 0.427 | rev min-ratio med 0.399
+  cav 14: fwd min-ratio med 0.443 | rev min-ratio med 0.389
+  cav 15: fwd min-ratio med 0.682 | rev min-ratio med 0.566
+  cav 16: fwd min-ratio med 0.447 | rev min-ratio med 0.482
+
+=== REVERSE-IMAGE GATE DIAGNOSTIC (16 held cavities x M=8, K=8, pos_temp=0.4) ===
+    cut |  fwd pass (AR draws) |  expected redraws |  rev pass (data images)
+   0.70 |                35.2% |               2.8 |                    0.0%
+   0.75 |                30.5% |               3.3 |                    0.0%
+   0.80 |                25.8% |               3.9 |                    0.0%
+   0.85 |                21.1% |               4.7 |                    0.0%
+saved -> reports/logs-2026-07-12/diag_reverse_gate.pt

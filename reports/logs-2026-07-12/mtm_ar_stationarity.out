@@ -1,0 +1,16 @@
+=== MAIN: exact tempered chain (score_temp=0.4), 6 cavities x 200 moves ===
+  cav 1: acc   0.0%  U/K start -297.664 tail(last50) -297.664 drift  +0.000  n_acc 0  mean|dx|acc nan
+  cav 2: acc   0.0%  U/K start -302.273 tail(last50) -302.273 drift  +0.000  n_acc 0  mean|dx|acc nan
+  cav 3: acc   0.0%  U/K start -301.911 tail(last50) -301.911 drift  +0.000  n_acc 0  mean|dx|acc nan
+  cav 4: acc   0.0%  U/K start -289.272 tail(last50) -289.272 drift  +0.000  n_acc 0  mean|dx|acc nan
+  cav 5: acc   0.0%  U/K start -298.725 tail(last50) -298.725 drift  +0.000  n_acc 0  mean|dx|acc nan
+  cav 6: acc   0.0%  U/K start -305.451 tail(last50) -305.451 drift  +0.000  n_acc 0  mean|dx|acc nan
+MAIN: acc 0.0% (per-cav spread 0-0%)  drift med +0.000/particle  mean|dx| of accepted nan
+
+=== BUGCTL: current state scored at pos_temp=1.0 (mixed densities), 3 cavities x 100 ===
+  cav: acc   0.0%  drift  +0.000
+  cav: acc   0.0%  drift  +0.000
+  cav: acc   0.0%  drift  +0.000
+BUGCTL: acc 0.0%  drift med +0.000/particle (sensitivity: should differ clearly from MAIN)
+saved -> reports/logs-2026-07-12/mtm_ar_stationarity.pt
+VERDICT: CHECK -- drift or dead acceptance; inspect traces

@@ -141,10 +141,12 @@ def one_move(xo, so, blk, bnd, sb, K, gen):
     sr = torch.logsumexp(lr, 0)
     acc = bool(torch.rand((), device=dev, generator=gen).log() < (sf - sr))
     dE = float((Uy[Jm] - Ux[0]) / K)
-    return acc, {"dE_sel": dE}
+    return acc, {"dE_sel": dE, "sf_sr": float(sf - sr), "u0": float(u0),
+                 "up_max": float(up.max()), "Jm": Jm}
 
 
 results = {}
+moves = []
 for K in args.Ks:
     accs, rejs, skips, dEs = [], 0, 0, []
     ncav = 0
@@ -160,16 +162,23 @@ for K in args.Ks:
         seed = int(torch.randint(n, (), generator=gen, device=dev))
         blk = torch.zeros(n, dtype=torch.bool, device=dev)
         blk[(anch - anch[seed]).norm(dim=-1).topk(K, largest=False).indices] = True
-        for _ in range(args.nrep):
+        cav_accs = []
+        for rep in range(args.nrep):
             acc, info = one_move(xo, so, blk, bnd, sb, K, gen)
             if acc is None:
                 skips += 1
                 continue
             if "rej" in info:
                 rejs += 1
-            accs.append(float(acc))
+            accs.append(float(acc)); cav_accs.append(float(acc))
             if "dE_sel" in info:
                 dEs.append(info["dE_sel"])
+            moves.append({"K": K, "ci": ci, "rep": rep, "acc": bool(acc),
+                          "blk_idx": blk.nonzero(as_tuple=True)[0].tolist(),
+                          "blk_species": so[blk].tolist(), **info})
+        if cav_accs:
+            print(f"    cav ci={ci}: acc {100*st.mean(cav_accs):5.1f}%  ({int(sum(cav_accs))}/{len(cav_accs)})",
+                  flush=True)
         ncav += 1
         if ncav >= args.ncav:
             break
@@ -183,5 +192,5 @@ for K in args.Ks:
 
 tag = f"_{args.out_tag}" if args.out_tag else ""
 out = f"reports/logs-2026-07-12/mtm_flow_ladder_{args.arm}{tag}.pt"
-torch.save({"results": results, "args": vars(args)}, out)
+torch.save({"results": results, "args": vars(args), "moves": moves}, out)
 print(f"saved -> {out}", flush=True)

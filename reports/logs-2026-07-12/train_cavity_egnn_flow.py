@@ -374,6 +374,101 @@ def run_train(args):
     return history
 
 
+def load_bank(split, device):
+    """Concat all fm_bank shards of a split to device tensors. See build_fm_bank.py for the row schema."""
+    shards = sorted((REPO_ROOT / "liquid_coupling_flow/artifacts/fm_bank").glob(f"{split}_shard*.pt"))
+    assert shards, f"no fm_bank shards for split '{split}' -- run build_fm_bank.py first"
+    parts = [torch.load(p, map_location=device, weights_only=False) for p in shards]
+    bank = {kk: torch.cat([q[kk] for q in parts], 0).to(device) for kk in ("x0", "x1", "sp", "cage", "sp_cage")}
+    bank["meta"] = parts[0]["meta"]
+    print(f"[train] bank '{split}': {bank['x0'].shape[0]} rows from {len(shards)} shards "
+          f"(gate_cut={bank['meta']['gate_cut']} pos_temp={bank['meta']['pos_temp']})", flush=True)
+    return bank
+
+
+def bank_batch(bank, idx, t, K):
+    """Assemble an FM batch from bank rows: fresh t + interpolant online (only AR draws are reused)."""
+    x0, x1 = bank["x0"][idx], bank["x1"][idx]
+    tt = t[:, None, None]
+    return {"x_t": (1 - tt) * x0 + tt * x1, "t": t, "target_v": x1 - x0,
+            "sp_block": bank["sp"][idx], "cage": bank["cage"][idx], "sp_cage": bank["sp_cage"][idx]}
+
+
+def run_train_bank(args):
+    """Bank-mode training: profile showed the (frozen-AR) data pipeline was ~80% of the 8-10 s step;
+    from the bank a step is just gather + interpolant + SO(3) + chunked loss (~2 s at hid192/L6)."""
+    device = args.device
+    gen = torch.Generator(device=device).manual_seed(args.seed)
+    gen_eval = torch.Generator(device=device).manual_seed(args.seed + 1)
+    bank = load_bank("train", device)
+    held = load_bank("held", device)
+    n_bank, n_held = bank["x0"].shape[0], held["x0"].shape[0]
+    rows_per_step = args.n_cav * args.m
+    held_idx = torch.arange(min(1024, n_held), device=device)
+
+    flow_model = CavityBlockFlow(n_cage=args.n_cage, k=args.k, r_c=args.r_c, hidden_nf=args.hidden_nf,
+                                  n_layers=args.n_layers, n_species=2,
+                                  max_neighbors=args.max_neighbors).to(device)
+    if args.init_from:
+        ick = torch.load(args.init_from, map_location=device, weights_only=False)
+        flow_model.load_state_dict(ick["state_dict"])
+        print(f"[train] warm-start from {args.init_from} (step {ick.get('step')})", flush=True)
+    opt = torch.optim.AdamW(flow_model.parameters(), lr=args.lr)
+
+    tag = f"_{args.out_tag}" if args.out_tag else ""
+    out_ckpt = REPO_ROOT / f"liquid_coupling_flow/artifacts/ka3d_cavity_egnn_flow{tag}.pt"
+    out_ckpt_best = REPO_ROOT / f"liquid_coupling_flow/artifacts/ka3d_cavity_egnn_flow{tag}_best.pt"
+
+    best_held, best_step, patience_ctr = float("inf"), -1, 0
+    history = []
+    t0 = time.time()
+    for step in range(1, args.steps + 1):
+        idx = torch.randint(n_bank, (rows_per_step,), generator=gen, device=device)
+        t = torch.rand(rows_per_step, generator=gen, device=device)
+        batch = augment_so3(bank_batch(bank, idx, t, args.k), gen)
+        opt.zero_grad(set_to_none=True)
+        chunk = args.chunk_rows if args.chunk_rows > 0 else rows_per_step
+        train_loss = 0.0
+        for lo in range(0, rows_per_step, chunk):
+            sl = slice(lo, min(lo + chunk, rows_per_step))
+            sub = {kk: (vv[sl] if torch.is_tensor(vv) else vv) for kk, vv in batch.items()}
+            l = fm_loss(flow_model, sub, args.k) * (sub["x_t"].shape[0] / rows_per_step)
+            l.backward()
+            train_loss += float(l.item())
+        opt.step()
+        row = {"step": step, "train_loss": train_loss}
+
+        if step % args.eval_every == 0 or step == args.steps:
+            with torch.no_grad():
+                flow_model.eval()
+                te = torch.rand(held_idx.shape[0], generator=gen_eval, device=device)
+                hb = bank_batch(held, held_idx, te, args.k)
+                held_loss = 0.0
+                for lo in range(0, held_idx.shape[0], 256):
+                    sl = slice(lo, min(lo + 256, held_idx.shape[0]))
+                    sub = {kk: (vv[sl] if torch.is_tensor(vv) else vv) for kk, vv in hb.items()}
+                    held_loss += float(fm_loss(flow_model, sub, args.k).item()) * (sub["x_t"].shape[0] / held_idx.shape[0])
+                flow_model.train()
+            row.update({"held_loss": held_loss, "gap": held_loss - train_loss})
+            print(f"[train] step {step:6d}  train {train_loss:.5f}  held {held_loss:.5f}  "
+                  f"gap {held_loss - train_loss:+.5f}  wall {time.time() - t0:.0f}s", flush=True)
+            ckpt = {"state_dict": flow_model.state_dict(), "step": step, "held_loss": held_loss,
+                    "train_loss": train_loss, "history": history + [row], "args": vars(args)}
+            torch.save(ckpt, out_ckpt)
+            if held_loss < best_held:
+                best_held, best_step, patience_ctr = held_loss, step, 0
+                torch.save(ckpt, out_ckpt_best)
+            else:
+                patience_ctr += 1
+                if patience_ctr >= args.patience:
+                    print(f"[train] EARLY STOP at step {step} (best step {best_step}, "
+                          f"held {best_held:.5f})", flush=True)
+                    history.append(row)
+                    break
+        history.append(row)
+    return history
+
+
 def build_argparser():
     p = argparse.ArgumentParser()
     p.add_argument("--smoke", action="store_true")
@@ -396,6 +491,8 @@ def build_argparser():
                    help="grad-accumulation chunk (rows) for the memory-heavy vel_div loss; 0 = whole batch")
     p.add_argument("--init_from", type=str, default="",
                    help="warm-start state_dict from this checkpoint (crash resume for long runs)")
+    p.add_argument("--bank", action="store_true",
+                   help="train from the precomputed fm_bank shards (build_fm_bank.py) -- skips the AR pipeline")
     # full-run loop
     p.add_argument("--steps", type=int, default=5000)
     p.add_argument("--n_cav", type=int, default=4)
@@ -420,6 +517,8 @@ def main():
         result = run_smoke(args)
         if args.out_json:
             Path(args.out_json).write_text(json.dumps(result))
+    elif args.bank:
+        run_train_bank(args)
     else:
         run_train(args)
 

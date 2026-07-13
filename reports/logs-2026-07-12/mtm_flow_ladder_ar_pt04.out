@@ -1,0 +1,3 @@
+K= 4: acc   6.2+-3.0%  (n=64, guard-rej 0, skips 0)  dE/p(selected) med    +0.41  [8 cavities]
+K= 8: acc   4.7+-2.6%  (n=64, guard-rej 0, skips 0)  dE/p(selected) med    +1.22  [8 cavities]
+saved -> reports/logs-2026-07-12/mtm_flow_ladder_ar_pt04_exact.pt

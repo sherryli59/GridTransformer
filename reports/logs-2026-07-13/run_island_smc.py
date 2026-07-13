@@ -20,6 +20,8 @@ from liquid_coupling_flow.ka3d_cavity_ar import _mic
 RCTX = 2.5; BETA = 2.0
 
 
+@torch.no_grad()   # CRITICAL: block_log_prob_b/energy_b are not internally no_grad; without this the
+                   # logw accumulation retains the autograd graph across ALL rungs (measured 22.5GB OOM)
 def smc_island(m, xo, so, bnd, s_bnd, R, M, T, n_mut, K, kbig, resamp, gen):
     """One island: annealed SMC with EVIDENCE accounting. Returns (X, S, logw, logZ)."""
     n = xo.shape[0]; allmask = torch.ones(n, dtype=torch.bool, device=dev)
@@ -123,6 +125,8 @@ def main():
                 Xp, Sp, logw, logZ = smc_island(m, xo, so, bnd, sb, R, a.m, a.T, a.n_mut, a.K, a.kbig, a.resamp, gen)
                 q = overlap_pop(Xp, Sp, xin.to(dev), sin.to(dev))
                 isl.append({"logZ": logZ, "logw": logw.cpu(), "q": q, "X": Xp.cpu(), "S": Sp.cpu()})
+                results[(R, c)] = {"islands": isl}                                  # per-ISLAND durability
+                torch.save(results, a.out); torch.cuda.empty_cache()
                 print(f"  R={R} c={c} island {j}: logZ {logZ:+.1f}  q med {st.median(q):.2f}", flush=True)
             lz = torch.tensor([i["logZ"] for i in isl])
             wj = torch.softmax(lz, 0)

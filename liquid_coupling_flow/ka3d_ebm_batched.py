@@ -14,6 +14,17 @@ from liquid_coupling_flow.ka3d_scaffold_ar import fixed_ball_scaffold, ball_squa
 from liquid_coupling_flow.ka_energy import SIGMA as _SIGMA_TAB
 
 
+def _nucleus_mask(logits, top_p):
+    """Top-p (nucleus) keep-mask over the last dim: the smallest prefix of probability-sorted bins whose
+    cumulative mass reaches top_p (the crossing bin included). Deterministic function of the logits ->
+    applying the SAME mask at sample and score time keeps the truncated+renormalized categorical an exact
+    density (same argument as tempering). Targets the hedged low-probability tail where clashes live."""
+    probs = torch.softmax(logits, -1)
+    sp, si = probs.sort(-1, descending=True)
+    keep_sorted = (sp.cumsum(-1) - sp) < top_p                              # first bin always kept
+    return torch.zeros_like(keep_sorted).scatter(-1, si, keep_sorted)
+
+
 def _csep_allowed(anchor_y, ba, bb, sj, cage_x, cage_s, cage_v, R, cut, fl):
     """Exact hard minimum-separation mask on the FINAL (c) axis categorical. Given the already-fixed a/b
     bins, the full 3D position of each candidate c-bin is determined, so we can forbid the c-bins whose
@@ -110,7 +121,7 @@ class KA3DScaffoldEBMBatched(KA3DScaffoldEBM):
         return (phi * cage_v[:, :, None, :]).sum(-1)                                # [M,S,nb]
 
     def _tilted_lp_u_b(self, h_e, u, anchor_y, cage_x, cage_s, cage_v, sj, R, s_chunk=4, pos_temp=1.0,
-                       min_sep=None):
+                       min_sep=None, top_p=None):
         fl = self.flow
         M, S, _ = u.shape
         ba, bb, bc = fl._bin(u[..., 0]), fl._bin(u[..., 1]), fl._bin(u[..., 2])
@@ -131,13 +142,19 @@ class KA3DScaffoldEBMBatched(KA3DScaffoldEBM):
         # normalization; species untempered there, so untempered here too) -> block_log_prob_b(pos_temp=T)
         # is the true log-density of a pos_temp=T sample at an ARBITRARY point (needed for the MTM
         # current-state term; the pos_temp<1 sweep in mtm_early_read.py predates this and mixed densities).
-        la = F.log_softmax((base_a - Va) / pos_temp, -1).gather(-1, ba[..., None]).squeeze(-1)
-        lb = F.log_softmax((base_b - Vb) / pos_temp, -1).gather(-1, bb[..., None]).squeeze(-1)
+        logits_a = (base_a - Va) / pos_temp
+        logits_b = (base_b - Vb) / pos_temp
         logits_c = (base_c - Vc) / pos_temp
         if min_sep is not None:                                                    # same hard c-mask as the sampler
             ay = anchor_y[None].expand(M, S, 3)
             allowed = _csep_allowed(ay, ba, bb, sj, cage_x, cage_s, cage_v, R, min_sep, fl)
             logits_c = logits_c.masked_fill(~allowed, float("-inf"))
+        if top_p is not None:                                                      # nucleus, mirrors the sampler
+            logits_a = logits_a.masked_fill(~_nucleus_mask(logits_a, top_p), float("-inf"))
+            logits_b = logits_b.masked_fill(~_nucleus_mask(logits_b, top_p), float("-inf"))
+            logits_c = logits_c.masked_fill(~_nucleus_mask(logits_c, top_p), float("-inf"))
+        la = F.log_softmax(logits_a, -1).gather(-1, ba[..., None]).squeeze(-1)
+        lb = F.log_softmax(logits_b, -1).gather(-1, bb[..., None]).squeeze(-1)
         lc = F.log_softmax(logits_c, -1).gather(-1, bc[..., None]).squeeze(-1)
         return la + lb + lc - fl._logbw3                                            # [M,S]
 
@@ -156,10 +173,10 @@ class KA3DScaffoldEBMBatched(KA3DScaffoldEBM):
         anchor_y, _ = ball_unsquash(anchors, R)
         return order, anchors, anchor_y, reordered_block, kind, valid, slot_feat, m, n
 
-    def block_log_prob_b(self, xo, so, block_mask, bnd, s_bnd, R, pos_temp=1.0, min_sep=None):
+    def block_log_prob_b(self, xo, so, block_mask, bnd, s_bnd, R, pos_temp=1.0, min_sep=None, top_p=None):
         """Exact log q(block | retained+boundary) for M configs at once. xo [M,n,3] -> [M].
         pos_temp: score under the SAME tempered position density sample_block_b(pos_temp=...) draws from.
-        min_sep: MUST match the value passed to sample_block_b, or the density is not the sampler's."""
+        min_sep/top_p: MUST match the values passed to sample_block_b, or the density is not the sampler's."""
         M = xo.shape[0]
         order, anchors, anchor_y, rblock, kind, valid, slot_feat, m, n = self._prep(xo, so, block_mask, bnd, s_bnd, R)
         xo, so = xo[:, order], so[:, order]
@@ -173,11 +190,12 @@ class KA3DScaffoldEBMBatched(KA3DScaffoldEBM):
         u = y - anchor_y[None]                                                       # frameless
         cage_x, cage_s, cage_v = self._cage_knn_b(combined, scomb, valid, anchors)
         lp_u = self._tilted_lp_u_b(h + self.sp_out_emb(so), u, anchor_y, cage_x, cage_s, cage_v, so, R,
-                                   pos_temp=pos_temp, min_sep=min_sep)
+                                   pos_temp=pos_temp, min_sep=min_sep, top_p=top_p)
         return ((lp_s + lp_u + logdet_yx) * rblock[None]).sum(1)                     # [M]
 
     @torch.no_grad()
-    def sample_block_b(self, xo, so, block_mask, bnd, s_bnd, R, gen=None, pos_temp=1.0, min_sep=None):
+    def sample_block_b(self, xo, so, block_mask, bnd, s_bnd, R, gen=None, pos_temp=1.0, min_sep=None,
+                       top_p=None):
         """Regenerate the block for M configs in parallel. Returns xo_new [M,n,3], so_new [M,n], logq [M].
 
         pos_temp<1 SHARPENS the three position categoricals at sampling time (kills the intra-component
@@ -217,16 +235,24 @@ class KA3DScaffoldEBMBatched(KA3DScaffoldEBM):
                 uf = u_fixed[:, None]                                                # [M,1,3]
                 return self._V_axis_b(uf, axis, anchor_y[jj:jj + 1], cage_x, cage_s, cage_v, sj[:, None], R, net, emb)[:, 0]
             z = torch.zeros(M, 3, device=xo.device, dtype=xo.dtype)
-            la = F.log_softmax((fl.head_a(he) - Vax(z, 0, self.phi_a, self.pair_emb_a)) / pos_temp, -1)
+            logits_a = (fl.head_a(he) - Vax(z, 0, self.phi_a, self.pair_emb_a)) / pos_temp
+            if top_p is not None:
+                logits_a = logits_a.masked_fill(~_nucleus_mask(logits_a, top_p), float("-inf"))
+            la = F.log_softmax(logits_a, -1)
             ba = torch.multinomial(la.exp(), 1, generator=gen).squeeze(-1)
             ufb = z.clone(); ufb[:, 0] = fl._ctr(ba)
-            lb = F.log_softmax((fl.head_b(he + fl.bin_a_emb(ba)) - Vax(ufb, 1, self.phi_b, self.pair_emb_b)) / pos_temp, -1)
+            logits_b = (fl.head_b(he + fl.bin_a_emb(ba)) - Vax(ufb, 1, self.phi_b, self.pair_emb_b)) / pos_temp
+            if top_p is not None:
+                logits_b = logits_b.masked_fill(~_nucleus_mask(logits_b, top_p), float("-inf"))
+            lb = F.log_softmax(logits_b, -1)
             bb = torch.multinomial(lb.exp(), 1, generator=gen).squeeze(-1)
             ufc = ufb.clone(); ufc[:, 1] = fl._ctr(bb)
             logits_c = (fl.head_c(he + fl.bin_a_emb(ba) + fl.bin_b_emb(bb)) - Vax(ufc, 2, self.phi, self.pair_emb)) / pos_temp
             if min_sep is not None:
                 allowed_c = _csep_allowed(anchor_y[jj:jj + 1].expand(M, 3), ba, bb, sj, cx, cs, cv, R, min_sep, fl)
                 logits_c = logits_c.masked_fill(~allowed_c, float("-inf"))
+            if top_p is not None:
+                logits_c = logits_c.masked_fill(~_nucleus_mask(logits_c, top_p), float("-inf"))
             lc = F.log_softmax(logits_c, -1)
             bc = torch.multinomial(lc.exp(), 1, generator=gen).squeeze(-1)
             dith = (torch.rand(M, 3, device=xo.device, dtype=xo.dtype, generator=gen) - 0.5) * fl.bw

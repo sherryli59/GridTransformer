@@ -1,0 +1,5 @@
+=== exact tempered block-MTM acceptance vs INFERENCE tilt-cage (knn=8 model, pos_temp=0.4, N=16) ===
+  knn_pot= 8:  R2.0K4:  0.0% (dE/p  +1.2)  R2.0K8:  0.0% (dE/p +58.6)  R2.5K4:  0.0% (dE/p  +1.6)  R2.5K8:  0.0% (dE/p +35.1)
+  knn_pot=16:  R2.0K4:  0.0% (dE/p  +1.0)  R2.0K8:  0.0% (dE/p+103.8)  R2.5K4:  0.0% (dE/p  +1.7)  R2.5K8:  0.0% (dE/p +10.1)
+  knn_pot=24:  R2.0K4:  0.0% (dE/p  +0.8)  R2.0K8:  0.0% (dE/p +47.5)  R2.5K4:  0.0% (dE/p  +1.5)  R2.5K8:  0.0% (dE/p +17.3)
+  knn_pot=32:  R2.0K4:  0.0% (dE/p  +1.6)  R2.0K8:  0.0% (dE/p+183.6)  R2.5K4:  0.0% (dE/p  +1.6)  R2.5K8:  0.0% (dE/p +15.7)

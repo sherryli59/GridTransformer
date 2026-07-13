@@ -35,26 +35,39 @@ committed and reproducible:
   relaxed AR +1.12 (`diag_relax_ar_targets`), deterministic-corrector real-basin +0.9, and the flow's
   concentration gap. It is the half-cage/exposure limit: a causal AR places each particle blind to ~half
   its final neighbourhood.
-- **5 masking variants all fail to fix clash** (see §4): per-axis c-mask, conservative coarse-cell,
-  fine-c, top-p nucleus, and the geometrically-correct **nested within-cell mask** (commit `86544e3`, EXACT
-  1.4e-14 but clash only 30.4%→27.8%). Masking the AR's own placement cannot get min-separation right; the
-  clash is entangled with causal ordering + the anchor-kNN context budget, not a maskable geometric region.
+- **Masking is settled (see §4): the nested mask DOES fix clash with a complete cage, but clash was never
+  the acceptance bottleneck.** The nested within-cell mask (EXACT 1.4e-14) looked ineffective (30.4→27.8%)
+  only because it was **cage-starved** (mask cage = knn_pot=8, but a dense glass has 12–14 first-shell
+  neighbours); with a 24–32 cage it drops clash to **10.7%** (near the future-blind floor). But directly
+  measured (`diag_mtm_nested`, commit `c14b629`), adding the nested mask moves MTM acceptance by **nothing**
+  (K=4 25→25%, K=8 0→0%) — because once the energy is low the residual is *structural*, not clash. Clean
+  separation: **the tilt CAGE is the acceptance lever; the nested mask is an SMC accelerant only.**
+- **The tilt cage (knn_pot) is the real lever, and knn=8 is too small** (`diag_mtm_inference_knn`,
+  `diag_tilt_vs_mask_cage`, commits `0bdf918`,`ed01f2b`). Bumping the tilt cage 8→24 AT INFERENCE (no retrain)
+  cuts K=8 trial energy **30× (+896→+28/particle)** and lifts K=4 acceptance 16.7→25% — but is *fragile*
+  (knn=32 regresses; the trained-at-8 tilt goes off-distribution). So a **learned** knn=24 tilt is the
+  necessary step, and its payoff should land in the K=8 regime. K=8 stays 0% even at +3.9/particle (62 nats)
+  → the retrain must close the structural gap further. **THIS IS THE TOP OPEN LEVER — see §2 (running) + §5.**
 - The **flow corrector** (EGNN, `ka3d_cavity_egnn.py`) is the best proposal-quality object (clash 20→10%,
   held FM 0.06) but accepts **0/96** at K=8 — NOT a likelihood bug (`diag_flow_likelihood`, commit
   `2ed463b`): it is the **concentration wall** — logZ-calibration corr(logq,−βU)=+0.11 (`c4696c7`), the
   reverse map sends 44% of data states out of the ball. A *better-trained* (more contractive) flow makes it
   *worse* as a cold proposal.
 
-**Therefore the surviving lever is SMC / tempering** (anneal through the −22 nat gap in increments, never
-reject it in one shot), where the AR is the annealed base + the corrector's pull and the relaxation's good
-samples are assets. This is where the live work now points.
+**Two live directions** (not mutually exclusive): (a) **SMC / tempering** — anneal through the −22 nat gap
+in increments, never reject it in one shot; the AR is the annealed base, the nested mask + relaxation
+declash the population, the corrector's pull is an asset (§2 head-to-head). (b) **The bigger-knn tilt
+retrain** — the one lever with a credible path to the structural gap ITSELF (the cage, not the mask, is the
+acceptance lever, and knn=8 is measurably too small) (§2 job 3). These converge: a better tilt makes a
+better SMC base too.
 
 ---
 
 ## 2. What is RUNNING right now (as of hand-off)
 
-Two GPU jobs (check `nvidia-smi --query-compute-apps=pid,used_memory --format=csv`; PIDs 901967 + 912590 at
-write time). Both write incrementally; both have hours to go.
+Three GPU jobs (check `nvidia-smi --query-compute-apps=pid,used_memory --format=csv`; verify PIDs are alive
+with `ps -p <pid>` — GPU has ample free memory, all three coexist). All write incrementally.
+Job 3 (the tilt retrain) is the TOP lever; jobs 1+2 are the PT-vs-AR head-to-head.
 
 1. **PT referee (gold standard)** — `reports/logs-2026-07-13/pt_gate_g1_24rep.out`, artifact
    `liquid_coupling_flow/artifacts/ka3d_pt_g1_24rep.pt`. Command:
@@ -83,7 +96,21 @@ evidence variance) and the AR falls back to accelerator-inside-PT.
 
 **NEXT ACTION when both finish:** write the P(q) comparison (island-reweighted vs G1 ref_samples histograms,
 same cavities) and report. `run_island_smc.py` has a `--compare <g1.pt>` hook stub — wire it or write a small
-compare script.
+compare script. CAUTION: the 24-rep G1 is still `conv=False` at R=2.2/2.4 (gap 0.29–0.49) mid-run — it may
+need MORE replicas or sweeps; check its final verdict before trusting `ref_samples` as gold.
+
+3. **Bigger-knn TILT RETRAIN (the top lever)** — `reports/logs-2026-07-13/train_knn24.out`, artifact
+   `liquid_coupling_flow/artifacts/ka3d_cavity_ebm3ax_rho115_knn24.pt` (+ `_best`). Command:
+   `python reports/logs-2026-07-12/train_ebm3d_bigbox.py --knn-pot 24 --steps 40000 --eval-every 500 --patience 8 --warm liquid_coupling_flow/artifacts/ka3d_cavity_ebm3ax_rho115_best.pt --out liquid_coupling_flow/artifacts/ka3d_cavity_ebm3ax_rho115_knn24.pt`
+   knn_pot is now a ctor kwarg (default 8); the tilt nets are per-pair+sum so warm-start from the knn=8 ckpt
+   is clean (0 new/0 unused). WHY: the cage — not the mask — is the acceptance lever, and knn=8 is
+   measurably too small (§1). STATUS at hand-off update: ~step 5000/40k, held NLL −2.84 (NOT yet beating the
+   knn=8 baseline −2.88), MTM(K=4) noisy 6–25%. Warm-started tilt must UNLEARN its 8-nbr weighting → expect a
+   dip before improvement; judge on CONVERGED held NLL + a proper K-ladder vs knn=8 (esp. K=8, where the
+   inference sweep says the payoff should land — K=8 was 0% at +3.9/particle, the structural gap to close).
+   If it doesn't beat baseline by ~step 15k, try knn=16 (the inference sweep peaked there) or a fresh
+   (non-warm) train. **Evaluation harnesses ready:** `diag_mtm_nested.py` (set the ckpt) for the K-ladder,
+   `diag_declash_ceiling.py` for the L-BFGS structural floor.
 
 ---
 
@@ -111,7 +138,7 @@ shrinkage ladder provides externally (warmup + declash sweeps = a home-grown lad
 | per-axis c-axis min_sep mask | exact but inert (a,b-plane clashes) | `49de79b` |
 | conservative coarse-cell mask | inert (coarse-leak: straddling cells) | `27575b6` |
 | fine-c mask | 23.4→22.9%, a,b-plane wall (3rd confirm) | `5a9f2a0` |
-| **nested within-cell mask (the "correct" one)** | EXACT 1.4e-14; clash 30.4→27.8% at knn=8 — but see CORRECTION below | `86544e3` |
+| ~~nested within-cell mask~~ | NOT a dead end — cage-starved; works at knn≥24 (10.7% clash). See CORRECTION | `86544e3`,`ed01f2b` |
 | top-p nucleus truncation | 16.7→14.3%, clash is in the CONFIDENT BULK not the tail; fp-fragile on GPU | `f36b872` |
 | enlarge mobile set (absorb retained) | clash RISES 20→31% (frozen-correct context was helping) | `d0e660a` |
 | flow corrector as cold-MTM proposal | 0/96, concentration wall (not a bug) | `2ed463b`,`c4696c7` |
@@ -135,13 +162,19 @@ This is the highest-value untried experiment — see §5 item 2 (fold it togethe
 
 ## 5. Open questions / candidate next steps (ranked)
 
-1. **Finish + compare the head-to-head** (§2 NEXT ACTION). This is the live deliverable. If island-SMC
-   matches PT ref P(q), the amortized-sampler thesis has its first gold-standard validation beyond R=1.4.
+0. **JUDGE THE knn=24 TILT RETRAIN** (§2 job 3, RUNNING) — the top lever. When it converges/early-stops:
+   K-ladder MTM acceptance vs knn=8 (`diag_mtm_nested.py`, esp. K=8) + L-BFGS structural floor
+   (`diag_declash_ceiling.py`) + held NLL. Does a *learned* fuller-context tilt close the +1/particle
+   structural gap that the inference-time bump only dented (K=8 energy 30× lower but still +3.9/particle =
+   62 nats = 0% accept)? If yes, this is the first thing to move the acceptance wall. If it never beats
+   baseline, fall back to knn=16 or a fresh (non-warm) train, then hand to §5.1/§5.2.
+1. **Finish + compare the head-to-head** (§2 NEXT ACTION). Live deliverable; caution on G1 convergence.
 2. **Relaxation-target AR retrain** (training-side declash, de-risked but NOT run). `diag_relax_ar_targets`
    proved frozen-cage T=0.5 MC turns +101/particle AR blocks into +1.1/particle clash-free ones (errors are
-   *slidable*), giving cheap multi-targets per cage. Retrain the AR (or flow) on relaxed targets → attacks
-   the "confident-but-wrong placement" directly (the thing masking can't). Non-circular: needs only LOCAL
-   thermal spread, not full cavity-PT. Caveat: relaxed targets are AR-basin-biased; iterate or e^{−βU}-reweight.
+   *slidable*), giving cheap multi-targets per cage. Attacks "confident-but-wrong placement" directly.
+   **Fold together with the knn retrain** — both are "teach the conditional to place confidently AND
+   correctly"; a bigger-knn tilt trained on relaxed targets is the combined bet. Caveat: relaxed targets are
+   AR-basin-biased; iterate or e^{−βU}-reweight.
 3. **Basin structure vs R** (the "does cross-basin matter" question, currently UNRESOLVED). Both quick MC
    probes were confounded by glassy dynamics (`05457b1`). The proper measurement is the oracle full-cage
    heat-bath run to convergence (~150 sweeps, `run_oracle_basins_long.py` is STAGED but not launched) OR

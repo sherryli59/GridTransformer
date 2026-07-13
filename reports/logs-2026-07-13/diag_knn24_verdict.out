@@ -1,0 +1,8 @@
+=== knn=24 RETRAIN verdict: exact tempered block-MTM, 5 seeds x 12 cav, pos_temp=1.0 ===
+    (mean +/- std over seeds; dE = median accepted-block energy per particle vs data block)
+  A baseline knn8  @infer8   K4:   10.0 +/-  9.7%   dE/p    +5.1
+  A baseline knn8  @infer8   K8:    0.0 +/-  0.0%   dE/p  +896.2
+  B baseline knn8  @infer24  K4:   13.3 +/- 11.3%   dE/p    +2.3
+  B baseline knn8  @infer24  K8:    0.0 +/-  0.0%   dE/p   +40.4
+  C RETRAIN  knn24 @infer24  K4:   21.7 +/- 13.5%   dE/p    +3.1
+  C RETRAIN  knn24 @infer24  K8:    0.0 +/-  0.0%   dE/p  +257.8

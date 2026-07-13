@@ -1,0 +1,16 @@
+3D cavity-EBM: train=6720 held=128 radii=(1.6, 2.0, 2.5, 3.0) dev=cuda
+tilt cage knn_pot = 24
+RESUME liquid_coupling_flow/artifacts/ka3d_cavity_ebm3ax_rho115_knn24.pt @ step 8500 (fresh optimizer)
+step  8500 loss -2.7739  held_nll -2.8508  gap +0.0769  MTM(k4,N16) 25%  (13s)
+step  9000 loss -2.9196  held_nll -2.8619  gap -0.0577  MTM(k4,N16) 12%  (188s)
+step  9500 loss -2.3873  held_nll -2.8822  gap +0.4949  MTM(k4,N16) 12%  (360s)
+step 10000 loss -2.7921  held_nll -2.8585  gap +0.0664  MTM(k4,N16) 0%  (538s)
+step 10500 loss -3.3778  held_nll -2.8659  gap -0.5119  MTM(k4,N16) 19%  (709s)
+step 11000 loss -2.6696  held_nll -2.8779  gap +0.2083  MTM(k4,N16) 6%  (881s)
+step 11500 loss -3.0830  held_nll -2.8454  gap -0.2375  MTM(k4,N16) 25%  (1052s)
+step 12000 loss -2.6770  held_nll -2.8655  gap +0.1885  MTM(k4,N16) 19%  (1224s)
+step 12500 loss -3.0684  held_nll -2.8592  gap -0.2092  MTM(k4,N16) 25%  (1393s)
+step 13000 loss -2.7541  held_nll -2.8646  gap +0.1105  MTM(k4,N16) 25%  (1565s)
+step 13500 loss -3.1539  held_nll -2.8605  gap -0.2934  MTM(k4,N16) 12%  (1738s)
+EARLY STOP at step 13500: held_nll flat for 8 evals (best -2.8822)
+saved liquid_coupling_flow/artifacts/ka3d_cavity_ebm3ax_rho115_knn24.pt (best held_nll -2.8822 -> liquid_coupling_flow/artifacts/ka3d_cavity_ebm3ax_rho115_knn24_best.pt)

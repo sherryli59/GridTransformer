@@ -1,0 +1,5 @@
+=== COARSE-HEAD CLASH SOURCE DECOMPOSITION (12 held cages, M=8, K=8) ===
+min_sep=0.85: clash  23.4%  | of clashes: future-blind  21%  maskable  79% (= thresh-only  21% + coarse-leak  52% + fine-leak   7%)
+min_sep=0.9: clash  23.4%  | of clashes: future-blind  21%  maskable  79% (= thresh-only   0% + coarse-leak  64% + fine-leak  15%)
+min_sep=0.95: clash  23.4%  | of clashes: future-blind  21%  maskable  79% (= thresh-only   0% + coarse-leak  71% + fine-leak   8%)
+saved

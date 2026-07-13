@@ -1,0 +1,29 @@
+loaded liquid_coupling_flow/artifacts/ka3d_cavity_coarse_best.pt (step 13500): 0 missing / 0 unexpected keys (strict=False)
+loaded liquid_coupling_flow/artifacts/ka3d_cavity_ebm3ax_rho115_best.pt (step 35500): 0 missing / 0 unexpected keys (strict=False)
+held dataset: liquid_coupling_flow/artifacts/ka3d_dataset_N4096_T0.5_rho1.15.pt X=(48, 4096, 3) L=15.278093338012695
+
+=== G-NLL ===
+  n_cavities=16  coarse NLL/n=-2.8012  baseline NLL/n=-2.8811  target<=-2.636  PASS
+
+=== G-CLASH ===
+  n_cavities=12 M=8  coarse clash=25.3% (194/768)  baseline clash=20.7% (159/768)  target<15.0%  FAIL
+
+=== G-DEFICIT ===
+  n_cavities=8 nrep=4 ntrial=16  coarse median sf-sr=-154.6  baseline median sf-sr=-304.3  PASS (coarse>baseline)
+  coarse per-cavity medians: ['-317.1', '-2129164.5', '-1578.9', '-231.7', '-77.4', '-52.2', '-47.4', '-48.6']
+  baseline per-cavity medians: ['-355.8', '-183246.0', '-719.5', '-145.1', '-204.8', '-252.7', '-85.0', '-2359.2']
+
+=== G-MASK (coarse arm, min_sep=0.85) ===
+  masked clash=23.2% (178/768)  vs unmasked coarse=25.3%  PASS (strictly below)
+  [same 12 cavities + same per-cavity sel_seed=0 blocks used for masked/unmasked -> gap isolates the masking effect (Finding 2)]
+  fp32 round-trip: median|score-sample|=2.67e-05  match(<1e-3)=100.0%  bar: median<1e-3 and frac>90%  PASS
+
+=== SUMMARY ===
+gate       coarse                           baseline/ref         threshold                    result
+----------------------------------------------------------------------------------------------------
+G-NLL      -2.8012                          -2.8811              <= -2.636                    PASS
+G-CLASH    25.3%                            20.7%                < 15.0%                      FAIL
+G-DEFICIT  -154.6                           -304.3               coarse > baseline            PASS
+G-MASK     masked=23.2% rt_frac=100%        unmasked=25.3%       masked<unmasked & rt frac>90% PASS
+
+saved -> reports/logs-2026-07-13/eval_coarse_gates.pt  (22s)

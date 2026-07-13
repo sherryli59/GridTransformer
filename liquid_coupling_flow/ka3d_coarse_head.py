@@ -157,7 +157,7 @@ class KA3DScaffoldEBMCoarse(KA3DScaffoldEBMBatched):
 
     def __init__(self, *args, **kw):
         super().__init__(*args, **kw)
-        self.coarse = CoarseFineHead(self.d_model)
+        self.coarse = CoarseFineHead(self.d_model, u_range=self.cat_range)
 
     def _tilted_lp_u(self, h_e, u, frame, anchor_y, cage_x, cage_s, cage_v, sj, R, n_chunk=16):
         """Exact log q(u) = log p(cell) + log p(fa|cell) + log p(fb|cell,fa) + log p(fc|cell,fa,fb)

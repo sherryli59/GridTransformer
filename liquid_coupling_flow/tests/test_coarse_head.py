@@ -119,3 +119,6 @@ def test_scaffold_ebm_coarse_log_prob_pair_trains_coarse_head():
     assert m.coarse.head_coarse.weight.grad.abs().sum() > 0
     assert m.phi[2].weight.grad is not None
     assert m.phi[2].weight.grad.abs().sum() > 0
+    for net in (m.phi_a, m.phi_b):
+        assert net[2].weight.grad is not None
+        assert net[2].weight.grad.abs().sum() > 0

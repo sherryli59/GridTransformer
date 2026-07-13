@@ -1,0 +1,7 @@
+3D cavity-EBM: train=1120 held=128 radii=(1.6, 2.0, 2.5, 3.0) dev=cuda
+tilt cage knn_pot = 24
+warm liquid_coupling_flow/artifacts/ka3d_cavity_ebm3ax_rho115_best.pt: 0 new, 0 unused; frameless
+step     0 loss -2.2649  held_nll -2.7431  gap +0.4782  MTM(k4,N16) 6%  (15s)
+step    30 loss -2.7316  held_nll -2.9170  gap +0.1854  MTM(k4,N16) 12%  (39s)
+step    60 loss -2.6547  held_nll -2.9910  gap +0.3363  MTM(k4,N16) 19%  (63s)
+saved liquid_coupling_flow/artifacts/ka3d_ebm3ax_knn24_smoke.pt (best held_nll -2.9910 -> liquid_coupling_flow/artifacts/ka3d_ebm3ax_knn24_smoke_best.pt)

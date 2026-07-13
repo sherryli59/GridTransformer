@@ -103,6 +103,7 @@ def main():
                          "block_log_prob are NOT overridden for this head and would be inexact)")
     ap.add_argument("--warm", default=f"{ART}/ka3d_cavity_ebm3ax.pt")
     ap.add_argument("--out", default=f"{ART}/ka3d_cavity_ebm3ax_rho115.pt")
+    ap.add_argument("--knn-pot", type=int, default=8, help="tilt/potential cage size (default 8; 24-32 = bigger local energy context)")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     a = ap.parse_args(); dev = a.device
     if a.coarse and a.out == f"{ART}/ka3d_cavity_ebm3ax_rho115.pt":
@@ -120,9 +121,10 @@ def main():
     print(f"3D cavity-EBM: train={len(train)} held={len(held)} radii={tuple(a.radii)} dev={dev}", flush=True)
     if a.coarse:
         from liquid_coupling_flow.ka3d_coarse_head import KA3DScaffoldEBMCoarse
-        m = KA3DScaffoldEBMCoarse(cat_bins=128, cat_range=2.5).to(dev)
+        m = KA3DScaffoldEBMCoarse(cat_bins=128, cat_range=2.5, knn_pot=a.knn_pot).to(dev)
     else:
-        m = KA3DScaffoldEBM(cat_bins=128, cat_range=2.5).to(dev)
+        m = KA3DScaffoldEBM(cat_bins=128, cat_range=2.5, knn_pot=a.knn_pot).to(dev)
+    print(f"tilt cage knn_pot = {m.knn_pot}", flush=True)
     start = 0
     if a.resume and Path(a.out).exists():
         ck = torch.load(a.out, map_location=dev, weights_only=False)

@@ -22,9 +22,14 @@ KNN_POT = 8
 
 
 class KA3DScaffoldEBM(KA3DScaffoldCatAR):
-    def __init__(self, *args, n_rbf=12, rbf_max=3.0, phi_hidden=32, pair_emb=8, r_fourier=6, **kw):
+    def __init__(self, *args, n_rbf=12, rbf_max=3.0, phi_hidden=32, pair_emb=8, r_fourier=6,
+                 knn_pot=KNN_POT, **kw):
         super().__init__(*args, **kw)
-        self.n_rbf, self.knn_pot = n_rbf, KNN_POT
+        # knn_pot = size of the potential/tilt cage (nearest placed neighbours the learned pair energy
+        # sees). Default 8; measured 2026-07-13 too small for the dense glass (~12-14 first-shell) ->
+        # under-informs placement (the +1/particle floor). The tilt nets are per-pair+sum so their param
+        # shapes are knn-INDEPENDENT: a knn=24 model warm-starts cleanly from a knn=8 checkpoint.
+        self.n_rbf, self.knn_pot = n_rbf, int(knn_pot)
         mu = torch.linspace(0.0, rbf_max, n_rbf)
         self.register_buffer("rbf_mu", mu); self.rbf_w = float(mu[1] - mu[0])
         def _mlp():

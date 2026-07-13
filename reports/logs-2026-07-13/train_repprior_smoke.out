@@ -1,0 +1,5 @@
+[train] bank 'train': 99285 rows from 25 shards (gate_cut=0.55 pos_temp=0.4)
+[train] bank 'held': 2021 rows from 1 shards (gate_cut=0.55 pos_temp=0.4)
+[train] warm-start from liquid_coupling_flow/artifacts/ka3d_cavity_egnn_flow_gated_big_best.pt (step 6750) missing=['ce.egnn.rep_scale', 'ce.egnn.sig_pair'] unexpected=[]
+[train] step     20  train 0.06824  held 0.06977  gap +0.00153  wall 25s
+[train] step     40  train 0.06019  held 0.06955  gap +0.00935  wall 49s

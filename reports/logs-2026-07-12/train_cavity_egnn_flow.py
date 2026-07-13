@@ -408,11 +408,14 @@ def run_train_bank(args):
 
     flow_model = CavityBlockFlow(n_cage=args.n_cage, k=args.k, r_c=args.r_c, hidden_nf=args.hidden_nf,
                                   n_layers=args.n_layers, n_species=2,
-                                  max_neighbors=args.max_neighbors).to(device)
+                                  max_neighbors=args.max_neighbors, rep_prior=args.rep_prior).to(device)
     if args.init_from:
         ick = torch.load(args.init_from, map_location=device, weights_only=False)
-        flow_model.load_state_dict(ick["state_dict"])
-        print(f"[train] warm-start from {args.init_from} (step {ick.get('step')})", flush=True)
+        # strict=False: rep_prior adds rep_scale params absent from a base checkpoint -> warm-start the
+        # shared transport, learn the new repulsion amplitudes from init (softplus(0)=near-no-op).
+        miss = flow_model.load_state_dict(ick["state_dict"], strict=False)
+        print(f"[train] warm-start from {args.init_from} (step {ick.get('step')}) "
+              f"missing={list(miss.missing_keys)} unexpected={list(miss.unexpected_keys)}", flush=True)
     opt = torch.optim.AdamW(flow_model.parameters(), lr=args.lr)
 
     tag = f"_{args.out_tag}" if args.out_tag else ""
@@ -493,6 +496,9 @@ def build_argparser():
                    help="warm-start state_dict from this checkpoint (crash resume for long runs)")
     p.add_argument("--bank", action="store_true",
                    help="train from the precomputed fm_bank shards (build_fm_bank.py) -- skips the AR pipeline")
+    p.add_argument("--rep_prior", action="store_true",
+                   help="t-gated (t^8) analytic species repulsion in the velocity (learned amplitude); fires "
+                        "late to sharpen cores without contaminating early transport. Exact (in vel AND div).")
     # full-run loop
     p.add_argument("--steps", type=int, default=5000)
     p.add_argument("--n_cav", type=int, default=4)

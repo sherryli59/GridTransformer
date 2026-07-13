@@ -1,0 +1,26 @@
+[train] held eval pool: 16 fixed cavities
+[train] step    200  train 0.06935  held 0.16391  gap +0.09456  wall 84s
+[train] step    400  train 0.06880  held 0.15307  gap +0.08427  wall 168s
+[train] step    600  train 0.11927  held 0.13700  gap +0.01773  wall 252s
+[train] step    800  train 0.17955  held 0.12597  gap -0.05358  wall 336s
+[train] step   1000  train 0.16435  held 0.12729  gap -0.03707  wall 420s
+[train] step   1200  train 0.09725  held 0.12905  gap +0.03180  wall 503s
+[train] step   1400  train 0.09348  held 0.11224  gap +0.01877  wall 587s
+[train] step   1600  train 0.05252  held 0.13068  gap +0.07816  wall 671s
+[train] step   1800  train 0.09122  held 0.11978  gap +0.02855  wall 755s
+[train] step   2000  train 0.07319  held 0.13095  gap +0.05776  wall 839s
+[train] step   2200  train 0.12302  held 0.13292  gap +0.00990  wall 923s
+[train] step   2400  train 0.13582  held 0.12457  gap -0.01125  wall 1007s
+[train] step   2600  train 0.10012  held 0.10246  gap +0.00234  wall 1090s
+[train] step   2800  train 0.05896  held 0.10983  gap +0.05087  wall 1174s
+[train] step   3000  train 0.13011  held 0.09615  gap -0.03396  wall 1258s
+[train] step   3200  train 0.10969  held 0.10508  gap -0.00461  wall 1342s
+[train] step   3400  train 0.09126  held 0.10187  gap +0.01061  wall 1426s
+[train] step   3600  train 0.12101  held 0.11821  gap -0.00280  wall 1510s
+[train] step   3800  train 0.07680  held 0.10416  gap +0.02737  wall 1594s
+[train] step   4000  train 0.08774  held 0.11285  gap +0.02511  wall 1678s
+[train] step   4200  train 0.06387  held 0.10416  gap +0.04029  wall 1762s
+[train] step   4400  train 0.10415  held 0.11018  gap +0.00603  wall 1845s
+[train] step   4600  train 0.11340  held 0.09343  gap -0.01997  wall 1929s
+[train] step   4800  train 0.13841  held 0.12131  gap -0.01709  wall 2013s
+[train] step   5000  train 0.04288  held 0.10871  gap +0.06583  wall 2097s

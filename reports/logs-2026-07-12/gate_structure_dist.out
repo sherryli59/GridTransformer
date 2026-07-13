@@ -1,0 +1,17 @@
+flow step 4600 held_fm 0.0934
+  cav 1 done (pop so far 8)
+  cav 2 done (pop so far 16)
+  cav 3 done (pop so far 24)
+  cav 4 done (pop so far 32)
+  cav 5 done (pop so far 40)
+  cav 6 done (pop so far 48)
+  cav 7 done (pop so far 56)
+  cav 8 done (pop so far 64)
+  cav 9 done (pop so far 72)
+  cav 10 done (pop so far 80)
+
+saved plot: reports/logs-2026-07-12/gate_structure_dist.png
+floor: AR med +0.18 [-0.68,+3.28]  FLOW med -0.45 [-0.71,+0.50]  DATA med -0.73
+frac chains FLOW floor within 0.5 of data: 0.62 (AR: 0.41)
+frac chains FLOW improved over AR (impr>0.2): 0.38  worsened (impr<-0.2): 0.07
+DONE

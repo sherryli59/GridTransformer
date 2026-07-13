@@ -63,12 +63,14 @@ def blob(n, R, K, gen, dev):
 
 
 @torch.no_grad()
-def evaluate(model, held, gen, dev, beta=2.0):
+def evaluate(model, held, gen, dev, beta=2.0, skip_mtm=False):
     model.eval(); nll, acc = [], []
     for c in held[:16]:
         xo, so, _ = label_to_scaffold(clamp_ball(c["xin"], c["R"]), c["sin"], c["R"])
         bnd, s_bnd, R, n = c["bnd"], c["sbnd"], c["R"], c["n"]
         nll.append(float(-model.log_prob_pair(xo, so, bnd, s_bnd, R, preordered=True) / n))
+        if skip_mtm:
+            continue
         blk = blob(n, R, 4, gen, dev)
         u0 = energy_cav(xo, so, bnd, s_bnd); lqx = float(model.block_log_prob(xo, so, blk, bnd, s_bnd, R))
         lus = [-beta * u0 - lqx]
@@ -79,6 +81,8 @@ def evaluate(model, held, gen, dev, beta=2.0):
         js = int(torch.multinomial(torch.softmax(lu, 0), 1, generator=gen)); lr = lu.clone(); lr[js] = lus[0]
         acc.append(float(torch.rand((), device=dev, generator=gen).log() < (sf - torch.logsumexp(lr, 0))))
     model.train()
+    if skip_mtm:
+        return st.mean(nll), float("nan")
     return st.mean(nll), 100 * sum(acc) / len(acc)
 
 
@@ -93,10 +97,16 @@ def main():
     ap.add_argument("--resume", action="store_true", help="continue from --out checkpoint (fresh optimizer)")
     ap.add_argument("--freeze-phi", action="store_true",
                     help="keep the potential at zero (base cat-head + boundary + R_embed) -> fair ablation baseline")
+    ap.add_argument("--coarse", action="store_true",
+                    help="use KA3DScaffoldEBMCoarse (coarse-cell-then-fine-bin position head) instead of the "
+                         "sequential per-axis head; MTM eval metric is skipped (unbatched sample_block/"
+                         "block_log_prob are NOT overridden for this head and would be inexact)")
     ap.add_argument("--warm", default=f"{ART}/ka3d_cavity_ebm3ax.pt")
     ap.add_argument("--out", default=f"{ART}/ka3d_cavity_ebm3ax_rho115.pt")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     a = ap.parse_args(); dev = a.device
+    if a.coarse and a.out == f"{ART}/ka3d_cavity_ebm3ax_rho115.pt":
+        a.out = f"{ART}/ka3d_cavity_coarse.pt"
     torch.manual_seed(0); gen = torch.Generator(device=dev).manual_seed(1)
     # CHAIN-LEVEL SPLIT, zero leakage: train = 112 Bapst train-split chains; held = the 16 test-split
     # chains behind the PTS reference dataset (model never sees the configs whose cavities we measure).
@@ -108,7 +118,11 @@ def main():
     train = build_pool(Xt, St, L, range(Xt.shape[0]), a.radii, a.r_ctx, gen, per=a.per_frame)
     held = build_pool(Xh, Sh, L, range(16), a.radii, a.r_ctx, gen, per=8)          # snapshot-1 configs only
     print(f"3D cavity-EBM: train={len(train)} held={len(held)} radii={tuple(a.radii)} dev={dev}", flush=True)
-    m = KA3DScaffoldEBM(cat_bins=128, cat_range=2.5).to(dev)
+    if a.coarse:
+        from liquid_coupling_flow.ka3d_coarse_head import KA3DScaffoldEBMCoarse
+        m = KA3DScaffoldEBMCoarse(cat_bins=128, cat_range=2.5).to(dev)
+    else:
+        m = KA3DScaffoldEBM(cat_bins=128, cat_range=2.5).to(dev)
     start = 0
     if a.resume and Path(a.out).exists():
         ck = torch.load(a.out, map_location=dev, weights_only=False)
@@ -119,6 +133,8 @@ def main():
         ck = torch.load(a.warm, map_location=dev, weights_only=False)
         miss, unexp = m.load_state_dict(ck["state_dict"], strict=False); m.use_frame = False
         print(f"warm {a.warm}: {len(miss)} new, {len(unexp)} unused; frameless", flush=True)
+        if a.coarse and miss:
+            print(f"  new params (up to 12): {list(miss)[:12]}", flush=True)
     if a.freeze_phi:
         params = [p for name, p in m.named_parameters() if name.split(".")[0] not in ("phi", "phi_a", "phi_b")]
         print(f"FREEZE-PHI baseline: potential stays 0 (V_c==0); training {len(params)} param tensors", flush=True)
@@ -138,7 +154,7 @@ def main():
         loss = loss / a.batch
         opt.zero_grad(); loss.backward(); torch.nn.utils.clip_grad_norm_(m.parameters(), 5.0); opt.step()
         if step % a.eval_every == 0:
-            nll, acc = evaluate(m, held, gen, dev)
+            nll, acc = evaluate(m, held, gen, dev, skip_mtm=a.coarse)
             gap = loss.item() - nll                                       # train-vs-held gap (overfit monitor)
             print(f"step {step:5d} loss {loss.item():+.4f}  held_nll {nll:+.4f}  gap {gap:+.4f}  "
                   f"MTM(k4,N16) {acc:.0f}%  ({time.time()-t0:.0f}s)", flush=True)

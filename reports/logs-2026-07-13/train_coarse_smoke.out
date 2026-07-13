@@ -1,0 +1,7 @@
+3D cavity-EBM: train=1120 held=128 radii=(1.6, 2.0, 2.5, 3.0) dev=cuda
+warm liquid_coupling_flow/artifacts/ka3d_cavity_ebm3ax_rho115_best.pt: 11 new, 0 unused; frameless
+  new params (up to 12): ['coarse.head_coarse.weight', 'coarse.head_coarse.bias', 'coarse.cell_emb.weight', 'coarse.head_fa.weight', 'coarse.head_fa.bias', 'coarse.head_fb.weight', 'coarse.head_fb.bias', 'coarse.head_fc.weight', 'coarse.head_fc.bias', 'coarse.femb_a.weight', 'coarse.femb_b.weight']
+step     0 loss +2.7445  held_nll +2.6599  gap +0.0846  MTM(k4,N16) nan%  (6s)
+step   100 loss -0.1305  held_nll -0.2974  gap +0.1669  MTM(k4,N16) nan%  (84s)
+step   200 loss -0.8971  held_nll -1.1097  gap +0.2126  MTM(k4,N16) nan%  (163s)
+saved liquid_coupling_flow/artifacts/ka3d_cavity_coarse_smoke.pt (best held_nll -1.1097 -> liquid_coupling_flow/artifacts/ka3d_cavity_coarse_smoke_best.pt)

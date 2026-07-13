@@ -14,7 +14,15 @@ Frame/cavity/block construction is copied VERBATIM from reports/logs-2026-07-12/
 (probe()) and reports/logs-2026-07-13/test_grow_mobile.py (clash_rate); the fp32 round-trip bar is copied
 from reports/logs-2026-07-13/test_coarse_exact.py's float32 soft-gate (median<1e-3 and frac>0.9), which is
 the BINDING measurement that script deferred to this one. NOTE: _mic(x, center, L) -- third arg is the
-BOX LENGTH L, not R (past bug per CLAUDE.md context)."""
+BOX LENGTH L, not R (past bug per CLAUDE.md context).
+
+RNG discipline (fix for the block-selection-drift review finding): block selection (pick_block's seed
+choice + topk) is driven by a DERIVED generator seeded ONLY from (sel_seed, cavity loop index i), never
+by the arm's model-sampling generator. The arm's `gen` is consumed ONLY inside sample_block_b /
+block_log_prob_b / multinomial. This guarantees the same cavity index selects the identical block across
+arms (coarse vs baseline) and across gate variants (unmasked vs masked G-CLASH/G-MASK), regardless of how
+many random draws each model's sampling path consumes -- previously the two arms shared one mutable
+generator for both roles, so blocks silently diverged after cavity 0."""
 import argparse
 import statistics as st
 import sys
@@ -46,6 +54,12 @@ MASK_MATCH_BAR = 0.9                 # fp32 round-trip: fraction of samples with
 
 def mkgen(seed, dev):
     return torch.Generator(device=dev).manual_seed(seed)
+
+
+def sel_gen(sel_seed, i, dev):
+    """DERIVED per-cavity block-selection generator, independent of any arm's model-sampling generator
+    (Finding 1/2 fix): same (sel_seed, i) -> same block, in every arm and every gate variant."""
+    return torch.Generator(device=dev).manual_seed(sel_seed + 1000 + i)
 
 
 def clamp_ball(x, R, eps=1e-5):
@@ -94,6 +108,9 @@ def gather_cavities(X, S, L, n_need, gen, dev, max_cfg=16):
             continue
         cav["ci"] = ci
         rows.append(cav)
+    if len(rows) < n_need:
+        print(f"  WARNING: gather_cavities under-filled: requested n_need={n_need}, got {len(rows)} "
+              f"(scanned {min(max_cfg, X.shape[0])} configs, max_cfg={max_cfg})", flush=True)
     return rows
 
 
@@ -133,12 +150,14 @@ def gate_nll(model, cavities):
 
 
 @torch.no_grad()
-def gate_clash(model, cavities, gen, dev, sig, M, min_sep, pos_temp=PT):
-    """% placed block particles with min sigma-gap < 0.9 (index self-excl), sample_block_b(M draws)."""
+def gate_clash(model, cavities, gen, dev, sig, M, min_sep, sel_seed, pos_temp=PT):
+    """% placed block particles with min sigma-gap < 0.9 (index self-excl), sample_block_b(M draws).
+    Block selection uses sel_gen(sel_seed, i, dev) -- NOT `gen` -- so cavity i picks the same block
+    regardless of arm/min_sep (Finding 1/2)."""
     hits = tot = 0
-    for cav in cavities:
+    for i, cav in enumerate(cavities):
         xo, so, bnd, sb, n = cav["xo"], cav["so"], cav["bnd"], cav["sb"], cav["n"]
-        blk = pick_block(xo, n, gen, dev)
+        blk = pick_block(xo, n, sel_gen(sel_seed, i, dev), dev)
         xo_b = xo[None].expand(M, n, 3).contiguous()
         so_b = so[None].expand(M, n).contiguous()
         xo_g, so_g, _ = model.sample_block_b(xo_b, so_b, blk, bnd, sb, R, gen=gen, pos_temp=pos_temp,
@@ -155,12 +174,14 @@ def gate_clash(model, cavities, gen, dev, sig, M, min_sep, pos_temp=PT):
 
 
 @torch.no_grad()
-def gate_deficit(model, cavities, pos_temp, nrep, ntrial, gen, dev):
-    """Per-cavity median MTM sf-sr (exact tempered MH arithmetic, probe_cavity_dependence.py:probe())."""
+def gate_deficit(model, cavities, pos_temp, nrep, ntrial, gen, dev, sel_seed):
+    """Per-cavity median MTM sf-sr (exact tempered MH arithmetic, probe_cavity_dependence.py:probe()).
+    Block selection uses sel_gen(sel_seed, i, dev) -- NOT `gen` -- so cavity i picks the same block
+    regardless of arm (Finding 1); `gen` is used only for sample_block_b/multinomial draws."""
     defs = []
-    for cav in cavities:
+    for i, cav in enumerate(cavities):
         xo, so, bnd, sb, n = cav["xo"], cav["so"], cav["bnd"], cav["sb"], cav["n"]
-        blk = pick_block(xo, n, gen, dev)
+        blk = pick_block(xo, n, sel_gen(sel_seed, i, dev), dev)
         lq_data = float(model.block_log_prob_b(xo[None], so[None], blk, bnd, sb, R, pos_temp=pos_temp)[0])
         Ux = float(ka_energy(
             torch.cat([xo[None, blk], torch.cat([bnd, xo[~blk]], 0)[None]], 1).double(),
@@ -187,13 +208,15 @@ def gate_deficit(model, cavities, pos_temp, nrep, ntrial, gen, dev):
 
 
 @torch.no_grad()
-def gate_mask_roundtrip(model, cavities, gen, dev, pos_temp, min_sep, M):
+def gate_mask_roundtrip(model, cavities, gen, dev, pos_temp, min_sep, M, sel_seed):
     """fp32 round-trip on the ACTUAL trained-model samples (test_coarse_exact.py's float32 soft gate,
-    reused against the trained checkpoint -- the BINDING measurement deferred from Task 4)."""
+    reused against the trained checkpoint -- the BINDING measurement deferred from Task 4). Block
+    selection uses sel_gen(sel_seed, i, dev) -- NOT `gen` -- matching the masked/unmasked G-CLASH calls
+    over the same `cavities` list (Finding 2)."""
     diffs = []
-    for cav in cavities:
+    for i, cav in enumerate(cavities):
         xo, so, bnd, sb, n = cav["xo"], cav["so"], cav["bnd"], cav["sb"], cav["n"]
-        blk = pick_block(xo, n, gen, dev)
+        blk = pick_block(xo, n, sel_gen(sel_seed, i, dev), dev)
         xo_b = xo[None].expand(M, n, 3).contiguous()
         so_b = so[None].expand(M, n).contiguous()
         xs, ss, lq_sample = model.sample_block_b(xo_b, so_b, blk, bnd, sb, R, gen=gen, pos_temp=pos_temp,
@@ -249,8 +272,10 @@ def main():
         # ---- G-CLASH ----
         print("\n=== G-CLASH ===", flush=True)
         cavs_clash = gather_cavities(X, S, L, a.ncav_clash, mkgen(a.seed + 2, dev), dev)
-        clash_c, hc, tc = gate_clash(coarse, cavs_clash, mkgen(a.seed + 100, dev), dev, sig, a.M, min_sep=None)
-        clash_b, hb, tb = gate_clash(baseline, cavs_clash, mkgen(a.seed + 100, dev), dev, sig, a.M, min_sep=None)
+        clash_c, hc, tc = gate_clash(coarse, cavs_clash, mkgen(a.seed + 100, dev), dev, sig, a.M,
+                                      min_sep=None, sel_seed=a.seed)
+        clash_b, hb, tb = gate_clash(baseline, cavs_clash, mkgen(a.seed + 100, dev), dev, sig, a.M,
+                                      min_sep=None, sel_seed=a.seed)
         clash_pass = clash_c < CLASH_PASS_THRESH
         print(f"  n_cavities={len(cavs_clash)} M={a.M}  coarse clash={clash_c:.1f}% ({hc}/{tc})  "
               f"baseline clash={clash_b:.1f}% ({hb}/{tb})  target<{CLASH_PASS_THRESH}%  "
@@ -262,8 +287,10 @@ def main():
         # ---- G-DEFICIT ----
         print("\n=== G-DEFICIT ===", flush=True)
         cavs_def = gather_cavities(X, S, L, a.ncav_def, mkgen(a.seed + 3, dev), dev)
-        def_c, def_c_list = gate_deficit(coarse, cavs_def, PT, a.nrep, a.ntrial, mkgen(a.seed + 200, dev), dev)
-        def_b, def_b_list = gate_deficit(baseline, cavs_def, PT, a.nrep, a.ntrial, mkgen(a.seed + 200, dev), dev)
+        def_c, def_c_list = gate_deficit(coarse, cavs_def, PT, a.nrep, a.ntrial, mkgen(a.seed + 200, dev),
+                                          dev, sel_seed=a.seed)
+        def_b, def_b_list = gate_deficit(baseline, cavs_def, PT, a.nrep, a.ntrial, mkgen(a.seed + 200, dev),
+                                          dev, sel_seed=a.seed)
         def_pass = def_c > def_b
         print(f"  n_cavities={len(cavs_def)} nrep={a.nrep} ntrial={a.ntrial}  coarse median sf-sr={def_c:+.1f}  "
               f"baseline median sf-sr={def_b:+.1f}  {'PASS' if def_pass else 'FAIL'} (coarse>baseline)", flush=True)
@@ -276,12 +303,14 @@ def main():
         # ---- G-MASK ----
         print("\n=== G-MASK (coarse arm, min_sep=0.85) ===", flush=True)
         clash_masked, hm, tm = gate_clash(coarse, cavs_clash, mkgen(a.seed + 300, dev), dev, sig, a.M,
-                                           min_sep=MIN_SEP)
+                                           min_sep=MIN_SEP, sel_seed=a.seed)
         mask_clash_pass = clash_masked < clash_c
         print(f"  masked clash={clash_masked:.1f}% ({hm}/{tm})  vs unmasked coarse={clash_c:.1f}%  "
               f"{'PASS' if mask_clash_pass else 'FAIL'} (strictly below)", flush=True)
+        print(f"  [same {len(cavs_clash)} cavities + same per-cavity sel_seed={a.seed} blocks used for "
+              f"masked/unmasked -> gap isolates the masking effect (Finding 2)]", flush=True)
         median_rt, frac_rt, diff_rt = gate_mask_roundtrip(coarse, cavs_clash, mkgen(a.seed + 400, dev), dev,
-                                                            PT, MIN_SEP, a.M)
+                                                            PT, MIN_SEP, a.M, sel_seed=a.seed)
         mask_fp32_pass = median_rt < 1e-3 and frac_rt > MASK_MATCH_BAR
         print(f"  fp32 round-trip: median|score-sample|={median_rt:.2e}  match(<1e-3)={100*frac_rt:.1f}%  "
               f"bar: median<1e-3 and frac>{100*MASK_MATCH_BAR:.0f}%  {'PASS' if mask_fp32_pass else 'FAIL'}",

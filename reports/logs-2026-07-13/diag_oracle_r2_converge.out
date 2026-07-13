@@ -1,0 +1,9 @@
+=== ORACLE HEAT-BATH BASIN MEASUREMENT (N=4096, M=12 chains, 96 cands, 12 sweeps) ===
+R=2.0: dU/part uni +1.38 vs data -0.01 [NOT-equilibrated (basin count untrustworthy)] | rearr 0.06  largest-basin 0.79  n_basins 3.3 -> MULTI-BASIN
+R=3.0: dU/part uni +1.52 vs data -0.00 [NOT-equilibrated (basin count untrustworthy)] | rearr 0.07  largest-basin 0.08  n_basins 13.0 -> MULTI-BASIN
+R=4.0: dU/part uni +1.28 vs data -0.07 [NOT-equilibrated (basin count untrustworthy)] | rearr 0.09  largest-basin 0.08  n_basins 13.0 -> MULTI-BASIN
+saved
+R=2.0 uniform-seed convergence vs sweeps (does the oracle heat-bath reach data energy?)
+  cav0 n=36:  sw12:+1.52  sw25:+1.09  sw50:+0.75  (data 0.00)
+  cav1 n=38:  sw12:+1.41  sw25:+0.95  sw50:+0.58  (data 0.00)
+  cav2 n=39:  sw12:+1.96  sw25:+1.37  sw50:+1.01  (data 0.00)

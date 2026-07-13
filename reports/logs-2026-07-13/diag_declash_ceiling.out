@@ -1,0 +1,6 @@
+=== DECLASH CEILING (coarse head, min_sep=0.9, 12 cages x M=32) ===
+clash-free trials: 23% of samples
+dE/particle above data:  clash-free median  +1.40  (n=120)   clashy median    +22.1
+-> a clash-free block's MTM energy deficit ~ beta*K*dE = +22 nats/block
+   ACCEPTANCE-VIABLE if this is within ~ln(N_trials)=~3 nats of 0; DECLASH INSUFFICIENT if <<-10
+saved

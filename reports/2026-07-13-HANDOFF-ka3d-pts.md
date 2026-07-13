@@ -162,12 +162,18 @@ This is the highest-value untried experiment — see §5 item 2 (fold it togethe
 
 ## 5. Open questions / candidate next steps (ranked)
 
-0. **JUDGE THE knn=24 TILT RETRAIN** (§2 job 3, RUNNING) — the top lever. When it converges/early-stops:
-   K-ladder MTM acceptance vs knn=8 (`diag_mtm_nested.py`, esp. K=8) + L-BFGS structural floor
-   (`diag_declash_ceiling.py`) + held NLL. Does a *learned* fuller-context tilt close the +1/particle
-   structural gap that the inference-time bump only dented (K=8 energy 30× lower but still +3.9/particle =
-   62 nats = 0% accept)? If yes, this is the first thing to move the acceptance wall. If it never beats
-   baseline, fall back to knn=16 or a fresh (non-warm) train, then hand to §5.1/§5.2.
+0. **knn=24 TILT RETRAIN — CLOSED, NULL at K=8** (`ed`→`diag_knn24_verdict.{py,out}`, committed 07-13).
+   The top lever did NOT move the acceptance wall. Early-stopped step 13500, best held NLL **−2.8822 ==
+   knn=8 baseline −2.881** (indistinguishable → bigger cage adds no usable conditional information). 5-seed
+   exact tempered block-MTM verdict (`ka3d_cavity_ebm3ax_rho115_knn24_best.pt`):
+   - **K=4**: baseline@8 10±10%, baseline@24 (zero-shot) 13±11%, RETRAIN@24 22±14% — helps the *shallow*
+     block (never the bottleneck), error bars overlap.
+   - **K=8**: **0.0%, ALL THREE, every seed** (dE/p +896 / +40 / +258). The block depth that matters is
+     structurally dead regardless of tilt cage. Bigger cage cut raw clash energy 20× (A→B) yet acceptance
+     stayed 0 — confirms the half-cage **+1/particle floor** is not information-starvation of the tilt.
+   VERDICT: a cold one-shot AR proposal cannot land an 8-block; the fix is a **tempered path (island-SMC)**,
+   not a bigger proposal cage. Do NOT retry knn=16 / fresh-train (NLL flatness already rules out the cage as
+   the binding constraint). Next lever = §5.1 head-to-head + §5.2 relaxation targets, NOT more tilt cage.
 1. **Finish + compare the head-to-head** (§2 NEXT ACTION). Live deliverable; caution on G1 convergence.
 2. **Relaxation-target AR retrain** (training-side declash, de-risked but NOT run). `diag_relax_ar_targets`
    proved frozen-cage T=0.5 MC turns +101/particle AR blocks into +1.1/particle clash-free ones (errors are

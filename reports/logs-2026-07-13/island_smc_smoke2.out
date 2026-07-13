@@ -1,0 +1,4 @@
+  R=2.2 c=0 island 0: logZ -56256.4  q med 0.30
+  R=2.2 c=0 island 1: logZ -35760.9  q med 0.29
+R=2.2 c=0: logZ_j spread 20495.5  island-reweighted q 0.29  (11s)
+saved -> reports/logs-2026-07-13/island_smc.pt

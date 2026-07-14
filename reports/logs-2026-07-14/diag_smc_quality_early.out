@@ -1,0 +1,7 @@
+=== EARLY SMC quality: base-Rext (lam=0) vs RL-Rext (lam=0.5) ===
+acc=block-mutation MH acceptance (lo lam / hi lam); ESS=mean tempered ESS; q(R)+/-isl-std=overlap/mixing
+   R model | acc_lo acc_hi |   ESS |  q(R) isl-std
+ 2.5  base |  0.055  0.076 | 0.452 | 0.364   0.043  (127s)
+ 2.5    RL |  0.046  0.053 | 0.485 | 0.376   0.041  (126s)
+ 3.5  base |  0.150  0.108 | 0.222 | 0.214   0.026  (288s)
+ 3.5    RL |  0.120  0.188 | 0.319 | 0.226   0.021  (287s)

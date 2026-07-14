@@ -1,0 +1,9 @@
+=== K-block regen from DATA (retained frozen+visible), R=2.5, clash/BLOCK-particle (r<0.85sig) ===
+    reference: FULL-regen interior clash/particle at R=2.5 was 0.453 (all interior grown AR)
+  K | vs RETAINED (visible) vs BLOCK (residual)  vs boundary   TOTAL
+  1 |                 0.052               0.000        0.057   0.109
+  4 |                 0.242               0.042        0.128   0.411
+  8 |                 0.262               0.167        0.138   0.567
+ 16 |                 0.150               0.206        0.123   0.479
+
+EXPECT: vs-RETAINED low+~flat (fully-visible fixed cage); vs-BLOCK ~0 at K=1 (full cage) and GROWS with K (clustered block-internal half-cage) = the real acceptance ceiling.

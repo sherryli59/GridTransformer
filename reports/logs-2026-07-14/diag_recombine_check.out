@@ -1,0 +1,8 @@
+=== recombination check (pinned R=2.0<xi_PTS, 12 islands, T=56) ===
+  per-island q: mean 0.401  std 0.102  range [0.203,0.539]
+  per-island logZ: std 211.4  spread 799.6 nats
+  max softmax(logZ) weight: 0.881  (=> shared)
+  q(R) recombined:  UNIFORM 0.401   exp(logZ)-weighted 0.422
+
+  => per-island q std << logZ-implied noise; the logZ weighting collapses to 1 island. For a pinned
+  cavity UNIFORM island averaging is the correct, low-variance estimator; keep logZ only for free energy.

@@ -7,7 +7,7 @@ Tempered path pi_lam ~ q0^(1-lam) e^(-lam beta U) (quartic schedule); exact geom
 (full-q0 rescore at lam<1 -- ka3d_smc_bridge). J islands recombined by exp(logZ_j). Metrics per (R,config):
 overlap q(R) (species-min-dist<0.3 vs data interior), logZ_j spread, mean ESS, wall-time. INCREMENTAL save
 per (config, cavity) -- durability. Compares which mutation kernel samples PTS best/cheapest."""
-import argparse, time, sys, statistics as st
+import argparse, time, sys, math, statistics as st
 import torch
 sys.path.insert(0, "reports/logs-2026-07-13")
 from liquid_coupling_flow.ka3d_ebm_batched import KA3DScaffoldEBMBatched
@@ -82,7 +82,7 @@ def island(m, xo, so, bnd, sb, R, cfg, M, T, n_mut, gen):
         logw = logw + float(lam[t] - lam[t - 1]) * (-BETA * Ecur - q0)
         esses.append(ess(logw))
         if ess(logw) < 0.5:
-            logZ += float(torch.logsumexp(logw, 0)) - torch.log(torch.tensor(float(M)))
+            logZ += float(torch.logsumexp(logw, 0)) - math.log(M)
             w = torch.softmax(logw, 0); idx = torch.multinomial(w, M, replacement=True, generator=gen)
             Xb, Sb, Ecur, q0 = Xb[idx].clone(), Sb[idx].clone(), Ecur[idx].clone(), q0[idx].clone(); logw = torch.zeros(M, device=dev)
         lt = float(lam[t])
@@ -99,7 +99,7 @@ def island(m, xo, so, bnd, sb, R, cfg, M, T, n_mut, gen):
                 q0 = torch.where(acc, q0n, q0)
         if cfg["swap"]:
             Sb, q0, Ecur = swap_sweep(m, Xb, Sb, bnd, sb, R, lt, q0, Ecur, allm, gen)
-    logZ += float(torch.logsumexp(logw, 0)) - torch.log(torch.tensor(float(M)))
+    logZ += float(torch.logsumexp(logw, 0)) - math.log(M)
     return Xb, Sb, logZ, esses
 
 
@@ -146,16 +146,23 @@ def main():
                 for j in range(a.islands):
                     g = torch.Generator(device=dev).manual_seed(1000 + 31 * ci + j)
                     Xp, Sp, logZ, esses = island(m, xo, so, bnd, sb, R, cfg, a.m, a.T, a.n_mut, g)
-                    lz.append(logZ); qs.append(overlap(Xp, Sp, xin, sin)); es.append(st.mean(esses))
-                lzt = torch.tensor(lz); wj = torch.softmax(lzt, 0)
-                q_rw = float(sum(wj[j] * qs[j] for j in range(len(qs))))
-                rows.append({"q_rw": q_rw, "logZ_spread": float(lzt.max() - lzt.min()), "ess": st.mean(es), "n_in": int(p["n_in"])})
+                    lz.append(float(logZ)); qs.append(overlap(Xp, Sp, xin, sin)); es.append(st.mean(esses))
+                # UNIFORM island recombination for the observable (logZ-weighting is noise-dominated /
+                # winner-take-all for pinned R -- diag_recombine_check). per-island q std = MIXING quality
+                # (lower => islands agree => better mutation kernel). logZ recorded for later free energy only.
+                q_unif = st.mean(qs); q_isl_std = st.pstdev(qs)
+                lzt = torch.tensor(lz)
+                rows.append({"q_unif": q_unif, "q_isl_std": q_isl_std, "logZ_spread": float(lzt.max() - lzt.min()),
+                             "ess": st.mean(es), "n_in": int(p["n_in"]), "q_islands": qs})
                 results[key] = rows; torch.save(results, a.out)                    # incremental per-cavity
                 ncav += 1
                 if ncav >= a.ncav:
                     break
-            q = st.mean([r["q_rw"] for r in rows]); spr = st.mean([r["logZ_spread"] for r in rows]); es = st.mean([r["ess"] for r in rows])
-            print(f"  R={R} {cfg['name']:>16}: q(R)={q:.3f}  logZ_spread={spr:6.1f}  ESS={es:.2f}  ({time.time()-t0:.0f}s, {ncav} cav)", flush=True)
+            q = st.mean([r["q_unif"] for r in rows]); qsd = st.mean([r["q_isl_std"] for r in rows])
+            spr = st.mean([r["logZ_spread"] for r in rows]); es = st.mean([r["ess"] for r in rows])
+            se = qsd / (a.islands ** 0.5)
+            print(f"  R={R} {cfg['name']:>16}: q(R)={q:.3f}+/-{se:.3f}  per-isl std={qsd:.3f} (mixing)  "
+                  f"logZ_spread={spr:6.0f}  ESS={es:.2f}  ({time.time()-t0:.0f}s, {ncav} cav)", flush=True)
     torch.save(results, a.out)
     print(f"saved -> {a.out}", flush=True)
 

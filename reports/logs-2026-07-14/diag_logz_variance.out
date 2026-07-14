@@ -1,0 +1,10 @@
+=== logZ estimator variance vs annealing resolution (fixed cavity, n_in=45, J=8 islands) ===
+   T n_mut |  mean logZ  std logZ   spread  mean ESS   time
+  14     3 |     3799.7     195.8    529.3      0.64    68s
+  28     3 |     3965.0     207.1    596.8      0.61   134s
+  56     3 |     4099.6      79.8    229.3      0.69   265s
+ 112     3 |     4135.6      98.6    316.2      0.71   528s
+  56     8 |     4149.2      86.6    302.9      0.66   873s
+
+  std logZ SHRINKS with T => numerical (fixable: more rungs / adaptive schedule); PLATEAUS => mixing
+  limited (better mutation / PT-couple / report per-island +/- spread).

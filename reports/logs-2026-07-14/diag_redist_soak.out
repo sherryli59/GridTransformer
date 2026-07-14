@@ -1,0 +1,5 @@
+=== SWEET-SPOT SOAK sweep (alien, R=2.0, window lam in [0.04,0.12], N_try=8) ===
+prior: 1 island single-burst q~=0.032. Does soaking the window raise alien q~?
+ n_soak n_extra_rungs |  alien q~ win_rd_acc
+      3             0 |     0.082      0.023
+     15             0 |     0.058      0.008

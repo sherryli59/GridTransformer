@@ -1,0 +1,6 @@
+=== pad-and-discard: MOVED-8 clash/energy (FT knn24, R=2.5, 12 cav) ===
+  (a) standalone K=8          : clash/p 0.345   dE/p  +2860.7
+  (b) pad12 first-8, ALL fresh: clash/p 0.247   (ideal, no reset)
+  (c) pad12 first-8, tail RESET: clash/p 0.413   dE/p +2506203.9  <- usable move
+
+  reset cost (c-b) = +0.166 clash/p; padding win (a-c) = -0.068 clash/p, -2503343.2 dE/p

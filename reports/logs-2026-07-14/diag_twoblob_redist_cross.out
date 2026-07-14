@@ -1,0 +1,7 @@
+=== two-blob REDISTRIBUTION as basin-crossing move (lam05, l=0.368, K_r=12) ===
+K=8 T=20 J=4 M=16 n_mut=2 n_redist=2 ncav=3. Does alien-seed q~ RISE?
+   R   seed |  base q~  +redist q~  rd_acc | verdict
+ 1.6  alien |    0.100       0.121   0.023 | no cross
+ 1.6   data |    0.815       0.612   0.027 | holds
+ 2.0  alien |    0.033       0.128   0.005 | CROSSES (alien rises)
+ 2.0   data |    1.006       0.961   0.006 | holds

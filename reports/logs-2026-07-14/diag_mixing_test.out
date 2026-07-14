@@ -1,0 +1,7 @@
+=== within-basin mixing (DATA-seed; target relax q~ -> truth ~0.63 @R2.0, ~0.66 @R1.6) ===
+lam05, l=0.368, J=3 M=16 T=20 ncav=3. base R2.0 data-seed was 0.98 (frozen).
+          config |  R1.6 q~  R2.0 q~ | note
+   K8 nm3 (base) |   +0.623   +0.981 | still frozen
+          K8 nm8 |   +0.379   +0.703 | relaxing toward truth
+         K8 nm16 |   +0.423   +0.703 | relaxing toward truth
+         K16 nm8 |   +0.466   +0.854 | relaxing toward truth

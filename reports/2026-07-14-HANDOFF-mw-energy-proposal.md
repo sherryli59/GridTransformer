@@ -35,31 +35,65 @@ same free-run energy REINFORCE lever that just worked on the KA glass (see §5),
   equilibration** (see §6 caveat: it COSTS energy evals; it is the FREE-ENERGY tool).
 - Results context: `reports/2026-07-10-mw-ersi-results.md` and memory `mw-ersi-flow-arc`.
 
-## 1. The KA machinery to PORT (today's lever, proven on the glass)
+## 1. PORT THE EXACT ka3d TRANSFORMER ARCHITECTURE (do not re-architect)
 
-- **`liquid_coupling_flow/ka3d_scaffold_ebm.py` + `ka3d_ebm_batched.py`** — a BLOCK-conditional scaffold-AR:
-  regenerate a K-particle block given the rest, with EXACT log_q (sample==score, `sample_block_b` /
-  `block_log_prob_b`), species head, learned pairwise-potential tilt, and opt-in `use_demand`
-  (remaining-count embedding) + `use_future_anchors`. This is the architecture to give mW.
-- **`reports/logs-2026-07-13/train_block_cond.py`** — block-conditional MLE (mixed block mask: allmask /
-  blob / single / tail). The base training.
-- **`reports/logs-2026-07-13/train_capacity_rl.py`** — THE FREE-RUN ENERGY REINFORCE trainer. Loss =
+**Reuse `KA3DScaffoldEBMBatched` (`ka3d_ebm_batched.py`, subclass of `KA3DScaffoldEBM`
+`ka3d_scaffold_ebm.py`, subclass of `KA3DScaffoldCatAR` `ka3d_scaffold_ar.py`) VERBATIM.** The key
+realization: ka3d already operates on **local frozen-boundary cavities carved from a PERIODIC box**
+(`ka3d_cavity_carve.carve` + `_mic` min-image on the N=4096 KA config). An mW block move is the SAME object
+— carve a local ball of radius R around the block from the periodic mW config; the K interior particles are
+regenerated; the surrounding mW particles within R+r_ctx are the boundary context. So the architecture
+transfers with NO structural change. Components reused exactly:
+
+- `fixed_ball_scaffold` (Morton-ordered low-discrepancy anchors in |x|<R) + `label_to_scaffold`
+  (assign particles to anchors) + `ball_squash`/`ball_unsquash` (ball<->unbounded coords). The interior is
+  a ball; periodicity only enters via `_mic` when carving + computing boundary distances (the local cavity
+  is small vs the mW box).
+- `_fc_batched` — the KNN transformer context: separate interior (`knn=20`) / boundary (`knn_bnd=20`,
+  `bnd_cutoff=3.0`) streams, `nbr_proj`+`sp_emb`+`kind_emb`, `query`+`slot_proj`(slot_feat), `self.tr`.
+- `Cat3Head` per-axis position head (`head_a/b/c` + bin embeddings, `pos_temp`) — exact categorical => exact
+  `log_q`.
+- The learned pairwise-potential **tilt** (`_phi_pair`, `_V_axis_b`, `_cage_knn_b` cage `knn_pot`) — a
+  generic RBF-on-distance + pair-embedding MLP; keep it (it will learn an mW-shaped local potential).
+- `R_embed`, `_slot_features` (frac, |a|/R, R/2.5), opt-in `use_demand` / `use_future_anchors` / `sp_temp`.
+- Exact block API `sample_block_b` / `block_log_prob_b` (sample==score) — the load-bearing MH exactness.
+
+**The ONLY changes for mW:**
+1. **Energy**: swap `ka_energy` -> `mw_energy` / `du_move` in the RL reward AND the MH acceptance. Nowhere
+   else (the AR density itself never calls the energy).
+2. **Species**: mW is monatomic -> drop `head_species` and the `rem`/species-budget mask (set n_species=1
+   or bypass). Remove `use_future_anchors`' species and the swap-MC discussion; `use_demand` becomes just
+   the remaining-COUNT scalar (no A/B split).
+3. **Training data**: carve local cavities from mW `mc_run` banks instead of KA configs (Phase B).
+4. **3-body context (optional refinement)**: the tilt is 2-body-cage by construction; mW is 3-body. Start
+   with the 2-body tilt (it still declashes via the RL reward, which USES the true 3-body mW energy). Only
+   if structure (tetrahedral g(r)) is off, add a 3-body-aware tilt feature (angles to cage pairs) — a
+   localized extension, architecture otherwise unchanged.
+
+**Trainers to reuse** (same files, energy swapped):
+- `reports/logs-2026-07-13/train_block_cond.py` — block-conditional MLE (mixed mask allmask/blob/single/
+  tail); `build_pool` carves the cavities. Point its data loader at mW banks; drop species from the loss.
+- `reports/logs-2026-07-13/train_capacity_rl.py` — THE FREE-RUN ENERGY REINFORCE trainer. Loss =
   TF-anchor + `lam * mean(adv.detach() * logq)`, `adv = standardize(capped_repulsive_energy(free-run
   block))`, `logq = block_log_prob_b(free-run sample)` (exact, differentiable). Per-config backward for
-  memory. **The reward is REPULSIVE-only capped energy** (`clamp(u_pair, 0, cap)`) — a clash-specific,
-  bounded penalty; do NOT cap only the max (that rewards over-packing — a bug we hit and fixed).
+  memory. **Reward = REPULSIVE-only capped energy** `clamp(u_pair, 0, cap)`; for mW use the capped mW
+  insertion/local energy (2-body core + capped 3-body) — do NOT cap only the max (rewards over-packing — a
+  bug we hit and fixed). Recent runs: `--k-rl 8 12 16`, `--lam 0.5`, `--use-demand`, per-config backward,
+  `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` for large blocks.
 - Memories: `blockcond-ft-energy-lever`, `ar-overstretch-compounding`, `ar-basin-trapping-pts`,
+  `curve-conditioning-blocks-transfer` (train the R range you'll sample — see the R-OOD lesson),
   `evaluate-distributions-not-scalars`, `checkpoint-incrementally`, `record-simulation-data`,
   `auto-resume-background-runs`.
 
 ## 2. Plan (phased; each phase self-checks before the next)
 
-**Phase A — mW block-conditional AR + exact log_q.** Port `ka3d_scaffold_ebm` to a PERIODIC box (mW has no
-frozen cavity: the "boundary" of a block = the block's neighbours within a cutoff in the periodic box).
-Concretely: block = K particles; context = all other particles within ~A_CUT+buffer of the block (periodic
-min-image). Regenerate the K block positions AR (mW is single-species → drop the species head, or keep it
-trivial). GATE: exact roundtrip `|sample_block logq − block_log_prob| < 5e-2` (float32), and allmask ==
-full-config density. This is the load-bearing exactness for valid MH.
+**Phase A — stand up the ported architecture + exactness gate.** Instantiate `KA3DScaffoldEBMBatched` with
+n_species=1 (species head bypassed) and `mw_energy` wired into the RL reward + MH only. Carve ONE local mW
+cavity (ball radius R from an equilibrated config, min-image; K interior + boundary shell) and verify the
+load-bearing gates on the UNCHANGED block API: (1) exact roundtrip `|sample_block_b logq -
+block_log_prob_b| < 5e-2` (float32); (2) allmask `block_log_prob_b` == full-cavity AR density; (3)
+`du_move`/mw block energy matches a full `mw_energy` recompute of the cavity. NO training yet — this proves
+the architecture ported cleanly before any objective is added.
 
 **Phase B — data.** Generate equilibrated mW configs with `mw_reference.mc_run` at the target state point
 (start ambient T_STAR=0.09632, RHO_STAR=0.4564, N~64-216; then a supercooled T for the collective-move
@@ -121,17 +155,25 @@ objective trains on the model's own rollout, which is what actually governs MH a
 - **Single species**: mW is monatomic — drop the KA species head and the swap-MC discussion entirely
   (species redistribution is N/A here).
 - **Exactness gate before any MH use**: sample==score roundtrip, or the moves are not valid MCMC.
+- **Train the block/cavity-size range you will SAMPLE** (KA R-OOD lesson, 2026-07-14,
+  `curve-conditioning-blocks-transfer`): the KA model was trained only to R=3.0 and the proposal degraded
+  OOD past it (clash 0.79 at R=4.5 vs 0.59 after retraining on R<=4.5). If mW block moves span a range of
+  local-cavity radii / K, include that whole range in `--radii` / `--k-rl`. The RL energy lever DID transfer
+  to OOD size (energy stayed low), but clash/mixing degrade — so match training to deployment.
 - Checkpoint incrementally; save full sim data (configs + per-config observables + energy-eval traces),
   not just scalars; launch long runs with the harness background runner for auto-resume.
 
 ## 7. First concrete steps for the agent
 
-1. Read `mw_energy.py` (esp. `du_move`), `mw_reference.py` (esp. `mc_run` + `init_cfgs`), and the KA
-   `ka3d_ebm_batched.py` / `train_capacity_rl.py`.
-2. Generate a small equilibrated mW bank (`mw_reference.mc_run`, N=64, ambient) to use as data + the plain-MC
-   baseline (record its energy-evals-to-equilibrate).
-3. Phase A: stand up the periodic block-conditional AR + exactness gate (smoke).
-4. Phases B-C: MLE then free-run REINFORCE with capped mW energy.
+1. Read `mw_energy.py` (esp. `du_move`), `mw_reference.py` (esp. `mc_run` + `init_cfgs`), and — for the
+   architecture to reuse VERBATIM — `ka3d_ebm_batched.py`, `ka3d_scaffold_ebm.py`, `ka3d_cavity_carve.py`,
+   `train_block_cond.py`, `train_capacity_rl.py`.
+2. Generate a small equilibrated mW bank (`mw_reference.mc_run`, N=64-216, ambient) to use as data + the
+   plain-MC baseline (record its energy-evals-to-equilibrate).
+3. **Phase A: instantiate `KA3DScaffoldEBMBatched` with n_species=1, carve ONE local mW cavity, pass the
+   three exactness gates (§2 Phase A) — architecture ported, NO training yet.**
+4. Phases B-C: block-conditional MLE then free-run REINFORCE (`train_block_cond` / `train_capacity_rl` with
+   `mw_energy` swapped in), radii/K spanning the deployment range.
 5. Phase D: the three-arm energy-evals-saved comparison; supercooled + ambient.
 
 Success = a plotted energy-evals-to-equilibrate curve where AR-seed (and, supercooled, AR-block-MH) reach

@@ -1,0 +1,6 @@
+=== two-blob redist LEVERS 1+2 (low-lam concentration + multi-try I-MTM), R=2.0 lam05 ===
+N_try=8 lam_hi=0.6 n_rd_low=3 | K=8 Kr<=12 T=20 J=4 M=16 ncav=3
+prior single-try uniform: alien 0.033->0.128 @0.5%acc; data ~0.96 (gap 0.83)
+    mode   seed |      q~  rd_acc
+    base  alien |   0.033   0.000
+    base   data |   1.006   0.000

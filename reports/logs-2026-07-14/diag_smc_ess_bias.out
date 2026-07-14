@@ -1,0 +1,10 @@
+=== ESS + effective-samples + basin-diversity (why biased) ===  model=ka3d_cavity_ebm3ax_rho115_rl_Rext_knn24_lam05_best.pt
+rho=1.149  J=6 M=16 T=20 n_mut=3 ncav=3  l_box=0.368
+self-overlap ceiling q(self)=rho=1.15;  bulk floor rho*l^3=0.057
+   R | ESS_frac eff_samp |  q~_ref qc_pair | isl-std | read
+ 1.6 |    0.603     57.9 |  +0.128  +0.653 |   0.171 | TRAPPED: samples agree (qc_pair) but far from ref (q~~0)
+ 2.0 |    0.557     53.5 |  +0.054  +0.951 |   0.097 | TRAPPED: samples agree (qc_pair) but far from ref (q~~0)
+
+ESS_frac = weight-based effective fraction (WITHIN-SMC degeneracy); eff_samp = ESS_frac*M*J.
+qc_pair (sample-vs-sample, bulk-subtracted) >> q~_ref => population trapped in a NON-reference basin;
+ESS cannot see this (it measures weights, not distance-to-truth). PT-ref (memory) q(R=2.0)~0.63 true.

@@ -1,0 +1,21 @@
+block-cond FT: train=6720 held=128 radii=(1.6, 2.0, 2.5, 3.0) mixture={'all': 0.30000001192092896, 'blob': 0.44999998807907104, 'single': 0.15000000596046448, 'tail': 0.10000000149011612} dev=cuda
+warm liquid_coupling_flow/artifacts/ka3d_cavity_ebm3ax_rho115_knn24_best.pt
+warm-start held NLL: all -2.9565  blob8 -2.7219  tail8 -4.0054  single -4.4087
+step     0 loss -3.6047 | all -2.9516(+0.005) blob8 -2.6967(+0.025) tail8 -4.0026 single -4.4366 (15s)
+step   500 loss -3.0789 | all -2.9113(+0.045) blob8 -3.6096(-0.888) tail8 -3.9398 single -4.5901 (180s)
+step  1000 loss -3.4177 | all -2.8718(+0.085) blob8 -3.5360(-0.814) tail8 -3.9254 single -4.5855 (345s)
+step  1500 loss -3.0720 | all -2.8460(+0.110) blob8 -3.6031(-0.881) tail8 -3.8575 single -4.6643 (511s)
+step  2000 loss -4.2625 | all -2.8626(+0.094) blob8 -3.5687(-0.847) tail8 -3.9025 single -4.6933 (677s)
+step  2500 loss -2.9579 | all -2.8856(+0.071) blob8 -3.6409(-0.919) tail8 -3.9053 single -4.6292 (843s)
+step  3000 loss -2.9975 | all -2.8820(+0.074) blob8 -3.5905(-0.869) tail8 -3.8787 single -4.6346 (1009s)
+step  3500 loss -3.2493 | all -2.8864(+0.070) blob8 -3.6193(-0.897) tail8 -3.9263 single -4.7484 (1174s)
+step  4000 loss -3.1679 | all -2.8604(+0.096) blob8 -3.6099(-0.888) tail8 -3.8558 single -4.6329 (1340s)
+step  4500 loss -3.4415 | all -2.8877(+0.069) blob8 -3.5977(-0.876) tail8 -3.9418 single -4.6975 (1505s)
+step  5000 loss -3.5306 | all -2.8663(+0.090) blob8 -3.5966(-0.875) tail8 -3.9124 single -4.6844 (1670s)
+step  5500 loss -3.6116 | all -2.8776(+0.079) blob8 -3.6357(-0.914) tail8 -3.9119 single -4.7807 (1835s)
+step  6000 loss -3.6483 | all -2.8745(+0.082) blob8 -3.6193(-0.897) tail8 -3.9132 single -4.6845 (2000s)
+step  6500 loss -3.4887 | all -2.8937(+0.063) blob8 -3.5946(-0.873) tail8 -3.9611 single -4.6433 (2164s)
+step  7000 loss -4.2348 | all -2.9014(+0.055) blob8 -3.6059(-0.884) tail8 -3.9625 single -4.6486 (2332s)
+step  7500 loss -2.2492 | all -2.8908(+0.066) blob8 -3.6386(-0.917) tail8 -3.9943 single -4.6596 (2499s)
+EARLY STOP step 7500: blob8 NLL flat 10 evals (best -3.6409)
+saved liquid_coupling_flow/artifacts/ka3d_cavity_ebm3ax_rho115_blockcond_knn24.pt (best blob8 NLL -3.6409)

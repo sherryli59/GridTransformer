@@ -1,0 +1,5 @@
+=== block-cond FT eval (knn24, K=8 blob, R=2.5) ===
+           model | blob clash/FIX blob clash/INT  blob dE/p allmask clash
+  baseline knn24 |         0.280         0.035     +741.5         0.322
+  block-cond FT  |         0.234         0.035      +14.3         0.332
+saved -> reports/logs-2026-07-13/blockcond_rank.png

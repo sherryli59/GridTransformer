@@ -1,0 +1,7 @@
+=== through-xi_PTS SMC sweep, HOCKY box-occupation observable ===
+model=ka3d_cavity_ebm3ax_rho115_rl_Rext_knn24_lam05_best.pt  rho=1.149 T=0.5  |  PAPER rho=1.20 T=0.55 (Fig2c ~0.33@2.2,0.29@2.4)
+CAVEAT: same observable, nearby state point (rho 1.149 vs 1.20, T 0.5 vs 0.55) -> ballpark/shape, not exact
+config=1blob-K8 J=3 M=12 T=12 n_mut=3 ncav=2 l_box=0.3
+   R |           q~_box |  q_box  qbulk  qself | q~_spec | q_spmin | isl-std
+ 2.2 |  +0.028+/-0.028    |  0.056  0.028  1.220 |  +0.025 |   0.367 | 0.049  [paper~0.33]
+saved -> reports/logs-2026-07-14/smc_pts_hocky_smoke.pt

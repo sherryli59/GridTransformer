@@ -1,0 +1,7 @@
+=== R out-of-distribution probe (RL+demand; trained only R<=3.0, xi_PTS~3.8) ===
+   R  n_int |  clash/p  capE/p | regime
+ 2.5     76 |    0.255    0.05 | in-dist
+ 3.0    130 |    0.332    0.03 | in-dist
+ 3.5    205 |    0.341    0.02 | OOD
+ 4.0    310 |    0.492    0.02 | OOD (>xi_PTS)
+ 4.5    440 |    0.695    0.02 | OOD (>xi_PTS)

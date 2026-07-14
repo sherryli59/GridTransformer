@@ -116,6 +116,42 @@ or U/N below threshold), reporting **energy-evals-to-equilibrate**:
      BLOCK incremental energy (extend `du_move` to K particles: recompute the union of locally-affected
      2/3-body terms once, not K separate calls). Measures decorrelation per expensive eval.
 
+**Phase E — eRSI-seeded SMC (use when the proposal's one-shot ESS is inadequate; FLOW-DENSITY-FREE bath).**
+The AR proposal will be imperfect — do NOT lean on it as a standalone IS proposal. Use the **eRSI flow already
+trained for mW** as the SEED, and correct with a thermal SMC whose kernel is LOCAL and whose bath does NOT
+contain the flow density.
+
+*Hard prior result to respect (`mw-ersi-flow-arc`, measured 2026-07-11):* the eRSI-seeded **geometric** SMC
+(bath π_λ ∝ q_eRSI^{1−λ} · e^{−λβU}) was **3.75–4.4× WORSE than seed-only** for mW sampling. Root cause:
+q_eRSI in every weight ⇒ a full reverse-ODE per single-site score (~5.7 s) ⇒ forced GLOBAL moves ⇒ optimal
+σ ~ N^{−1/2} ⇒ ~N× worse diffusion per energy-eval, growing with N. **Keep the flow density OUT of the per-rung
+bath.** The flow's proven value is (a) SEEDS (2.4–3× head-start, size-flat) and (b) exact logZ — nothing else.
+
+*The procedure that avoids the trap:*
+- **Seed:** draw M walkers from the eRSI flow (energy-free) — this is the head-start asset.
+- **Path — thermal β-ladder, flow-free bath:** π_λ ∝ e^{−β_λ U_mW}, β_λ: β_hot → β_target (needed only for a
+  supercooled target; at ambient a single rung / no anneal usually suffices). Incremental log-weight =
+  −(β_λ_t − β_λ_{t−1}) · U_mW(x_i) — needs **only U**, never the flow density.
+- **Resample** walkers when ESS < ½ (multinomial; reset weights).
+- **Mutate:** several sweeps of a LOCAL, π_λ-invariant kernel — single-particle displacement scored with
+  `du_move` (O(neighbours), N-parallel), and/or the ported ka3d local block-MTM. Local + incremental-energy is
+  the whole point (this is what the global-move version got wrong).
+- **Endpoint:** at β_target the population is correct **by π-invariance** — the local moves heal the eRSI's
+  residual bias (proven: the population is an endpoint property, correct even when the *path's* logZ is
+  mutation-limited/biased). For exact **logZ**, use the eRSI's exact-Jacobian one-shot IS bound (its measured
+  WIN), NOT this SMC path's logZ (systematically low across seeds — shared mutation bias).
+
+*Which arm when:*
+- **Ambient / ergodic:** eRSI-seed + local-move MCMC (no bath at all) — the proven 2.4–3× winner; the β-ladder
+  adds little.
+- **Supercooled / slow-relaxing:** the flow-free β-ladder SMC above earns its keep (anneal past the slow
+  modes), still local-move + incremental-energy.
+- **Free energy:** eRSI exact-Jacobian IS bound (not the SMC path).
+
+*Energy-eval accounting:* M · (Σ_rungs 1 reweight-eval + n_sweep · local-move evals). eRSI seed ⇒ short ladder;
+local moves ⇒ incremental energy ⇒ cost-weighted evals stay well under a plain-MC decorrelation — **provided the
+flow density never enters the kernel.** If it does, you reproduce the 3.75–4.4× loss.
+
 ## 3. Energy-eval accounting (the metric — get this right)
 
 - The AR forward is **energy-free** — count ONLY `mw_energy`/`du_move` calls (and weight by their true cost:
@@ -145,9 +181,11 @@ objective trains on the model's own rollout, which is what actually governs MH a
 
 ## 6. Hard caveats
 
-- **Do NOT use the tempered island-SMC / eRSI-SMC for equilibration.** It is energy-eval-HUNGRY (energy at
-  every rung × particle × mutation) and the mW campaign measured the geometric-SMC path **3.75-4.4× WORSE
-  than seed-only** for sampling. The SMC is the tool for **free energy (logZ)**, not for cheap equilibration.
+- **Do NOT use a FLOW-DENSITY-IN-BATH (geometric) SMC for equilibration.** The mW campaign measured that path
+  **3.75-4.4× WORSE than seed-only** (`mw-ersi-flow-arc`) — q_eRSI in every weight forces a reverse-ODE per
+  site ⇒ global moves ⇒ N× diffusion penalty. If the proposal's ESS is too low for seed-only IS, use the
+  **Phase E eRSI-seeded, FLOW-FREE-bath, LOCAL-move SMC** instead (β-ladder; eRSI as seed only). For **free
+  energy (logZ)** use the eRSI exact-Jacobian one-shot IS bound, not the SMC path's (biased-low) logZ.
 - **Incremental block energy is mandatory** — if you full-recompute `mw_energy` per proposed block, the
   accounting flips negative. Extend `du_move` to a block (single union recompute).
 - **Reward must be repulsive-only + capped** (`clamp(u,0,cap)`) — capping only the max rewards over-packing

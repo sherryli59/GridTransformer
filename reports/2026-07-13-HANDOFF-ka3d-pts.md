@@ -175,6 +175,17 @@ This is the highest-value untried experiment — see §5 item 2 (fold it togethe
    not a bigger proposal cage. Do NOT retry knn=16 / fresh-train (NLL flatness already rules out the cage as
    the binding constraint). Next lever = §5.1 head-to-head + §5.2 relaxation targets, NOT more tilt cage.
 1. **Finish + compare the head-to-head** (§2 NEXT ACTION). Live deliverable; caution on G1 convergence.
+1b. **K-blob conditional is OOD — worth a cheap fine-tune, NOT an acceptance lever**
+   (`diag_blob_ood.{py,out}`, `diag_blob_ood_seeds.out`, 07-13). The block conditional is zero-shot
+   (training = full-sequence morton NLL only). Byte-exact trained-suffix control (morton-TAIL block):
+   3× lower internal clash (0.043 vs 0.133) and ~3× lower dE (spatial confound refuted; contiguous-segment
+   arm shows contiguity isn't the axis — conditionals don't recombine across factorization orders). BUT
+   5-seed MTM: A 1.7±3.3% == B 1.7±3.3% — even fully in-distribution stays ~0% at K=8, and the
+   rank-resolved clash-creation curve still rises (0.13→0.54): space-budgeting is INTRINSIC to sequential
+   placement. Block-conditional fine-tuning (train on random-blob reorders) = cheap 3× proposal-quality
+   lever for the SMC mutation kernel (cleaner logZ), not an MTM-acceptance lever. Related same-day
+   measurements: clash creation rises 10× with placement rank (`diag_clash_order_resolved`); nested
+   sub-cavity framing shifts clash channels but not the total (`diag_nested_subcavity`).
 2. **Relaxation-target AR retrain** (training-side declash, de-risked but NOT run). `diag_relax_ar_targets`
    proved frozen-cage T=0.5 MC turns +101/particle AR blocks into +1.1/particle clash-free ones (errors are
    *slidable*), giving cheap multi-targets per cage. Attacks "confident-but-wrong placement" directly.

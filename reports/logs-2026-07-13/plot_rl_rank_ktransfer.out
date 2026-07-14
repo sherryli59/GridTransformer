@@ -1,0 +1,4 @@
+K=12: rank-8+ spike clash base_last 0.93 RL_last 0.63
+K=16: rank-8+ spike clash base_last 1.07 RL_last 1.04
+K=24: rank-8+ spike clash base_last 1.27 RL_last 1.06
+saved -> reports/logs-2026-07-13/rl_rank_ktransfer.png

@@ -1,0 +1,9 @@
+=== QUICK redist acceptance: FRESH/loose vs after-4-local (tightened), R=2.0, N_try=8 ===
+ lambda | loose_acc tight_acc
+ 0.0100 |     0.385     0.125
+ 0.0200 |     0.385     0.385
+ 0.0400 |     0.396     0.323
+ 0.0625 |     0.375     0.344
+ 0.0900 |     0.427     0.417
+ 0.1500 |     0.448     0.323
+ 0.3000 |     0.500     0.406

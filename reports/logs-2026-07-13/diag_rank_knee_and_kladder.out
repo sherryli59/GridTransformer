@@ -1,0 +1,15 @@
+=== (1) rank-resolved clash creation vs K (block-cond FT, knn24) ===
+    knee = first rank with creation > 0.22 (2x the K=1 floor 0.109)
+  K= 4: last-rank 0.45  knee@rank 2 (=K-2, frac 0.50)  curve ['0.08', '0.23', '0.22', '0.45']
+  K= 6: last-rank 0.66  knee@rank 5 (=K-1, frac 0.83)  curve ['0.06', '0.15', '0.10', '0.22', '0.33', '0.66']
+  K= 8: last-rank 0.70  knee@rank 4 (=K-4, frac 0.50)  curve ['0.15', '0.12', '0.20', '0.23', '0.18', '0.27', '0.44', '0.70']
+  K=12: last-rank 0.93  knee@rank 9 (=K-3, frac 0.75)  curve ['0.09', '0.05', '0.12', '0.14', '0.11', '0.13', '0.21', '0.19', '0.34', '0.54', '0.72', '0.93']
+  K=16: last-rank 1.12  knee@rank 9 (=K-7, frac 0.56)  curve ['0.01', '0.05', '0.03', '0.05', '0.08', '0.12', '0.12', '0.11', '0.26', '0.20', '0.34', '0.46', '0.43', '0.44', '0.77', '1.12']
+saved -> reports/logs-2026-07-13/rank_knee_vs_K.png
+
+=== (2) 5-seed MTM acceptance K-ladder (R=2.5, knn24): K=6 asked ===
+  K |   baseline knn24    block-cond FT
+  2 |   46.7 +/- 13.5%     61.7 +/- 20.8%
+  4 |   11.7 +/-  4.1%     23.3 +/- 13.3%
+  6 |    6.7 +/-  9.7%      3.3 +/-  4.1%
+  8 |    0.0 +/-  0.0%      0.0 +/-  0.0%

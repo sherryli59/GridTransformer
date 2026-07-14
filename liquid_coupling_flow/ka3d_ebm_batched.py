@@ -158,33 +158,50 @@ class KA3DScaffoldEBMBatched(KA3DScaffoldEBM):
         lc = F.log_softmax(logits_c, -1).gather(-1, bc[..., None]).squeeze(-1)
         return la + lb + lc - fl._logbw3                                            # [M,S]
 
-    def _prep(self, xo, so, block_mask, bnd, s_bnd, R):
-        """Shared reorder + static tensors for a batch of M configs (xo [M,n,3])."""
+    def _prep(self, xo, so, block_mask, bnd, s_bnd, R, virtual_tail=0):
+        """Shared reorder + static tensors for a batch of M configs (xo [M,n,3]).
+
+        ``virtual_tail`` is an exact diagnostic/proposal knob: block slots receive generation indices that
+        many positions earlier while the actual retained cage and block stay unchanged. For example, K=8
+        with ``virtual_tail=4`` gives the block the slot fractions of the first eight members of a K=12
+        block, without hiding four real retained particles. Sample and score must use the same value.
+        """
         M, n, _ = xo.shape
         m, dev = bnd.shape[0], xo.device
-        anchors_full = fixed_ball_scaffold(n, R, dev, xo.dtype)
+        anchors_full = fixed_ball_scaffold(n, R, dev, xo.dtype, ordering=self.scaffold_order)
         order = torch.argsort(block_mask.to(torch.uint8), stable=True)
         anchors = anchors_full[order]
         reordered_block = block_mask[order].to(xo.dtype)
         kind = torch.cat([torch.ones(m, dtype=torch.long, device=dev), torch.zeros(n, dtype=torch.long, device=dev)])
         idxp = torch.arange(m + n, device=dev)
         valid = idxp[None] < (m + torch.arange(n, device=dev))[:, None]
-        slot_feat = self._slot_features(anchors, torch.arange(n, device=dev), n, R)
+        virtual_tail = int(virtual_tail)
+        if virtual_tail < 0:
+            raise ValueError(f"virtual_tail must be nonnegative, got {virtual_tail}")
+        slot_index = torch.arange(n, device=dev) - virtual_tail * reordered_block.long()
+        if torch.any(slot_index < 0):
+            raise ValueError(f"virtual_tail={virtual_tail} shifts a block slot before index zero")
+        slot_feat = self._slot_features(anchors, slot_index, n, R)
         anchor_y, _ = ball_unsquash(anchors, R)
         return order, anchors, anchor_y, reordered_block, kind, valid, slot_feat, m, n
 
-    def block_log_prob_b(self, xo, so, block_mask, bnd, s_bnd, R, pos_temp=1.0, min_sep=None, top_p=None):
+    def block_log_prob_b(self, xo, so, block_mask, bnd, s_bnd, R, pos_temp=1.0, min_sep=None, top_p=None,
+                         virtual_tail=0):
         """Exact log q(block | retained+boundary) for M configs at once. xo [M,n,3] -> [M].
         pos_temp: score under the SAME tempered position density sample_block_b(pos_temp=...) draws from.
         min_sep/top_p: MUST match the values passed to sample_block_b, or the density is not the sampler's."""
         M = xo.shape[0]
-        order, anchors, anchor_y, rblock, kind, valid, slot_feat, m, n = self._prep(xo, so, block_mask, bnd, s_bnd, R)
+        order, anchors, anchor_y, rblock, kind, valid, slot_feat, m, n = self._prep(
+            xo, so, block_mask, bnd, s_bnd, R, virtual_tail=virtual_tail
+        )
         xo, so = xo[:, order], so[:, order]
         combined = torch.cat([bnd[None].expand(M, m, 3), xo], 1)
         scomb = torch.cat([s_bnd[None].expand(M, m), so], 1)
         h = self._fc_batched(combined, scomb, kind, valid, anchors, slot_feat) + self._r_bias(R, xo.device, xo.dtype)
         oh = F.one_hot(so, self.n_species).to(h.dtype)
         rem = oh.sum(1, keepdim=True) - (oh.cumsum(1) - oh)
+        if self.use_demand:                                    # STAGE 1: per-slot remaining-demand embedding
+            h = h + self.demand_emb(self._demand_feat(rem, int(rblock.sum()), n, R))
         lp_s = F.log_softmax(self.head_species(h).masked_fill(rem <= 0, float("-inf")), -1).gather(-1, so[..., None]).squeeze(-1)
         y, logdet_yx = ball_unsquash(xo, R)
         u = y - anchor_y[None]                                                       # frameless
@@ -195,7 +212,7 @@ class KA3DScaffoldEBMBatched(KA3DScaffoldEBM):
 
     @torch.no_grad()
     def sample_block_b(self, xo, so, block_mask, bnd, s_bnd, R, gen=None, pos_temp=1.0, min_sep=None,
-                       top_p=None):
+                       top_p=None, virtual_tail=0):
         """Regenerate the block for M configs in parallel. Returns xo_new [M,n,3], so_new [M,n], logq [M].
 
         pos_temp<1 SHARPENS the three position categoricals at sampling time (kills the intra-component
@@ -212,7 +229,9 @@ class KA3DScaffoldEBMBatched(KA3DScaffoldEBM):
         per-block gated base; kept here as scaffolding for an all-axis version. Default None = no-op."""
         fl = self.flow
         M = xo.shape[0]
-        order, anchors, anchor_y, rblock, kind, valid, slot_feat, m, n = self._prep(xo, so, block_mask, bnd, s_bnd, R)
+        order, anchors, anchor_y, rblock, kind, valid, slot_feat, m, n = self._prep(
+            xo, so, block_mask, bnd, s_bnd, R, virtual_tail=virtual_tail
+        )
         n_ret = int((~block_mask).sum())
         xo, so = xo[:, order].clone(), so[:, order].clone()
         combined = torch.cat([bnd[None].expand(M, m, 3), xo], 1).clone()
@@ -225,6 +244,8 @@ class KA3DScaffoldEBMBatched(KA3DScaffoldEBM):
         for jj in range(n_ret, n):
             vj = (torch.arange(m + n, device=xo.device) < (m + jj))[None]            # [1, m+n]
             h = self._fc_batched(combined, scomb, kind, vj, anchors[jj:jj + 1], slot_feat[jj:jj + 1])[:, 0] + rbias  # [M,d]
+            if self.use_demand:                                # STAGE 1: same demand feat as block_log_prob_b
+                h = h + self.demand_emb(self._demand_feat(rem, n - n_ret, n, R))     # rem [M,2] -> [M,5]
             ls = F.log_softmax(self.head_species(h).masked_fill(rem <= 0, float("-inf")), -1)
             sj = torch.multinomial(ls.exp(), 1, generator=gen).squeeze(-1)           # [M]
             he = h + self.sp_out_emb(sj)

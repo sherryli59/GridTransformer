@@ -23,7 +23,7 @@ KNN_POT = 8
 
 class KA3DScaffoldEBM(KA3DScaffoldCatAR):
     def __init__(self, *args, n_rbf=12, rbf_max=3.0, phi_hidden=32, pair_emb=8, r_fourier=6,
-                 knn_pot=KNN_POT, **kw):
+                 knn_pot=KNN_POT, use_demand=False, **kw):
         super().__init__(*args, **kw)
         # knn_pot = size of the potential/tilt cage (nearest placed neighbours the learned pair energy
         # sees). Default 8; measured 2026-07-13 too small for the dense glass (~12-14 first-shell) ->
@@ -49,6 +49,23 @@ class KA3DScaffoldEBM(KA3DScaffoldCatAR):
         self.R_embed = nn.Sequential(nn.Linear(2 * r_fourier, self.d_model), nn.SiLU(),
                                      nn.Linear(self.d_model, self.d_model))
         nn.init.zeros_(self.R_embed[-1].weight); nn.init.zeros_(self.R_embed[-1].bias)   # start neutral
+        # STAGE 1 remaining-demand embedding (capacity-conditioning plan). Anchor-free per-slot state the
+        # position head otherwise lacks: [rem_A/K, rem_B/K, rem_tot/K, K/n, n/(4R^3)]. rem = remaining BLOCK
+        # species budget -- tracked in sample_block_b, cumsum'd in block_log_prob_b (identical => exact). B
+        # matters: small B fits gaps A cannot. Zero-init -> warm-start reproduces the base checkpoint.
+        self.use_demand = bool(use_demand)
+        if self.use_demand:
+            self.demand_emb = nn.Sequential(nn.Linear(5, self.d_model), nn.SiLU(),
+                                            nn.Linear(self.d_model, self.d_model))
+            nn.init.zeros_(self.demand_emb[-1].weight); nn.init.zeros_(self.demand_emb[-1].bias)
+
+    def _demand_feat(self, rem, K, n, R):
+        """rem [...,2] remaining block (A,B) counts -> demand vector [...,5]. Pure fn of counts+block+geom."""
+        Kf = max(float(int(K)), 1.0)
+        rem_tot = rem.sum(-1, keepdim=True)
+        kn = torch.full_like(rem_tot, float(int(K)) / max(int(n), 1))
+        dens = torch.full_like(rem_tot, float(int(n)) / (4.0 * float(R) ** 3))
+        return torch.cat([rem[..., :1] / Kf, rem[..., 1:2] / Kf, rem_tot / Kf, kn, dens], -1)
 
     # ---- radius token ----
     def _rfeat(self, R, dev, dtype):
@@ -120,10 +137,16 @@ class KA3DScaffoldEBM(KA3DScaffoldCatAR):
         return la + lb + lc - fl._logbw3
 
     # ---- training: exact log-density of one cavity interior (c-tilted) ----
-    def log_prob_pair(self, interior_rel, s_in, bnd_rel, s_bnd, R, preordered=False, n_chunk=16):
+    def log_prob_pair_terms(self, interior_rel, s_in, bnd_rel, s_bnd, R, preordered=False, n_chunk=16):
+        """Per-slot teacher-forced log-density decomposition.
+
+        Keeping the species, unconstrained-position, and hard-ball Jacobian terms separate is important
+        when comparing different cavity radii: the physical conditional entropy and the coordinate
+        Jacobian can both vary with R without implying the same modeling failure.
+        """
         xo, so = self._labeled(interior_rel, s_in, R, preordered)
         n, m, dev = xo.shape[0], bnd_rel.shape[0], xo.device
-        anchors = fixed_ball_scaffold(n, R, dev, xo.dtype)
+        anchors = fixed_ball_scaffold(n, R, dev, xo.dtype, ordering=self.scaffold_order)
         combined = torch.cat([bnd_rel, xo], 0); scomb = torch.cat([s_bnd, so], 0)
         kind = torch.cat([torch.ones(m, dtype=torch.long, device=dev),
                           torch.zeros(n, dtype=torch.long, device=dev)])
@@ -139,12 +162,18 @@ class KA3DScaffoldEBM(KA3DScaffoldCatAR):
         u = torch.einsum("naj,nj->na", frame, y - anchor_y)
         cage_x, cage_s, cage_v = self._cage_knn(combined, scomb, valid, anchors)
         lp_u = self._tilted_lp_u(h + self.sp_out_emb(so), u, frame, anchor_y, cage_x, cage_s, cage_v, so, R, n_chunk)
-        return (lp_s + lp_u + logdet_yx).sum()
+        return {"species": lp_s, "position": lp_u, "jacobian": logdet_yx,
+                "total": lp_s + lp_u + logdet_yx, "anchors": anchors}
+
+    def log_prob_pair(self, interior_rel, s_in, bnd_rel, s_bnd, R, preordered=False, n_chunk=16):
+        terms = self.log_prob_pair_terms(interior_rel, s_in, bnd_rel, s_bnd, R,
+                                         preordered=preordered, n_chunk=n_chunk)
+        return terms["total"].sum()
 
     # ---- exact block-MTM (c-tilted); mirrors ka3d_block with the potential added ----
     def block_log_prob(self, xo_full, so_full, block_mask, bnd, s_bnd, R):
         n, m, dev = xo_full.shape[0], bnd.shape[0], xo_full.device
-        anchors_full = fixed_ball_scaffold(n, R, dev, xo_full.dtype)
+        anchors_full = fixed_ball_scaffold(n, R, dev, xo_full.dtype, ordering=self.scaffold_order)
         order = torch.argsort(block_mask.to(torch.uint8), stable=True)
         xo, so, anchors = xo_full[order], so_full[order], anchors_full[order]
         reordered_block = block_mask[order].to(xo.dtype)
@@ -169,7 +198,7 @@ class KA3DScaffoldEBM(KA3DScaffoldCatAR):
     def sample_block(self, xo_full, so_full, block_mask, bnd, s_bnd, R, gen=None):
         fl = self.flow
         n, m, dev = xo_full.shape[0], bnd.shape[0], xo_full.device
-        anchors_full = fixed_ball_scaffold(n, R, dev, xo_full.dtype)
+        anchors_full = fixed_ball_scaffold(n, R, dev, xo_full.dtype, ordering=self.scaffold_order)
         order = torch.argsort(block_mask.to(torch.uint8), stable=True)
         n_ret = int((~block_mask).sum())
         xo, so, anchors = xo_full[order].clone(), so_full[order].clone(), anchors_full[order]

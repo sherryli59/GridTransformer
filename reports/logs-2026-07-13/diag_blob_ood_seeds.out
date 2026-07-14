@@ -1,0 +1,3 @@
+=== 5-seed K=8 MTM acceptance: random blob (A) vs morton-tail trained-suffix (B), R=2.5 ===
+  arm A: accept   1.7 +/-  3.3%   dE/p median   +2004.2   per-seed ['0', '0', '0', '8', '0']
+  arm B: accept   1.7 +/-  3.3%   dE/p median    +693.0   per-seed ['8', '0', '0', '0', '0']

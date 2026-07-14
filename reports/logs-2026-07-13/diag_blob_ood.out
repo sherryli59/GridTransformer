@@ -1,0 +1,9 @@
+=== K-blob OOD test: random blob vs morton-TAIL (trained suffix) vs contiguous segment (K=8, R=2.5) ===
+                               arm | clash/FIXED clash/INT      dE/p    MTM
+   A random blob (production, OOD) |       0.327     0.133   +1358.9   0.0%
+   B morton TAIL (in-distribution) |       0.251     0.043    +100.6   8.3%
+     C contiguous segment (axis-1) |       0.383     0.087   +2363.0   0.0%
+
+  rank-resolved creations A: ['0.23', '0.18', '0.23', '0.23', '0.33', '0.28', '0.69', '0.97']
+  rank-resolved creations B: ['0.13', '0.11', '0.26', '0.27', '0.22', '0.21', '0.44', '0.54']
+saved -> reports/logs-2026-07-13/blob_ood_rank.png

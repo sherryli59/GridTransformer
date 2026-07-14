@@ -1,0 +1,13 @@
+=== TEACHER-FORCED per-slot NLL of TRUE DATA vs rank (K=8 blob, FT knn24, 16 cav) ===
+rank | position NLL species NLL
+   1 |       -2.409       0.667
+   2 |       -3.965       0.172
+   3 |       -3.282       0.030
+   4 |       -3.040       0.280
+   5 |       -3.357       0.222
+   6 |       -3.897       0.020
+   7 |       -4.701       0.007
+   8 |       -4.863       0.000
+
+position NLL rank8-rank1 = -2.454  => FLAT: free-run rise is COMPOUNDING, conditional fine given true context
+saved -> reports/logs-2026-07-13/tf_perslot_nll.png

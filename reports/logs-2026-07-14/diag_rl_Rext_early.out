@@ -1,0 +1,7 @@
+=== EARLY RL quality: base(Rext warm-start) vs LIVE RL snapshot, full-regen vs R ===
+   R    n | base cl/p  RL cl/p   dcl% | base E/p  RL E/p | regime
+ 2.5   76 |     0.349    0.230   -34% |     0.06    0.05 | in-dist
+ 3.0  130 |     0.396    0.324   -18% |     0.04    0.03 | in-dist
+ 3.5  206 |     0.452    0.369   -18% |     0.02    0.02 | Rext-range
+ 4.0  308 |     0.501    0.396   -21% |     0.02    0.02 | >xi_PTS
+ 4.5  440 |     0.569    0.481   -15% |     0.01    0.01 | >xi_PTS

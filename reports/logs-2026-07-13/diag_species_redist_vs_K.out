@@ -1,0 +1,10 @@
+=== species redistribution vs K (block-cond FT knn24, R=2.5, M=24) ===
+  K | mixedness  RAW redist  NORM redist  MTM acc
+  2 |      0.50          7%           7%     100%
+  4 |      0.28         16%          27%      22%
+  8 |      0.21         24%          62%       0%
+ 16 |      0.18         22%          67%       0%
+ 24 |      0.24         29%          63%       0%
+
+  RAW = % of block slots whose species changed. NORM = RAW / (2*min(nA,nB)/K) controls for multiset.
+  NORM rising with K => genuinely more per-swap redistribution; flat => just more mixed multisets.

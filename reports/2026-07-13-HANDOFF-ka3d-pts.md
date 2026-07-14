@@ -175,6 +175,15 @@ This is the highest-value untried experiment — see §5 item 2 (fold it togethe
    not a bigger proposal cage. Do NOT retry knn=16 / fresh-train (NLL flatness already rules out the cage as
    the binding constraint). Next lever = §5.1 head-to-head + §5.2 relaxation targets, NOT more tilt cage.
 1. **Finish + compare the head-to-head** (§2 NEXT ACTION). Live deliverable; caution on G1 convergence.
+1a. **[DONE 07-13] Block-conditional fine-tune = 50× proposal-ENERGY lever, base protected.**
+   `train_block_cond.py` (mixed objective: allmask 0.30 exact-base-protect / blob 0.45 / single 0.15 /
+   tail 0.10), knn_pot=**24** (tilt cage matched to min_sep mask + first shell), warm from knn24-native
+   ckpt, early-stop step 7500. Ckpt `ka3d_cavity_ebm3ax_rho115_blockcond_knn24_best.pt`. Measured
+   (`diag_blockcond_eval`, K=8 blob, R=2.5): **blob dE/particle +741.5 → +14.3 (50×)**, clash/FIXED
+   0.280→0.234, allmask base clash 0.322→0.332 (+3%, the +0.09 allmask NLL is cosmetic). Win is
+   soft-overlap ENERGY not clash count (rank-8 spike intact — space-budgeting intrinsic). Enters SMC
+   bridge as −λβU ⇒ mutations survive to colder λ ⇒ cleaner island logZ. USE THIS CKPT as the SMC
+   mutation model with the corrected full-q0 bridge; NOT a cold-MTM acceptance lever (still +1.4/p capped).
 1b. **K-blob conditional is OOD — worth a cheap fine-tune, NOT an acceptance lever**
    (`diag_blob_ood.{py,out}`, `diag_blob_ood_seeds.out`, 07-13). The block conditional is zero-shot
    (training = full-sequence morton NLL only). Byte-exact trained-suffix control (morton-TAIL block):

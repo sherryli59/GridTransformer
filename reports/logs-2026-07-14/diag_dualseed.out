@@ -1,0 +1,5 @@
+=== DUAL-SEED trap confirmation (lam05, l=0.368) ===  seed-independent => converged
+J=4 M=16 T=20 n_mut=3 ncav=3  PT-ref true q(R)~0.63-0.66
+   R |  alien q~   data q~ | data/alien | verdict
+ 1.6 |    +0.126    +0.627 |        5.0 | TRAPPED: ref basin STABLE but unreachable from alien
+ 2.0 |    +0.060    +0.983 |       16.5 | TRAPPED: ref basin STABLE but unreachable from alien

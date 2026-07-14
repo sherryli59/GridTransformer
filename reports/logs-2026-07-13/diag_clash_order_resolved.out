@@ -1,0 +1,7 @@
+=== clash CREATION per block member vs placement rank (R=2.5, blob, 12 cav x 16 samp) ===
+    K=1 full-cage reference: 0.109/particle. Rising curve => space-budgeting; flat => residual.
+  K=8: rank-resolved creations ['0.11', '0.28', '0.39', '0.47', '0.54', '0.42', '0.55', '1.10']
+        partner split: vs FIXED(ret+bnd) 83%  vs earlier-BLOCK 17%  (creations; every creation has a VISIBLE partner by construction)
+  K=16: rank-resolved creations ['0.03', '0.15', '0.15', '0.19', '0.22', '0.28', '0.27', '0.25', '0.35', '0.32', '0.28', '0.45', '0.67', '0.44', '0.79', '1.18']
+        partner split: vs FIXED(ret+bnd) 73%  vs earlier-BLOCK 27%  (creations; every creation has a VISIBLE partner by construction)
+saved -> reports/logs-2026-07-13/clash_order_resolved.png

@@ -1,0 +1,5 @@
+=== anchor-blob (production) vs NESTED SUB-CAVITY regen (user proposal), matched sets ===
+    R_big=2.5, r_sub=1.6 (min trained radius), n_sub mean 18.9, 12 cav x 16 samp
+                       arm | clash/FIXED clash/INTERNAL dE/particle MTM accept
+  A blob-block (big frame) |       0.297          0.209   +19365.41       0.0%
+       B nested sub-cavity |       0.191          0.293    +8378.48       0.0%

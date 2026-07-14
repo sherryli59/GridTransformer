@@ -1,0 +1,14 @@
+=== future-anchor OBSTRUCTION test (K=8, R=2.5): model vs data, per placement rank ===
+rank | d_fut model d_fut DATA | n<0.9 model n<0.9 DATA | |u| model |u| DATA
+   1 |       0.645      0.654 |        1.69       1.83 |     0.722    0.617
+   2 |       0.842      0.908 |        1.21       0.92 |     0.776    0.577
+   3 |       0.839      0.826 |        1.26       1.17 |     0.905    0.694
+   4 |       0.808      0.803 |        0.97       0.75 |     0.909    0.686
+   5 |       0.909      0.952 |        0.66       0.50 |     0.914    0.781
+   6 |       0.961      0.847 |        0.59       0.75 |     0.765    0.463
+   7 |       1.101      1.000 |        0.38       0.50 |     0.829    0.756
+   8 |           -          - |           -          - |     1.029    0.686
+
+READ: model d_fut << data d_fut (esp. early ranks) => obstruction real, reservation tilt well-aimed.
+      model ~= data => early placements do NOT over-consume capacity; rank rise = compounding
+      (exposure bias) => the lever is scheduled-sampling/relaxed targets, not future-demand tilts.

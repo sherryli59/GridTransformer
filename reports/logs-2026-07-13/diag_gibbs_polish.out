@@ -1,0 +1,14 @@
+=== Gibbs polish trajectory (FT knn24, K=8 blob, R=2.5, 12 cav) ===
+               arm |  clash/p  dE/particle
+     0 baseline AR |    0.360       +814.6
+   tail3 polish x1 |    0.328      +1048.2
+   tail3 polish x2 |    0.331       +562.6
+   tail3 polish x3 |    0.323      +1277.2
+   all8  polish x1 |    0.301       +434.1
+   all8  polish x2 |    0.322       +861.5
+   all8  polish x3 |    0.281       +210.2
+
+  rank-resolved clash: baseline vs after 1 tail-polish
+   rank:      1     2     3     4     5     6     7     8
+   base:   0.15  0.18  0.21  0.23  0.23  0.41  0.46  1.01
+   tail1:  0.18  0.18  0.18  0.23  0.22  0.45  0.47  0.72

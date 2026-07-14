@@ -1,0 +1,9 @@
+=== effective-basin count from pooled J*M SMC samples (lam05, l=0.368) ===
+sim = (q_box - bulk)/(rho - bulk); ceiling rho=1.149, bulk=0.057
+   R N_pool |  CC@0.4  CC@0.6  CC@0.8 |    PR | n_distinct(RMSD) | qc_pair
+ 1.6     96 |    10.6    14.0    37.0 |   9.7 |             31.4 | 0.143
+ 2.0     96 |     8.6     8.6    12.2 |   7.6 |             21.6 | 0.157
+ 2.4     96 |     9.0     9.0     9.0 |   6.4 |             16.0 | 0.196
+
+CC@tau = # connected components (basins) at overlap threshold tau; PR = eigen participation ratio;
+n_distinct(RMSD) = # samples distinct up to RMSD 0.05 (low => resampling collapse to few ancestors).

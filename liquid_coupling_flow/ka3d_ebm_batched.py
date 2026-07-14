@@ -186,7 +186,7 @@ class KA3DScaffoldEBMBatched(KA3DScaffoldEBM):
         return order, anchors, anchor_y, reordered_block, kind, valid, slot_feat, m, n
 
     def block_log_prob_b(self, xo, so, block_mask, bnd, s_bnd, R, pos_temp=1.0, min_sep=None, top_p=None,
-                         virtual_tail=0):
+                         virtual_tail=0, sp_temp=1.0):
         """Exact log q(block | retained+boundary) for M configs at once. xo [M,n,3] -> [M].
         pos_temp: score under the SAME tempered position density sample_block_b(pos_temp=...) draws from.
         min_sep/top_p: MUST match the values passed to sample_block_b, or the density is not the sampler's."""
@@ -204,7 +204,7 @@ class KA3DScaffoldEBMBatched(KA3DScaffoldEBM):
             h = h + self.demand_emb(self._demand_feat(rem, int(rblock.sum()), n, R))
         if self.use_future_anchors:                            # STAGE 4: future-anchor tokens (static per cavity)
             h = h + self._future_feat(anchors, rblock)[None]
-        lp_s = F.log_softmax(self.head_species(h).masked_fill(rem <= 0, float("-inf")), -1).gather(-1, so[..., None]).squeeze(-1)
+        lp_s = F.log_softmax(self.head_species(h).masked_fill(rem <= 0, float("-inf")) / sp_temp, -1).gather(-1, so[..., None]).squeeze(-1)
         y, logdet_yx = ball_unsquash(xo, R)
         u = y - anchor_y[None]                                                       # frameless
         cage_x, cage_s, cage_v = self._cage_knn_b(combined, scomb, valid, anchors)
@@ -214,7 +214,7 @@ class KA3DScaffoldEBMBatched(KA3DScaffoldEBM):
 
     @torch.no_grad()
     def sample_block_b(self, xo, so, block_mask, bnd, s_bnd, R, gen=None, pos_temp=1.0, min_sep=None,
-                       top_p=None, virtual_tail=0):
+                       top_p=None, virtual_tail=0, sp_temp=1.0):
         """Regenerate the block for M configs in parallel. Returns xo_new [M,n,3], so_new [M,n], logq [M].
 
         pos_temp<1 SHARPENS the three position categoricals at sampling time (kills the intra-component
@@ -251,7 +251,7 @@ class KA3DScaffoldEBMBatched(KA3DScaffoldEBM):
                 h = h + self.demand_emb(self._demand_feat(rem, n - n_ret, n, R))     # rem [M,2] -> [M,5]
             if self.use_future_anchors:                        # STAGE 4: same future feat as block_log_prob_b
                 h = h + fut_feat[jj][None]
-            ls = F.log_softmax(self.head_species(h).masked_fill(rem <= 0, float("-inf")), -1)
+            ls = F.log_softmax(self.head_species(h).masked_fill(rem <= 0, float("-inf")) / sp_temp, -1)   # sp_temp>1 => flatter => more swaps proposed (exact: scored under same temper)
             sj = torch.multinomial(ls.exp(), 1, generator=gen).squeeze(-1)           # [M]
             he = h + self.sp_out_emb(sj)
             cage_x, cage_s, cage_v = self._cage_knn_b(combined, scomb, vj, anchors[jj:jj + 1])   # [M,1,K,*]

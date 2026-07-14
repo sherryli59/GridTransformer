@@ -1,0 +1,12 @@
+exactness sp_temp=4 roundtrip |lqf-lqs| max: 8.34e-03 (want <5e-2)
+
+=== species-temperature two-blob swap sweep (FT knn24, 16 well-sep A-B pairs) ===
+ sp_temp | P(swap proposed)  MTM accept P(ACCEPTED swap)
+     1.0 |               1%         75%               0%
+     2.0 |               7%         75%               0%
+     4.0 |              22%         75%               0%
+     8.0 |              35%         69%               0%
+    20.0 |              46%         69%               0%
+
+  P(ACCEPTED swap) = the useful non-local species-mixing rate. Rising with sp_temp => the variant
+  turns the geometry-timid proposer into a working learned swap kernel.

@@ -1,0 +1,9 @@
+=== frozen-cage MC dE/particle vs data (K=8, beta=2.0, 8 cav) ===
+ start | sweep    0 sweep  100 sweep  500 sweep 2000
+  DATA |      +0.00     -0.13     -0.01     -0.00
+    AR |   +217128.36    +12.31     +8.65     +8.58
+  RAND |   +80723291811.26   +266.83   +201.36   +195.95
+
+READ: DATA-start flat ~0 & AR/RAND plateau >0 => GLASSY TRAPPING (dynamic slowing down): the data
+basin is stable but MC can't reach it from elsewhere. DATA-start drifts UP => +1.4 is the true
+constrained-ensemble energy (data co-relaxed w/ now-frozen surroundings).

@@ -1,0 +1,6 @@
+=== kept-8 clash attribution in the USABLE pad-12 move (FT knn24, R=2.5, 12 cav) ===
+  vs SEEN partners (kept-8 + retained + boundary): 0.139
+  vs HIDDEN-but-present 4 tail-data slots        : 0.214
+  total 0.354  (matches usable-move 0.413; ideal-all-fresh was 0.247)
+
+  => 61% of the kept-8's clash is with the 4 particles it was generated BLIND to.

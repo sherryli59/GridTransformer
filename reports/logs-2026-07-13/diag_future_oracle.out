@@ -1,0 +1,14 @@
+=== future-info ORACLE (VALID): TRUE-data position NLL, causal vs full-DATA-cage (K=8, 16 cav) ===
+rank |   CAUSAL  FULLCAGE     gap
+   1 |   -2.409    -4.663   2.254
+   2 |   -3.965    -4.805   0.841
+   3 |   -3.282    -4.283   1.001
+   4 |   -3.040    -4.641   1.601
+   5 |   -3.357    -4.629   1.272
+   6 |   -3.897    -4.539   0.642
+   7 |   -4.701    -5.270   0.570
+   8 |   -4.863    -4.863   0.000
+
+  EARLY (rank 1-4) mean gap = +1.424 nats => future info sharpens early placements by this much;
+  a model that EMBEDS future-anchor info (and is RETRAINED) could aim to recover it. Zero-shot proxies
+  are confounded (OOD) and were retracted.

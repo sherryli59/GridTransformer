@@ -186,7 +186,7 @@ class KA3DScaffoldEBMBatched(KA3DScaffoldEBM):
         return order, anchors, anchor_y, reordered_block, kind, valid, slot_feat, m, n
 
     def block_log_prob_b(self, xo, so, block_mask, bnd, s_bnd, R, pos_temp=1.0, min_sep=None, top_p=None,
-                         virtual_tail=0, sp_temp=1.0):
+                         virtual_tail=0, sp_temp=1.0, pos_only=False):
         """Exact log q(block | retained+boundary) for M configs at once. xo [M,n,3] -> [M].
         pos_temp: score under the SAME tempered position density sample_block_b(pos_temp=...) draws from.
         min_sep/top_p: MUST match the values passed to sample_block_b, or the density is not the sampler's."""
@@ -210,11 +210,13 @@ class KA3DScaffoldEBMBatched(KA3DScaffoldEBM):
         cage_x, cage_s, cage_v = self._cage_knn_b(combined, scomb, valid, anchors)
         lp_u = self._tilted_lp_u_b(h + self.sp_out_emb(so), u, anchor_y, cage_x, cage_s, cage_v, so, R,
                                    pos_temp=pos_temp, min_sep=min_sep, top_p=top_p)
+        if pos_only:                                                                # BREATHE score: positions only
+            return ((lp_u + logdet_yx) * rblock[None]).sum(1)                       # (matches fix_species sampler)
         return ((lp_s + lp_u + logdet_yx) * rblock[None]).sum(1)                     # [M]
 
     @torch.no_grad()
     def sample_block_b(self, xo, so, block_mask, bnd, s_bnd, R, gen=None, pos_temp=1.0, min_sep=None,
-                       top_p=None, virtual_tail=0, sp_temp=1.0):
+                       top_p=None, virtual_tail=0, sp_temp=1.0, fix_species=False):
         """Regenerate the block for M configs in parallel. Returns xo_new [M,n,3], so_new [M,n], logq [M].
 
         pos_temp<1 SHARPENS the three position categoricals at sampling time (kills the intra-component
@@ -251,8 +253,11 @@ class KA3DScaffoldEBMBatched(KA3DScaffoldEBM):
                 h = h + self.demand_emb(self._demand_feat(rem, n - n_ret, n, R))     # rem [M,2] -> [M,5]
             if self.use_future_anchors:                        # STAGE 4: same future feat as block_log_prob_b
                 h = h + fut_feat[jj][None]
-            ls = F.log_softmax(self.head_species(h).masked_fill(rem <= 0, float("-inf")) / sp_temp, -1)   # sp_temp>1 => flatter => more swaps proposed (exact: scored under same temper)
-            sj = torch.multinomial(ls.exp(), 1, generator=gen).squeeze(-1)           # [M]
+            if fix_species:                        # BREATHE: species IMPOSED (from input so); sample POSITIONS only
+                sj = so[:, jj]                       # so already reordered above; clamp to the given pattern
+            else:
+                ls = F.log_softmax(self.head_species(h).masked_fill(rem <= 0, float("-inf")) / sp_temp, -1)   # sp_temp>1 => flatter => more swaps proposed (exact: scored under same temper)
+                sj = torch.multinomial(ls.exp(), 1, generator=gen).squeeze(-1)           # [M]
             he = h + self.sp_out_emb(sj)
             cage_x, cage_s, cage_v = self._cage_knn_b(combined, scomb, vj, anchors[jj:jj + 1])   # [M,1,K,*]
             cx, cs, cv = cage_x[:, 0], cage_s[:, 0], cage_v[:, 0]
@@ -290,7 +295,9 @@ class KA3DScaffoldEBMBatched(KA3DScaffoldEBM):
             rem[ar, sj] -= 1
             lp_u = (la.gather(1, ba[:, None]).squeeze(1) + lb.gather(1, bb[:, None]).squeeze(1)
                     + lc.gather(1, bc[:, None]).squeeze(1) - fl._logbw3)
-            logq = logq + ls.gather(1, sj[:, None]).squeeze(1) + lp_u - logdet_xy
+            logq = logq + lp_u - logdet_xy                                           # position-only density
+            if not fix_species:                                                      # add species term unless imposed
+                logq = logq + ls.gather(1, sj[:, None]).squeeze(1)
         xo_new, so_new = xo.new_empty(M, n, 3), so.new_empty(M, n)
         xo_new[:, order], so_new[:, order] = xo, so
         return xo_new, so_new, logq

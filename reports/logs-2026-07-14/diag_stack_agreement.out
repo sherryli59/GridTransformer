@@ -1,0 +1,7 @@
+=== STACK-AGREEMENT: do alien(up) and data(down) seeds MEET as n_mut grows? (lam05, l=0.368) ===
+K=8 T=20 J=3 M=16 ncav=3. gap->0 = converged; gap persists = non-ergodic (need basin-crossing)
+
+ R=1.6:   n_mut  alien q~   data q~     gap
+             3    +0.155    +0.591   0.436
+             8    +0.114    +0.350   0.235
+            16    +0.156    +0.446   0.290

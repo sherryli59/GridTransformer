@@ -1,0 +1,5 @@
+=== 'regenerate everything on pass-1' (JACOBI) vs sequential (GIBBS), 1 sweep (FT knn24, K=8) ===
+                         arm |  clash/p  dE/particle
+      0 baseline AR (pass-1) |    0.290       +643.3
+ regen-all-on-pass1 (Jacobi) |    0.482      +5130.8
+          sequential (Gibbs) |    0.264       +524.4

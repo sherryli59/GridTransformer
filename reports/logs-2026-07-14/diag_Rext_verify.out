@@ -1,0 +1,7 @@
+=== R-extension verify: clash/p (OLD radii<=3.0 vs NEW radii<=4.5 block-cond) ===
+   R | OLD clash NEW clash | OLD capE/p NEW capE/p | regime
+ 2.5 |     0.358     0.349 |       0.06       0.06 | in-dist(both)
+ 3.0 |     0.371     0.386 |       0.04       0.04 | in-dist(both)
+ 3.5 |     0.446     0.437 |       0.03       0.02 | NEW in-dist
+ 4.0 |     0.548     0.498 |       0.02       0.02 | NEW in-dist
+ 4.5 |     0.792     0.587 |       0.02       0.01 | NEW in-dist

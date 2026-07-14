@@ -1,0 +1,7 @@
+=== two-blob (A+B, well-separated) non-local species swap test (FT knn24, 12 pairs) ===
+  mean pair separation: 3.19 sigma (well-separated => species exchange is NON-LOCAL)
+  P(species assignment SWAPPED across the two slots): 2%
+  exact 2-block MTM acceptance: 100%
+
+  single-particle move: budget=1 => species FORCED => P(swap)=0 by construction.
+  => two-blob move does NOT realize non-local species redistribution.

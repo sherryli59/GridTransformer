@@ -1,0 +1,8 @@
+=== clash-per-interior-particle vs R (full AR regen, CUT=0.85*sigma, 10 cav x 16 samp) ===
+   R  n_int | clash/bnd clash/int-earlier clash/int-later clash/int-TOT
+ 1.6   20.8 |     0.187             0.148           0.148         0.297
+ 2.0   38.9 |     0.159             0.200           0.200         0.401
+ 2.5   75.5 |     0.150             0.226           0.226         0.453
+ 3.0  130.3 |     0.140             0.255           0.255         0.510
+
+PREDICTION: clash/bnd low+flat; clash/int-TOT grows with R (AR packing). earlier==later by symmetry of counting (each clash counted from both ends).

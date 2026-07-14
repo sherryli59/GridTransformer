@@ -202,6 +202,8 @@ class KA3DScaffoldEBMBatched(KA3DScaffoldEBM):
         rem = oh.sum(1, keepdim=True) - (oh.cumsum(1) - oh)
         if self.use_demand:                                    # STAGE 1: per-slot remaining-demand embedding
             h = h + self.demand_emb(self._demand_feat(rem, int(rblock.sum()), n, R))
+        if self.use_future_anchors:                            # STAGE 4: future-anchor tokens (static per cavity)
+            h = h + self._future_feat(anchors, rblock)[None]
         lp_s = F.log_softmax(self.head_species(h).masked_fill(rem <= 0, float("-inf")), -1).gather(-1, so[..., None]).squeeze(-1)
         y, logdet_yx = ball_unsquash(xo, R)
         u = y - anchor_y[None]                                                       # frameless
@@ -233,6 +235,7 @@ class KA3DScaffoldEBMBatched(KA3DScaffoldEBM):
             xo, so, block_mask, bnd, s_bnd, R, virtual_tail=virtual_tail
         )
         n_ret = int((~block_mask).sum())
+        fut_feat = self._future_feat(anchors, rblock) if self.use_future_anchors else None   # [n,d] static
         xo, so = xo[:, order].clone(), so[:, order].clone()
         combined = torch.cat([bnd[None].expand(M, m, 3), xo], 1).clone()
         scomb = torch.cat([s_bnd[None].expand(M, m), so], 1).clone()
@@ -246,6 +249,8 @@ class KA3DScaffoldEBMBatched(KA3DScaffoldEBM):
             h = self._fc_batched(combined, scomb, kind, vj, anchors[jj:jj + 1], slot_feat[jj:jj + 1])[:, 0] + rbias  # [M,d]
             if self.use_demand:                                # STAGE 1: same demand feat as block_log_prob_b
                 h = h + self.demand_emb(self._demand_feat(rem, n - n_ret, n, R))     # rem [M,2] -> [M,5]
+            if self.use_future_anchors:                        # STAGE 4: same future feat as block_log_prob_b
+                h = h + fut_feat[jj][None]
             ls = F.log_softmax(self.head_species(h).masked_fill(rem <= 0, float("-inf")), -1)
             sj = torch.multinomial(ls.exp(), 1, generator=gen).squeeze(-1)           # [M]
             he = h + self.sp_out_emb(sj)

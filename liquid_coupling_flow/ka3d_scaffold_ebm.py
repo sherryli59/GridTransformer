@@ -23,7 +23,7 @@ KNN_POT = 8
 
 class KA3DScaffoldEBM(KA3DScaffoldCatAR):
     def __init__(self, *args, n_rbf=12, rbf_max=3.0, phi_hidden=32, pair_emb=8, r_fourier=6,
-                 knn_pot=KNN_POT, use_demand=False, **kw):
+                 knn_pot=KNN_POT, use_demand=False, use_future_anchors=False, n_fut=8, **kw):
         super().__init__(*args, **kw)
         # knn_pot = size of the potential/tilt cage (nearest placed neighbours the learned pair energy
         # sees). Default 8; measured 2026-07-13 too small for the dense glass (~12-14 first-shell) ->
@@ -58,6 +58,17 @@ class KA3DScaffoldEBM(KA3DScaffoldCatAR):
             self.demand_emb = nn.Sequential(nn.Linear(5, self.d_model), nn.SiLU(),
                                             nn.Linear(self.d_model, self.d_model))
             nn.init.zeros_(self.demand_emb[-1].weight); nn.init.zeros_(self.demand_emb[-1].bias)
+        # STAGE 4 future-anchor tokens: per slot, attend to the nearest n_fut FUTURE-block scaffold anchors
+        # (deterministic -- fn of n,R,order+block => EXACT, NOT true future coords). Token = [rel(3), dist,
+        # rank_gap]. Learned-query attention pool, zero-init out -> warm-start reproduces the base ckpt.
+        self.use_future_anchors = bool(use_future_anchors)
+        if self.use_future_anchors:
+            self.n_fut = int(n_fut)
+            self.fut_enc = nn.Sequential(nn.Linear(5, self.d_model), nn.SiLU(),
+                                         nn.Linear(self.d_model, self.d_model))
+            self.fut_query = nn.Parameter(torch.randn(self.d_model) * 0.02)
+            self.fut_out = nn.Linear(self.d_model, self.d_model)
+            nn.init.zeros_(self.fut_out.weight); nn.init.zeros_(self.fut_out.bias)
 
     def _demand_feat(self, rem, K, n, R):
         """rem [...,2] remaining block (A,B) counts -> demand vector [...,5]. Pure fn of counts+block+geom."""
@@ -66,6 +77,30 @@ class KA3DScaffoldEBM(KA3DScaffoldCatAR):
         kn = torch.full_like(rem_tot, float(int(K)) / max(int(n), 1))
         dens = torch.full_like(rem_tot, float(int(n)) / (4.0 * float(R) ** 3))
         return torch.cat([rem[..., :1] / Kf, rem[..., 1:2] / Kf, rem_tot / Kf, kn, dens], -1)
+
+    def _future_feat(self, anchors, reordered_block):
+        """Per-slot future-anchor feature [S, d_model]. Pure fn of anchors + block => identical in
+        sample and score. Each slot attends (learned query) to its nearest n_fut FUTURE-block anchors."""
+        S = anchors.shape[0]; dev = anchors.device
+        isblk = reordered_block.bool()
+        pos = torch.arange(S, device=dev)
+        futmask = (pos[None] > pos[:, None]) & isblk[None]                       # [S,S] future-block per slot
+        d2 = (anchors[:, None] - anchors[None]).pow(2).sum(-1).masked_fill(~futmask, 1e18)
+        Fk = min(self.n_fut, S)
+        fidx = d2.topk(Fk, dim=1, largest=False).indices                        # [S,Fk]
+        fvalid = torch.gather(futmask, 1, fidx)                                  # [S,Fk]
+        rel = anchors[fidx] - anchors[:, None]                                   # [S,Fk,3]
+        dist = rel.norm(dim=-1, keepdim=True)
+        rgap = ((fidx - pos[:, None]).float() / max(S, 1)).unsqueeze(-1)
+        tok = self.fut_enc(torch.cat([rel, dist, rgap], -1))                     # [S,Fk,d]
+        has_fut = fvalid.any(1, keepdim=True)                                    # [S,1] slot has >=1 future
+        score = (tok @ self.fut_query) / (self.d_model ** 0.5)                   # [S,Fk]
+        score = score.masked_fill(~fvalid, float("-inf"))
+        w = torch.softmax(score, 1)
+        w = torch.where(has_fut, w, torch.zeros_like(w))                         # no-future slots -> 0 weights
+        # gate the WHOLE output (incl. bias) on having a future -> no-future slots (K=1, last member) get
+        # EXACTLY 0 => K=1 unchanged, and 'no future demand => no reservation signal' holds by construction.
+        return self.fut_out((w.unsqueeze(-1) * tok).sum(1)) * has_fut            # [S,d]
 
     # ---- radius token ----
     def _rfeat(self, R, dev, dtype):

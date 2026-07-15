@@ -1,0 +1,45 @@
+=== cav 0 (n=45, R=2.0) BCY shrinkage-PT: NR=10 (T 0.5-1.0 x lam 1.0-0.6), SW=20000, B randomized 3000sw@top ===
+  sw   1000: inst A +0.80 B +0.35 | run-mean A +0.750 B +0.327 | gap 0.424 
+  sw   2000: inst A +0.81 B +0.35 | run-mean A +0.824 B +0.353 | gap 0.471 
+  sw   3000: inst A +0.74 B +0.38 | run-mean A +0.807 B +0.355 | gap 0.452 
+  sw   4000: inst A +0.91 B +0.37 | run-mean A +0.785 B +0.377 | gap 0.408 
+  sw   5000: inst A +0.81 B +0.43 | run-mean A +0.772 B +0.403 | gap 0.369 
+  sw   6000: inst A +0.78 B +0.42 | run-mean A +0.796 B +0.416 | gap 0.380 
+  sw   7000: inst A +0.78 B +0.48 | run-mean A +0.806 B +0.434 | gap 0.372 
+  sw   8000: inst A +0.75 B +0.48 | run-mean A +0.814 B +0.448 | gap 0.366 
+  sw   9000: inst A +0.77 B +0.38 | run-mean A +0.817 B +0.442 | gap 0.376 
+  sw  10000: inst A +0.75 B +0.34 | run-mean A +0.818 B +0.438 | gap 0.380 
+  sw  11000: inst A +0.91 B +0.43 | run-mean A +0.806 B +0.447 | gap 0.359 
+  sw  12000: inst A +0.77 B +0.42 | run-mean A +0.799 B +0.444 | gap 0.355 
+  sw  13000: inst A +0.78 B +0.40 | run-mean A +0.792 B +0.438 | gap 0.354 
+  sw  14000: inst A +0.78 B +0.55 | run-mean A +0.793 B +0.440 | gap 0.353 
+  sw  15000: inst A +0.71 B +0.54 | run-mean A +0.794 B +0.437 | gap 0.357 
+  sw  16000: inst A +0.86 B +0.42 | run-mean A +0.794 B +0.434 | gap 0.360 
+  sw  17000: inst A +0.78 B +0.40 | run-mean A +0.796 B +0.434 | gap 0.362 
+  sw  18000: inst A +0.80 B +0.42 | run-mean A +0.793 B +0.439 | gap 0.354 
+  sw  19000: inst A +0.75 B +0.48 | run-mean A +0.791 B +0.437 | gap 0.353 
+  sw  20000: inst A +0.85 B +0.43 | run-mean A +0.787 B +0.440 | gap 0.347 
+  FINAL: run-mean A +0.787 B +0.440 gap 0.347 NOT converged (1523s)
+=== cav 1 (n=35, R=2.0) BCY shrinkage-PT: NR=10 (T 0.5-1.0 x lam 1.0-0.6), SW=20000, B randomized 3000sw@top ===
+  sw   1000: inst A +0.51 B +0.32 | run-mean A +0.557 B +0.339 | gap 0.218 
+  sw   2000: inst A +0.63 B +0.43 | run-mean A +0.538 B +0.390 | gap 0.149 
+  sw   3000: inst A +0.58 B +0.52 | run-mean A +0.548 B +0.466 | gap 0.082 CONVERGED
+  sw   4000: inst A +0.52 B +0.49 | run-mean A +0.538 B +0.495 | gap 0.043 CONVERGED
+  sw   5000: inst A +0.52 B +0.42 | run-mean A +0.553 B +0.490 | gap 0.063 CONVERGED
+  sw   6000: inst A +0.51 B +0.55 | run-mean A +0.543 B +0.476 | gap 0.066 CONVERGED
+  sw   7000: inst A +0.52 B +0.48 | run-mean A +0.534 B +0.475 | gap 0.058 CONVERGED
+  sw   8000: inst A +0.58 B +0.43 | run-mean A +0.537 B +0.473 | gap 0.064 CONVERGED
+  sw   9000: inst A +0.60 B +0.40 | run-mean A +0.532 B +0.467 | gap 0.065 CONVERGED
+  sw  10000: inst A +0.55 B +0.42 | run-mean A +0.528 B +0.470 | gap 0.059 CONVERGED
+  sw  11000: inst A +0.65 B +0.48 | run-mean A +0.533 B +0.465 | gap 0.068 CONVERGED
+  sw  12000: inst A +0.58 B +0.38 | run-mean A +0.537 B +0.464 | gap 0.073 CONVERGED
+  sw  13000: inst A +0.57 B +0.48 | run-mean A +0.537 B +0.465 | gap 0.072 CONVERGED
+  sw  14000: inst A +0.55 B +0.46 | run-mean A +0.538 B +0.458 | gap 0.080 CONVERGED
+  sw  15000: inst A +0.49 B +0.35 | run-mean A +0.537 B +0.450 | gap 0.086 CONVERGED
+  sw  16000: inst A +0.54 B +0.45 | run-mean A +0.533 B +0.448 | gap 0.085 CONVERGED
+  sw  17000: inst A +0.52 B +0.46 | run-mean A +0.532 B +0.445 | gap 0.087 CONVERGED
+  sw  18000: inst A +0.55 B +0.48 | run-mean A +0.533 B +0.448 | gap 0.085 CONVERGED
+  sw  19000: inst A +0.49 B +0.49 | run-mean A +0.531 B +0.450 | gap 0.081 CONVERGED
+  sw  20000: inst A +0.60 B +0.42 | run-mean A +0.534 B +0.454 | gap 0.080 CONVERGED
+  FINAL: run-mean A +0.534 B +0.454 gap 0.080 CONVERGED (q_tol 0.1) (1199s)
+saved -> reports/logs-2026-07-14/bcy_shrinkage_R2.0.pt

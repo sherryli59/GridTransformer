@@ -1,0 +1,10 @@
+bank: 7 frames x 4 replicas, rho=1.2000 T=0.55; paper fit q~(2.2)=0.415
+cav 0 (n=54, bnd=469): q~(t=0) 0.807 -> PLATEAU +0.356+-0.006  [paper 0.415]  (400s)
+cav 1 (n=55, bnd=467): q~(t=0) 1.229 -> PLATEAU +0.710+-0.009  [paper 0.415]  (406s)
+cav 2 (n=57, bnd=467): q~(t=0) 0.984 -> PLATEAU +0.484+-0.009  [paper 0.415]  (425s)
+cav 3 (n=47, bnd=478): q~(t=0) 0.718 -> PLATEAU +0.369+-0.005  [paper 0.415]  (364s)
+cav 4 (n=53, bnd=476): q~(t=0) 0.851 -> PLATEAU +0.376+-0.006  [paper 0.415]  (392s)
+cav 5 (n=58, bnd=470): q~(t=0) 0.729 -> PLATEAU +0.456+-0.006  [paper 0.415]  (426s)
+
+=== R=2.2 REFERENCE-BASIN plateau: mean +0.459 +- 0.050 over 6 cavities | paper Table-I fit 0.415 ===
+saved -> reports/logs-2026-07-15/ref_plateau_R22.pt

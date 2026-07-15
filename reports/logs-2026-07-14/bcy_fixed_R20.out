@@ -26,3 +26,20 @@
   sw  30000: inst A +0.58 B +0.58 | run-mean A +0.572 B +0.513 | gap 0.059 CONVERGED | exch min/med 0.35/0.37 trips 6
   sw  40000: inst A +0.40 B +0.58 | run-mean A +0.555 B +0.529 | gap 0.026 CONVERGED | exch min/med 0.35/0.37 trips 8
   sw  50000: inst A +0.49 B +0.46 | run-mean A +0.534 B +0.545 | gap 0.011 CONVERGED | exch min/med 0.36/0.37 trips 13
+  sw  60000: inst A +0.68 B +0.49 | run-mean A +0.522 B +0.528 | gap 0.006 CONVERGED | exch min/med 0.36/0.37 trips 17
+  sw  70000: inst A +0.58 B +0.58 | run-mean A +0.520 B +0.536 | gap 0.016 CONVERGED | exch min/med 0.36/0.37 trips 18
+  sw  80000: inst A +0.65 B +0.43 | run-mean A +0.529 B +0.537 | gap 0.008 CONVERGED | exch min/med 0.36/0.37 trips 19
+  sw  90000: inst A +0.52 B +0.55 | run-mean A +0.533 B +0.527 | gap 0.005 CONVERGED | exch min/med 0.36/0.37 trips 23
+  sw 100000: inst A +0.65 B +0.46 | run-mean A +0.534 B +0.520 | gap 0.014 CONVERGED | exch min/med 0.36/0.37 trips 27
+  sw 110000: inst A +0.55 B +0.55 | run-mean A +0.533 B +0.525 | gap 0.008 CONVERGED | exch min/med 0.36/0.37 trips 27
+  sw 120000: inst A +0.52 B +0.52 | run-mean A +0.532 B +0.525 | gap 0.008 CONVERGED | exch min/med 0.36/0.37 trips 28
+  sw 130000: inst A +0.46 B +0.52 | run-mean A +0.525 B +0.527 | gap 0.001 CONVERGED | exch min/med 0.36/0.37 trips 29
+  sw 140000: inst A +0.52 B +0.46 | run-mean A +0.524 B +0.525 | gap 0.001 CONVERGED | exch min/med 0.36/0.37 trips 33
+  sw 150000: inst A +0.58 B +0.49 | run-mean A +0.523 B +0.523 | gap 0.000 CONVERGED | exch min/med 0.36/0.37 trips 33
+  sw 160000: inst A +0.58 B +0.43 | run-mean A +0.524 B +0.518 | gap 0.006 CONVERGED | exch min/med 0.36/0.37 trips 36
+  sw 170000: inst A +0.62 B +0.58 | run-mean A +0.523 B +0.518 | gap 0.005 CONVERGED | exch min/med 0.36/0.38 trips 40
+  sw 180000: inst A +0.55 B +0.52 | run-mean A +0.519 B +0.518 | gap 0.001 CONVERGED | exch min/med 0.36/0.37 trips 43
+  sw 190000: inst A +0.40 B +0.52 | run-mean A +0.520 B +0.522 | gap 0.003 CONVERGED | exch min/med 0.36/0.38 trips 44
+  sw 200000: inst A +0.68 B +0.55 | run-mean A +0.519 B +0.530 | gap 0.011 CONVERGED | exch min/med 0.36/0.38 trips 45
+  FINAL: run-mean A +0.519 B +0.530 gap 0.011 CONVERGED (q_tol 0.1) (15359s)
+saved -> reports/logs-2026-07-14/bcy_shrinkage_R2.0.pt

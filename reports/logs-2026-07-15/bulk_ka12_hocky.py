@@ -74,44 +74,45 @@ def pair_row(Xf, Sf, rows_b, rows_i, xi_new):
 def sweep(Xf, Sf, beta, gen):
     """One MC sweep: checkerboard displacement (N attempts) + species swaps."""
     acc = 0; att = 0
-    cell = (Xf / CW).long().clamp(0, NCELL - 1)                      # [B,N,3]
-    cid = cell[..., 0] * NCELL * NCELL + cell[..., 1] * NCELL + cell[..., 2]
-    for rnd in range(N // (8 * B) * B // B):                         # ~N/8 rounds x 8 parities interleaved
+    NC3 = NCELL ** 3
+    for rnd in range(N // 8):                                        # TRUE sweep: N attempts (was N/32: 4x bug)
         par = rnd % 8
         px, py, pz = par & 1, (par >> 1) & 1, (par >> 2) & 1
-        # active cells of this parity: 2x2x2 = 8 cells per replica
-        rows_b, rows_i = [], []
-        for b in range(B):
-            for cx in range(px, NCELL, 2):
-                for cy in range(py, NCELL, 2):
-                    for cz in range(pz, NCELL, 2):
-                        c_id = cx * NCELL * NCELL + cy * NCELL + cz
-                        members = (cid[b] == c_id).nonzero().squeeze(1)
-                        if len(members):
-                            rows_b.append(b)
-                            rows_i.append(int(members[torch.randint(len(members), (1,), generator=gen, device=dev)]))
-        if not rows_b:
+        cell = (Xf / CW).long().clamp(0, NCELL - 1)
+        cid = cell[..., 0] * NCELL * NCELL + cell[..., 1] * NCELL + cell[..., 2]   # [B,N]
+        par_of = ((cid // (NCELL * NCELL)) % 2) + 2 * ((cid // NCELL) % 2 % 2) * 0  # placeholder
+        cx = cid // (NCELL * NCELL); cy = (cid // NCELL) % NCELL; cz = cid % NCELL
+        active = ((cx % 2) == px) & ((cy % 2) == py) & ((cz % 2) == pz)             # [B,N]
+        # vectorized one-particle-per-(replica,cell): random keys, segmented argmax over cells
+        keys = torch.rand(B, N, device=dev, generator=gen).masked_fill(~active, -1.0)
+        seg = torch.full((B, NC3), -1.0, device=dev)
+        seg = seg.scatter_reduce(1, cid, keys, reduce="amax", include_self=True)     # max key per cell
+        selected = active & (keys == seg.gather(1, cid)) & (keys > 0)                # [B,N] winners
+        rb, ri = selected.nonzero(as_tuple=True)
+        if len(rb) == 0:
             continue
-        rb = torch.tensor(rows_b, device=dev); ri = torch.tensor(rows_i, device=dev)
         xi_old = Xf[rb, ri]
         prop = xi_old + DELTA * (2 * torch.rand(len(rb), 3, device=dev, generator=gen) - 1)
         dU = pair_row(Xf, Sf, rb, ri, torch.remainder(prop, L)) - pair_row(Xf, Sf, rb, ri, xi_old)
         a = torch.rand(len(rb), device=dev, generator=gen).log() < -beta * dU
         Xf[rb[a], ri[a]] = torch.remainder(prop[a], L)
         acc += int(a.sum()); att += len(rb)
-    # species swaps (batched sequential-safe: one pair per replica per attempt round)
+    # species swaps: one pair per replica per round, batched across replicas (B-parallel, exact:
+    # different replicas are independent systems)
     for _ in range(SWAPS_PER_SWEEP // B):
+        ia = torch.zeros(B, dtype=torch.long, device=dev); ib = torch.zeros(B, dtype=torch.long, device=dev)
         for b in range(B):
-            A_ = (Sb[b] == 0).nonzero().squeeze(1); B_ = (Sb[b] == 1).nonzero().squeeze(1)
-            ia = int(A_[torch.randint(len(A_), (1,), generator=gen, device=dev)])
-            ib = int(B_[torch.randint(len(B_), (1,), generator=gen, device=dev)])
-            rb2 = torch.tensor([b, b], device=dev); ri2 = torch.tensor([ia, ib], device=dev)
-            e_old = pair_row(Xf, Sf, rb2, ri2, Xf[rb2, ri2]).sum()
-            Sf[b, ia], Sf[b, ib] = Sf[b, ib].clone(), Sf[b, ia].clone()
-            e_new = pair_row(Xf, Sf, rb2, ri2, Xf[rb2, ri2]).sum()
-            if not (torch.rand((), device=dev, generator=gen).log() < -beta * (e_new - e_old)):
-                Sf[b, ia], Sf[b, ib] = Sf[b, ib].clone(), Sf[b, ia].clone()   # revert
-    return acc / max(att, 1)
+            A_ = (Sf[b] == 0).nonzero().squeeze(1); B_ = (Sf[b] == 1).nonzero().squeeze(1)
+            ia[b] = A_[torch.randint(len(A_), (1,), generator=gen, device=dev)]
+            ib[b] = B_[torch.randint(len(B_), (1,), generator=gen, device=dev)]
+        arB = torch.arange(B, device=dev)
+        rb2 = torch.cat([arB, arB]); ri2 = torch.cat([ia, ib])
+        e_old = pair_row(Xf, Sf, rb2, ri2, Xf[rb2, ri2]).view(2, B).sum(0)
+        Sp = Sf.clone(); Sp[arB, ia] = Sf[arB, ib]; Sp[arB, ib] = Sf[arB, ia]
+        e_new = pair_row(Xf, Sp, rb2, ri2, Xf[rb2, ri2]).view(2, B).sum(0)
+        a2 = torch.rand(B, device=dev, generator=gen).log() < -beta * (e_new - e_old)
+        Sf = torch.where(a2[:, None], Sp, Sf)
+    return Sf, acc / max(att, 1)
 
 
 def full_U(Xf, Sf):
@@ -122,7 +123,7 @@ bank = []; t0 = time.time()
 for phase, (T_, SW_) in enumerate([(T_HEAL, SW_HEAL), (T_PROD, SW_PROD)]):
     beta = 1.0 / T_
     for sw in range(1, SW_ + 1):
-        ar = sweep(Xb, Sb, beta, g)
+        Sb, ar = sweep(Xb, Sb, beta, g)
         if sw % 100 == 0:
             U = full_U(Xb, Sb) / N
             print(f"phase {'HEAL' if phase == 0 else 'PROD'} T={T_} sw {sw:>5}: U/N = "

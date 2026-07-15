@@ -1,0 +1,17 @@
+K=  1 sel=random mean_acc=3.526e-04 median beta*dU=+132.5
+K=  1 sel=blob   mean_acc=9.085e-08 median beta*dU=+120.6
+K=  2 sel=random mean_acc=8.054e-19 median beta*dU=+326.4
+K=  2 sel=blob   mean_acc=2.208e-09 median beta*dU=+293.1
+K=  3 sel=random mean_acc=0.000e+00 median beta*dU=+634.1
+K=  3 sel=blob   mean_acc=1.856e-08 median beta*dU=+495.8
+K=  4 sel=random mean_acc=0.000e+00 median beta*dU=+1120.6
+K=  4 sel=blob   mean_acc=1.825e-32 median beta*dU=+698.5
+K=  6 sel=random mean_acc=0.000e+00 median beta*dU=+2133.2
+K=  6 sel=blob   mean_acc=0.000e+00 median beta*dU=+1195.9
+K=  8 sel=random mean_acc=0.000e+00 median beta*dU=+4423.4
+K=  8 sel=blob   mean_acc=0.000e+00 median beta*dU=+1682.3
+K= 12 sel=random mean_acc=0.000e+00 median beta*dU=+8566.5
+K= 12 sel=blob   mean_acc=0.000e+00 median beta*dU=+4103.3
+K= 16 sel=random mean_acc=0.000e+00 median beta*dU=+14146.1
+K= 16 sel=blob   mean_acc=0.000e+00 median beta*dU=+8246.3
+PLOT: /mnt/ssd/GridTransformer/reports/logs-2026-07-14/d1_forecast_T0.0963.png

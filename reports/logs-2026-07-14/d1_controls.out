@@ -1,0 +1,7 @@
+identity K= 1 median beta*dU=+0.000 median dU=+0.0000e+00 max|dU|=0.0000e+00
+identity K= 4 median beta*dU=+0.000 median dU=+0.0000e+00 max|dU|=0.0000e+00
+identity K= 8 median beta*dU=+0.000 median dU=+0.0000e+00 max|dU|=0.0000e+00
+IDENTITY control: max|dU| over all K/trials = 0.000e+00 -> PASS (fp noise)
+jitter   K= 1 median beta*dU=+0.536 median dU=+5.1582e-02 max|dU|=6.7520e-01
+jitter   K= 4 median beta*dU=+3.944 median dU=+3.7989e-01 max|dU|=1.0838e+00
+jitter   K= 8 median beta*dU=+7.347 median dU=+7.0765e-01 max|dU|=2.5168e+00

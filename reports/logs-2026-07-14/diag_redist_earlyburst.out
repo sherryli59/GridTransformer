@@ -1,0 +1,9 @@
+=== EARLY-BURST q~ (redist on FRESH pop at lam=0.05, then anneal) MB=48 R=2.0 ===
+N_dwell=2 N_burst=6 N_try=8. prior single-burst 1-island q~=0.03; data bracket ~0.96
+       mode   seed |      q~ burst_acc   sec
+   baseline  alien |   0.019     0.000    28
+   baseline   data |   1.080     0.000    27
+ earlyburst  alien |   0.076     0.003   191
+ earlyburst   data |   1.075     0.000   190
+
+ALIEN: baseline 0.019 -> earlyburst 0.076  (data bracket ~1.075); rise => crossing works

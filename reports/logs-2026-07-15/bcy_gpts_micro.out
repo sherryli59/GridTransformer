@@ -1,0 +1,2 @@
+BCY G_PTS sweep: rho=1.2 T_BOT=0.51 | bank 11fr x 4rep | R=[2.0] SW=6000 target 1 converged/R | NR=21 replicas
+  R=2.0 cav 0 (n=42): q_c=+0.469+-0.037 (n_qc 3) | certif gap 0.109 NOT-CONV | exch-med 0.32 (1406s)

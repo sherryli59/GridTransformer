@@ -21,17 +21,20 @@ torch.set_grad_enabled(False)
 
 dev = "cuda"; RCTX = 2.5; RHO = 1.149
 R = float(sys.argv[1]) if len(sys.argv) > 1 else 2.0
-LAM_LADDER = [1.0, 0.9825, 0.9640, 0.9450, 0.9250, 0.9050, 0.8975, 0.8900, 0.8825, 0.8750, 0.8700, 0.8650, 0.8600]
-T_BOT, T_TOP = 0.5, 0.8; NR = len(LAM_LADDER); NCH = 2; LAM_TOP = LAM_LADDER[-1]
+# VERBATIM BCY Table IV (T=0.51, R=2.0): 11 replicas, (T_dec, lam_dec) = (1.0, 0.8)
+LAM_LADDER = [1.0000, 0.9825, 0.9640, 0.9450, 0.9250, 0.9050, 0.8850, 0.8640, 0.8423, 0.8200, 0.7960]
+T_BOT = 0.5; T_DEC = 1.0; LAM_DEC = 0.8
+NR = len(LAM_LADDER); NCH = 1; LAM_TOP = LAM_LADDER[-1]
 SW = int(__import__('sys').argv[2]) if len(__import__('sys').argv) > 2 else 60000
-EXCH = 10; REC = 100; RAND_SW = 3000; Q_TOL = 0.1; STEP_MAX = 0.3
+EXCH_MEAN = 1000; REC = 1000; RAND_SW = 10000; Q_TOL = 0.1; STEP_MAX = 0.3  # per-PAIR Poisson exchange @1/1000 sw (their 'every 1000 sweeps on average'; per-pair reading)
 L_HOCKY = (0.06 / RHO) ** (1.0 / 3.0); BULK_HOCKY = 0.06; RCUT_F = 2.5
 OUT = f"reports/logs-2026-07-14/bcy_shrinkage_R{R}.pt"
 ART = "liquid_coupling_flow/artifacts"
 D = torch.load(f"{ART}/ka3d_dataset_N4096_T0.5_rho1.15.pt", map_location=dev, weights_only=False)
 X, S, L = D["x"].to(dev).float(), D["s"].to(dev).long(), float(D["L"])
 LAMs = torch.tensor(LAM_LADDER, device=dev)
-Ts = T_BOT + (T_TOP - T_BOT) * (1.0 - LAMs) / (1.0 - LAM_TOP)          # their coupled (T,lam) relation
+Ts = T_BOT + (T_DEC - T_BOT) * (1.0 - LAMs) / (1.0 - LAM_DEC)          # their exact linear (T,lam) relation
+T_TOP = float(Ts[-1])
 BETAs = 1.0 / Ts
 
 
@@ -127,8 +130,8 @@ for ci in range(24):
     Xm = xin[None].expand(B, n, 3).clone()                                   # all walkers at reference
     g = torch.Generator(device=dev).manual_seed(1500 + ci)
     # init-B randomization at TOP conditions (T=1.0, lambda=0.6) for RAND_SW sweeps, stack-B walkers only
-    top_beta = torch.full((B,), 1.0 / T_TOP, device=dev)
-    top_lam = torch.full((B,), LAM_TOP, device=dev)
+    top_beta = torch.full((B,), 1.0 / 1.00, device=dev)          # their randomization state:
+    top_lam = torch.full((B,), 0.60, device=dev)                   # (T=1.00, lam=0.6), 1e4 sweeps
     lam_pair_save = cav.lam_pair; beta_save = cav.beta
     cav.lam_pair = cav._pair(top_lam); cav.beta = top_beta
     Bmask = torch.zeros(B, dtype=torch.bool, device=dev); Bmask.view(2, NR, NCH)[1] = True
@@ -160,9 +163,10 @@ for ci in range(24):
             dU = cav.row_U(Xm, i, xi_new) - cav.row_U(Xm, i, Xm[:, i])
             acc = ok & (torch.rand(B, device=dev, generator=g).log() < -cav.beta * dU)
             Xm[acc, i] = xi_new[acc]; U = torch.where(acc, U + dU, U)
-        if sw % EXCH == 0:                                                    # adjacent (T,lam) exchange
+        att = (torch.rand(NR - 1, generator=g, device=dev) < 1.0 / EXCH_MEAN).nonzero().squeeze(1).tolist()
+        if att:                                                               # sparse Poisson per-pair exchange
             Xr = Xm.view(2, NR, NCH, n, 3)
-            for r in range((sw // EXCH) % 2, NR - 1, 2):
+            for r in att:
                 xa = Xr[:, r].reshape(-1, n, 3); xb = Xr[:, r + 1].reshape(-1, n, 3)
                 la_v = torch.full((xa.shape[0],), float(LAMs[r]), device=dev)
                 lb_v = torch.full((xa.shape[0],), float(LAMs[r + 1]), device=dev)

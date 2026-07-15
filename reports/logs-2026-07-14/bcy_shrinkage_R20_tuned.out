@@ -1,0 +1,4 @@
+=== cav 0 (n=45, R=2.0) BCY shrinkage-PT: NR=13 (T 0.5-1.0 x lam 1.0-0.6), SW=60000, B randomized 3000sw@top ===
+  sw   1000: inst A +0.86 B +0.40 | run-mean A +0.799 B +0.495 | gap 0.304  | exch min/med 0.00/0.00 trips 0
+  sw   2000: inst A +0.88 B +0.52 | run-mean A +0.779 B +0.472 | gap 0.307  | exch min/med 0.00/0.00 trips 0
+  sw   3000: inst A +0.78 B +0.48 | run-mean A +0.802 B +0.480 | gap 0.322  | exch min/med 0.00/0.00 trips 0

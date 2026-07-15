@@ -1,0 +1,14 @@
+=== cav 0 (n=45)  U_IS/n after 200-step quench ===
+  data-seed (ref basin) :  -53.250 +- 0.000
+  alien all             : 3245301984919552.000 +- 22484112992370688.000   sep/noise 1.0
+  alien HITS (q~>0.3) n= 3:  -47.517 +- 7.755
+  alien non-hits        : 3461655593746432.000 +- 23221492305100800.000
+  corr(q~_seed, U_IS) over alien walkers: -0.13   (strongly negative => U_IS recognizes)
+  q~ of alien hits after quench: -0.017 (held?)
+=== cav 1 (n=35)  U_IS/n after 200-step quench ===
+  data-seed (ref basin) :  -67.643 +- 0.000
+  alien all             : 146400.375 +- 696711.688   sep/noise 1.5
+  alien HITS (q~>0.3) n= 2:  286.498 +- 499.514
+  alien non-hits        : 152753.141 +- 711330.125
+  corr(q~_seed, U_IS) over alien walkers: -0.13   (strongly negative => U_IS recognizes)
+  q~ of alien hits after quench: 0.435 (held?)

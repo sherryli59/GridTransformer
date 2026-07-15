@@ -116,10 +116,11 @@ or U/N below threshold), reporting **energy-evals-to-equilibrate**:
      BLOCK incremental energy (extend `du_move` to K particles: recompute the union of locally-affected
      2/3-body terms once, not K separate calls). Measures decorrelation per expensive eval.
 
-**Phase E — eRSI-seeded SMC (use when the proposal's one-shot ESS is inadequate; FLOW-DENSITY-FREE bath).**
-The AR proposal will be imperfect — do NOT lean on it as a standalone IS proposal. Use the **eRSI flow already
-trained for mW** as the SEED, and correct with a thermal SMC whose kernel is LOCAL and whose bath does NOT
-contain the flow density.
+**Phase E — eRSI-seeded SMC (use when the proposal's one-shot ESS is inadequate; ONE q0 CORRECTION,
+then a FLOW-DENSITY-FREE bath).** The AR proposal will be imperfect — do NOT lean on it as a standalone IS
+proposal. Use the **eRSI flow already trained for mW** as the proposal at the initial endpoint, correct it
+exactly once, and then use a thermal SMC whose kernel is LOCAL and whose per-rung bath does NOT contain the
+flow density.
 
 *Hard prior result to respect (`mw-ersi-flow-arc`, measured 2026-07-11):* the eRSI-seeded **geometric** SMC
 (bath π_λ ∝ q_eRSI^{1−λ} · e^{−λβU}) was **3.75–4.4× WORSE than seed-only** for mW sampling. Root cause:
@@ -127,19 +128,46 @@ q_eRSI in every weight ⇒ a full reverse-ODE per single-site score (~5.7 s) ⇒
 σ ~ N^{−1/2} ⇒ ~N× worse diffusion per energy-eval, growing with N. **Keep the flow density OUT of the per-rung
 bath.** The flow's proven value is (a) SEEDS (2.4–3× head-start, size-flat) and (b) exact logZ — nothing else.
 
-*The procedure that avoids the trap:*
-- **Seed:** draw M walkers from the eRSI flow (energy-free) — this is the head-start asset.
-- **Path — thermal β-ladder, flow-free bath:** π_λ ∝ e^{−β_λ U_mW}, β_λ: β_hot → β_target (needed only for a
-  supercooled target; at ambient a single rung / no anneal usually suffices). Incremental log-weight =
-  −(β_λ_t − β_λ_{t−1}) · U_mW(x_i) — needs **only U**, never the flow density.
-- **Resample** walkers when ESS < ½ (multinomial; reset weights).
+*The exact procedure that avoids the trap:*
+- **Seed + ONE initial q0 correction:** jointly draw `(x_i, log q_eRSI(x_i))` from the eRSI forward flow.
+  For its own samples this is the forward-composed log density/Jacobian from the SAME ODE pass — no reverse
+  ODE. Evaluate `U_i` once and initialize
+  `log w_i = -β_hot U_mW(x_i) - log q_eRSI(x_i)` (up to a shared constant). This correction is mandatory:
+  eRSI positions alone are not exact draws from `π_βhot`, and a finite π-invariant mutation does not magically
+  erase their bias. Resample the corrected walkers (multinomial; reset weights) before the thermal ladder.
+- **Path — thermal β-ladder, flow-density-free PER-RUNG bath:** `π_t ∝ exp(-β_t U_mW)`,
+  `β_t: β_hot → β_target` (needed only for a supercooled target; at ambient the corrected initial endpoint is
+  already the target). For every later rung,
+  `Δ log w_i = -(β_t - β_{t-1}) U_mW(x_i)`: only `U`, never `q_eRSI`. Thus the flow density appears exactly
+  once at initialization and never in a mutation acceptance or thermal-rung weight.
+- **Resample** walkers when ESS < ½ (multinomial; reset weights); do one endpoint resample if an unweighted
+  population is required for ordinary histograms / `g(r)`.
 - **Mutate:** several sweeps of a LOCAL, π_λ-invariant kernel — single-particle displacement scored with
   `du_move` (O(neighbours), N-parallel), and/or the ported ka3d local block-MTM. Local + incremental-energy is
   the whole point (this is what the global-move version got wrong).
-- **Endpoint:** at β_target the population is correct **by π-invariance** — the local moves heal the eRSI's
-  residual bias (proven: the population is an endpoint property, correct even when the *path's* logZ is
-  mutation-limited/biased). For exact **logZ**, use the eRSI's exact-Jacobian one-shot IS bound (its measured
-  WIN), NOT this SMC path's logZ (systematically low across seeds — shared mutation bias).
+- **Endpoint:** the weighted population targets `π_βtarget` because the initial importance correction and all
+  later thermal increments are correct; the local kernels preserve each rung target and improve mixing.
+  π-invariance alone is NOT a finite-time correction for biased seeds. For exact **logZ**, continue to use the
+  eRSI exact-Jacobian one-shot IS bound (its measured WIN), NOT this SMC path's logZ (systematically low across
+  seeds — shared mutation bias).
+
+**Phase E MEASURED VERDICT (2026-07-14, `mw_thermal_smc.py`, N=64 M=512 β 9.5→10.381):** implemented exactly
+as specified and it is **correct but NOT an efficiency win** — endpoint U/N −1.6270 vs ref −1.6274 (KS p=0.85,
+g(r) rmse 0.012), but the **initial q0 correction is degenerate: ESS 1.53/512, resample → 8 unique parents**,
+so 720 target sweeps were needed to re-diversify (≈ a from-scratch relaxation; seed-only reference ~3k
+site-evals/cfg vs ~46k here). This was PREDICTABLE from `mw-ersi-flow-arc`: δ ≈ 1.0 nats/particle × N=64 ⇒
+weight spread ~e^64 ⇒ any M ≪ e^64 gives ESS→1; and the curse is temperature-scaled ("entry reweight collapses
+at EVERY β") so **retuning β_hot cannot fix it**. The exact correction *converts the flow's one asset (512
+diverse near-equilibrium seeds) into 8 near-copies* — it spends the head start to buy exactness-in-weights.
+**Operational split going forward:**
+- **E1 — equilibration (the efficiency arm): seed-only, NO initial q0 correction.** Uncorrected eRSI seeds +
+  local `du_move` MCMC (β-ladder only if supercooled). Asymptotically exact by the π-invariant kernel alone;
+  the eq-bracket result (hot arms converge onto the same distribution, KS 0.08–0.11) plus THIS run's endpoint
+  agreement are the evidence the healed population is right. This is the proven 2.4–3× arm.
+- **E2 — certification/logZ (the exactness arm): the one-q0-correction SMC above.** Its ESS~1/M degeneracy is
+  acceptable HERE because logZ bounds/certification don't need population diversity. Run it as a *check* on a
+  small M, not as the sampler.
+Do not pair the exact q0 correction with the equilibration arm again — the two goals need different arms.
 
 *Which arm when:*
 - **Ambient / ergodic:** eRSI-seed + local-move MCMC (no bath at all) — the proven 2.4–3× winner; the β-ladder
@@ -148,9 +176,27 @@ bath.** The flow's proven value is (a) SEEDS (2.4–3× head-start, size-flat) a
   modes), still local-move + incremental-energy.
 - **Free energy:** eRSI exact-Jacobian IS bound (not the SMC path).
 
-*Energy-eval accounting:* M · (Σ_rungs 1 reweight-eval + n_sweep · local-move evals). eRSI seed ⇒ short ladder;
-local moves ⇒ incremental energy ⇒ cost-weighted evals stay well under a plain-MC decorrelation — **provided the
-flow density never enters the kernel.** If it does, you reproduce the 3.75–4.4× loss.
+*Accounting:* one forward flow/Jacobian pass at initialization (not an mW energy eval), then
+`M · (Σ_rungs 1 reweight-eval + n_sweep · local-move evals)`. eRSI seed ⇒ short ladder; local moves ⇒
+incremental energy. The hard prohibition is **repeated/per-rung/reverse-ODE flow scoring**. The single joint
+initial `log q_eRSI` is required for correctness and is not the 3.75–4.4× geometric-SMC failure mode.
+
+*Exact implementation + measured N=64 validation (2026-07-14):* `mw_thermal_smc.py` now performs the joint
+forward `(x,logq0)` draw, mandatory initial correction/resample, energy-only β increments, ESS resampling,
+local `du_move` mutation, and an endpoint resample. `mw_thermal_smc_continue.py` continues an unweighted
+endpoint with the same exact target-invariant kernel; `mw_thermal_smc_diagnostics.py` plots relaxation,
+data-scaled energy histograms, and `g(r)`. The production check used M=512, β=9.5→10.381229 (4 rungs), then
+720 target sweeps. The one-time initial correction was extremely degenerate (ESS 1.53/512; 8 unique parents),
+so the first 24 target sweeps were visibly insufficient (U/N −1.6043 vs data −1.6274). After the explicit
+target continuation it relaxed to U/N −1.62704 vs −1.62738, energy KS=0.0283 (p=0.851), W1=0.00092, and
+`g(r)` RMSE=0.0124 / max|Δ|=0.0380. The final cost was 25,329,664 weighted energy units (49,472 per walker,
+about 773 N=64 sweeps). The initialization was split into 8 memory-bounded forward/Jacobian batches, but
+remained one logical q0-correction stage; per-rung flow-density evaluations=0 and reverse-ODE calls=0.
+
+Artifacts: `liquid_coupling_flow/mw/artifacts/mw_thermal_smc_N64_exact_M512_relaxed720.pt` and
+`reports/logs-2026-07-14/mw_thermal_smc_N64_exact_M512_relaxed720_energy_gr.{png,pt}`. Interpretation: the
+scheme is distributionally correct after enough local healing, but this particular q0→βhot correction is
+not an efficiency win because its tiny initial ESS forces a long recovery. Do not hide that recovery budget.
 
 ## 3. Energy-eval accounting (the metric — get this right)
 
@@ -183,9 +229,12 @@ objective trains on the model's own rollout, which is what actually governs MH a
 
 - **Do NOT use a FLOW-DENSITY-IN-BATH (geometric) SMC for equilibration.** The mW campaign measured that path
   **3.75-4.4× WORSE than seed-only** (`mw-ersi-flow-arc`) — q_eRSI in every weight forces a reverse-ODE per
-  site ⇒ global moves ⇒ N× diffusion penalty. If the proposal's ESS is too low for seed-only IS, use the
-  **Phase E eRSI-seeded, FLOW-FREE-bath, LOCAL-move SMC** instead (β-ladder; eRSI as seed only). For **free
-  energy (logZ)** use the eRSI exact-Jacobian one-shot IS bound, not the SMC path's (biased-low) logZ.
+  site ⇒ global moves ⇒ N× diffusion penalty. And the one-q0-correction variant is now ALSO measured
+  (Phase E verdict above): exact but degenerate at initialization (ESS 1.53/512, 8 parents, 720 heal sweeps) —
+  the extensive δ·N logq-mismatch collapses the entry reweight at every β. For **equilibration** use E1
+  (seed-only warm-started population MCMC — asymptotically exact via the π-invariant kernel, and the efficient
+  arm); reserve the exact one-correction SMC for E2 certification and the eRSI exact-Jacobian IS bound for
+  **logZ** (not the SMC path's biased-low logZ).
 - **Incremental block energy is mandatory** — if you full-recompute `mw_energy` per proposed block, the
   accounting flips negative. Extend `du_move` to a block (single union recompute).
 - **Reward must be repulsive-only + capped** (`clamp(u,0,cap)`) — capping only the max rewards over-packing

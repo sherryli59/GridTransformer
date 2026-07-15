@@ -1,0 +1,10 @@
+  cav 0 isl 0: qbar +0.342 (sd 0.048, ess_min 0.01)
+  cav 0 isl 1: qbar +0.359 (sd 0.057, ess_min 0.00)
+  cav 0 isl 2: qbar +0.252 (sd 0.052, ess_min 0.00)
+  cav 0 isl 3: qbar +0.421 (sd 0.057, ess_min 0.00)
+=== cav 0 PLAIN-SMC q(R=2.0) = +0.344 +- 0.060 over 4 islands (255s)  [certified cav1: 0.49+-0.04]
+  cav 1 isl 0: qbar +0.289 (sd 0.055, ess_min 0.00)
+  cav 1 isl 1: qbar +0.353 (sd 0.042, ess_min 0.00)
+  cav 1 isl 2: qbar +0.429 (sd 0.048, ess_min 0.01)
+  cav 1 isl 3: qbar +0.310 (sd 0.046, ess_min 0.00)
+=== cav 1 PLAIN-SMC q(R=2.0) = +0.345 +- 0.054 over 4 islands (200s)  [certified cav1: 0.49+-0.04]

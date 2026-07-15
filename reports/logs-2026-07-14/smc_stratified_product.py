@@ -21,11 +21,14 @@ torch.set_grad_enabled(False)
 
 dev = "cuda"; RCTX = 2.5; BETA = 2.0; RHO = 1.149
 R = float(sys.argv[1]) if len(sys.argv) > 1 else 2.0
+SEED = int(sys.argv[2]) if len(sys.argv) > 2 else 0
+T_ARG = int(sys.argv[3]) if len(sys.argv) > 3 else 24
 POOL = 4096; BATCH = 512; K = 8; ART = "liquid_coupling_flow/artifacts"
 L_HOCKY = (0.06 / RHO) ** (1.0 / 3.0); BULK_HOCKY = 0.06
 THR_CAND, THR_MID = 0.30, 0.15; M_CAND, M_MID, M_BULK = 24, 16, 24
-T = 24; NMUT = 3; POLISH = 20; AVG = 15; DISP = 0.10
-OUT = f"reports/logs-2026-07-14/smc_stratified_R{R}.pt"
+NMUT = 3; POLISH = 20; AVG = 15; DISP = 0.10
+T = T_ARG
+OUT = f"reports/logs-2026-07-14/smc_stratified_R{R}_s{SEED}_T{T_ARG}.pt"
 m = KA3DScaffoldEBMBatched(cat_bins=128, cat_range=2.5, knn_pot=24, use_demand=True).to(dev)
 m.load_state_dict(torch.load(f"{ART}/ka3d_cavity_ebm3ax_rho115_rl_Rext_knn24_lam05_best.pt",
                              map_location=dev, weights_only=False)["state_dict"], strict=False)
@@ -114,7 +117,7 @@ for ci in range(24):
     xout = _mic(p["x_out"], c, L); bm = xout.norm(dim=-1) < (R + RCTX); bnd, sb = xout[bm], p["s_out"][bm]
     n = xo.shape[0]; allm = torch.ones(n, dtype=torch.bool, device=dev)
     a = fixed_ball_scaffold(n, R, dev, xo.dtype, ordering=m.scaffold_order)
-    g = torch.Generator(device=dev).manual_seed(1300 + ci)
+    g = torch.Generator(device=dev).manual_seed(1300 + ci + 7777 * SEED)
     allX, allS, allq = [], [], []
     for b0 in range(0, POOL, BATCH):
         nb = min(BATCH, POOL - b0)
@@ -134,7 +137,7 @@ for ci in range(24):
         if len(sidx) == 0:
             continue
         Ms = min(caps[sname], len(sidx))
-        pick = sidx[torch.randperm(len(sidx), generator=torch.Generator().manual_seed(3))[:Ms]]
+        pick = sidx[torch.randperm(len(sidx), generator=torch.Generator().manual_seed(3 + SEED))[:Ms]]
         lz, qb, qsd, emin = stratum_smc(allX[pick].to(dev), allS[pick].to(dev), bnd, sb, R, n, a, xin, g)
         srows[sname] = {"mass": len(sidx) / POOL, "M": Ms, "logZ": lz, "qbar": qb, "q_sd": qsd, "ess_min": emin}
         print(f"  {sname:>5}: mass {len(sidx)/POOL:.4f}  M {Ms:>3}  logZ {lz:+9.2f}  qbar {qb:+.3f}+-{qsd:.3f}  "

@@ -1,0 +1,12 @@
+=== cav 0 (n=45, R=2.0) STRATIFIED SMC: sizes {'cand': 1131, 'mid': 2554, 'bulk': 411} ===
+   cand: mass 0.2761  M  24  logZ  +4301.40  qbar +0.394+-0.042  ess_min 0.00
+    mid: mass 0.6235  M  16  logZ  +4232.10  qbar +0.400+-0.045  ess_min 0.01
+   bulk: mass 0.1003  M  24  logZ  +4138.90  qbar +0.366+-0.055  ess_min 0.00
+  q(R=2.0) STRATIFIED-SMC = +0.394   stratum weights {'cand': 1.0, 'mid': 0.0, 'bulk': 0.0}  (112s)
+=== cav 1 (n=35, R=2.0) STRATIFIED SMC: sizes {'cand': 997, 'mid': 2699, 'bulk': 400} ===
+   cand: mass 0.2434  M  24  logZ  +4357.07  qbar +0.434+-0.041  ess_min 0.00
+    mid: mass 0.6589  M  16  logZ  +4310.32  qbar +0.364+-0.038  ess_min 0.00
+   bulk: mass 0.0977  M  24  logZ  +4338.65  qbar +0.333+-0.045  ess_min 0.01
+  q(R=2.0) STRATIFIED-SMC = +0.434   stratum weights {'cand': 1.0, 'mid': 0.0, 'bulk': 0.0}  (91s)
+saved -> reports/logs-2026-07-14/smc_stratified_R2.0_s1_T24.pt
+VALIDATE vs PT baseline brackets (R2.0 cav0 [0.393,0.797], cav1 [0.403,0.515]; R2.2 cav0 [0.278,0.649]) and Hocky 0.33@R2.2 / 0.29@R2.4.

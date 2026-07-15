@@ -1,0 +1,12 @@
+HOCKY bank: 5 frames x 4 replicas, rho=1.2000 T=0.55
+=== cav 0 (n=52, R=2.2) FRENKEL-LADD: 42 raw clusters -> keeping 3 families sizes [5, 3, 2] ===
+  fam0 REF U_IS/n -55.858 members   5 | bF -4937.1 (teth -691.0) q_b +0.608+-0.050 | G1 equi 1.00 G3 tail 0.03
+  fam1     U_IS/n -55.200 members   3 | bF -4831.2 (teth -647.3) q_b +0.376+-0.055 | G1 equi 0.96 G3 tail 0.06
+  fam2     U_IS/n -55.298 members   2 | bF -4863.9 (teth -670.6) q_b +0.280+-0.041 | G1 equi 0.96 G3 tail 0.03
+  G2 cross-overlap fam0-fam1: +0.422 (LOW => distinct families)
+  G2 cross-overlap fam0-fam2: +0.296 (LOW => distinct families)
+  G2 cross-overlap fam1-fam2: +0.327 (LOW => distinct families)
+  q(R=2.2) FRENKEL-LADD = +0.608  (w = [1.0, 0.0, 0.0], w_ref 1.000; dbF vs best: [0.0, 105.9, 73.2]) (1398s)
+=== cav 1 (n=55, R=2.2) FRENKEL-LADD: 22 raw clusters -> keeping 3 families sizes [27, 2, 1] ===
+  fam0 REF U_IS/n -50.926 members  27 | bF -4717.5 (teth -719.5) q_b +0.665+-0.055 | G1 equi 0.96 G3 tail 0.03
+  fam1     U_IS/n -50.585 members   2 | bF -4624.2 (teth -660.4) q_b +0.282+-0.040 | G1 equi 0.91 G3 tail 0.04

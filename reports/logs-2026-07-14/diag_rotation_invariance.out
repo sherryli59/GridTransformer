@@ -1,0 +1,4 @@
+=== joint-rotation invariance of q0 (per-particle |dlogq0|) ===
+  mean 0.3214  median 0.2287  max 0.8776  nats/particle
+  (exactness-leak floor ~0.02/particle; if ~ that => model is joint-rotation-invariant => rotation-tail deployable)
+  => NOT invariant enough -- rotation-tail would be low-acceptance (MH still exact); needs order-agnostic retrain

@@ -1,0 +1,8 @@
+=== cav 0 (n=45) strata: cand 149/4096  mid 678->16  bulk 3269->32  walkers 197 ===
+  q(R) STRATIFIED-AIS = -0.027   (ESS 1.0/197; weight shares cand/mid/bulk = 1.00/0.00/0.00)
+  data-seed bracket  = +0.546 +- 0.429   [PT ref ~0.63 core-metric]
+  walker q~ range: min -0.057 max +0.570  (190s)
+=== cav 1 (n=35) strata: cand 57/4096  mid 558->16  bulk 3481->32  walkers 105 ===
+  q(R) STRATIFIED-AIS = +0.062   (ESS 1.0/105; weight shares cand/mid/bulk = 1.00/0.00/0.00)
+  data-seed bracket  = +0.295 +- 0.277   [PT ref ~0.63 core-metric]
+  walker q~ range: min -0.057 max +0.450  (104s)

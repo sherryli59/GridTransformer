@@ -1,0 +1,11 @@
+=== q0 coverage: score the REFERENCE under q0 vs alien full draws (R=2.0, M=64) ===
+ cav    n | logq0_ref logq0_alien (mean+-sd)      z |   U_ref  U_alien | s_ref - s_alien
+   0   45 |     134.4      139.6 +-  13.9   -0.4 | -2363.2 109982172441477120.0 |          +669.5
+   1   35 |      91.5      110.1 +-  10.8   -1.7 | -2347.3 29239353344.0 |          +355.7
+   2   38 |     115.6      111.9 +-  12.3    0.3 | -2368.2 42413242449920.0 |          +528.3
+   3   37 |     109.7      113.9 +-  11.5   -0.4 | -2368.1 2845816651776.0 |          +332.5
+
+z = (logq0_ref - mean)/sd of alien logq0. z within ~+-2 => ref configs are NOT pointwise
+under-weighted (wall = basin MASS + kernel reach). s_ref - max s_alien >> 0 => an independence
+full-regen MH WOULD accept a ref proposal once drawn; barrier = draw frequency only.
+summary: z mean -0.5; (s_ref - best alien s) mean +471.5 nats

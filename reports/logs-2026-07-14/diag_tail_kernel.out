@@ -1,0 +1,7 @@
+=== Morton-TAIL (clean q0-Gibbs?) vs interior BLOB, single-try acceptance, K=10 ===
+ lambda | tail_acc blob_acc
+  0.000 |    0.948    0.000
+  0.020 |    0.594    0.281
+  0.100 |    0.583    0.344
+
+Tail ~1.0 at lambda=0 => clean conditional resample (principled); blob ~0 => AR-context tax.

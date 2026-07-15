@@ -1,0 +1,9 @@
+=== LARGE-SUFFIX resample as crossing move vs interior BLOB (R=2.0, MB=48) ===
+suffix size random [n/2, 3n/4]; NMUT=4. data bracket = upper
+    mode   seed |      q~    acc   sec
+    blob  alien |   0.127  0.018    86
+    blob   data |   1.007  0.033    83
+  suffix  alien |   0.129  0.070   122
+  suffix   data |   0.584  0.118   120
+
+ALIEN: blob 0.127 -> suffix 0.129  (data bracket blob 1.007 / suffix 0.584)

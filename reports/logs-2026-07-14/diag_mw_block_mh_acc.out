@@ -1,0 +1,8 @@
+=== mW cold block-MH acceptance (beta=10.381, ckpt step 750, RL lam=0.02) ===
+    R    K | acc_1try acc_mtm8 |  dU/prop  dU_acc |  lqr-lqf
+ 1.25    5 |    0.000    0.000 |     7.00     nan |    -1.17
+ 1.55    9 |    0.000    0.000 |   134.75     nan |     0.42
+  2.0   15 |    0.000    0.000 |    54.63     nan |    -4.46
+
+cost note: one du_block on [B=16] costs counter units 1456 total this R
+acc>~5% at any R => transformer kernel LIVE for the thermal SMC/MC (Phase D arm 3).

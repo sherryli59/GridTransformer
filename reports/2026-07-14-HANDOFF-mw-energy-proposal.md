@@ -169,6 +169,20 @@ diverse near-equilibrium seeds) into 8 near-copies* — it spends the head start
   small M, not as the sampler.
 Do not pair the exact q0 correction with the equilibration arm again — the two goals need different arms.
 
+**Cost-regime nuance (matters if this is ported beyond mW / to pricier potentials):** the 3.75–4.4×
+geometric-arm negative is denominated in ENERGY EVALS (site-evals/cfg), so a pricier energy does NOT rescue
+that measured (global-move) arm — the ratio is currency-invariant. BUT the *forcing* to global moves was a
+wall-clock argument (reverse-ODE ~5.7 s per logq0 score ≫ a cheap mW du_move). If energy evals dominate all
+flow costs (DFT-like), **geometric entry bridge + ODE-scored LOCAL moves becomes viable**: per local move the
+energy cost is still only du_move, the q0 score is energy-free — an entry path that is exact, ESS-preserving
+(no one-shot collapse / 8-parent destruction), and energy-eval-competitive. Untested (was wall-clock-insane
+for mW); the right corner-(2) design there. Third axis = DECOMPOSABILITY: with no du_move analogue (DFT — a
+full eval per move regardless of locality), the local-move advantage collapses entirely and the design flips
+to few-but-excellent LARGE learned proposals (one precious eval each; flow-in-bath then costs nothing extra
+in evals). Regime table: cheap+decomposable → E1 seed-only + local sweeps (mW today); expensive+decomposable
+→ geometric bridge + ODE-scored local moves; expensive+non-decomposable → learned large-block proposals,
+flow density freely in the bath.
+
 *Which arm when:*
 - **Ambient / ergodic:** eRSI-seed + local-move MCMC (no bath at all) — the proven 2.4–3× winner; the β-ladder
   adds little.

@@ -1,0 +1,3 @@
+[torus] per-config log q0 spread: std median=8.749 p90=11.228  range median=37.756 p90=51.856 (nats)
+[O_h]   per-config log q0 spread: std median=9.078 p90=12.386  range median=25.520 p90=37.340 (nats)
+PLOT: /mnt/ssd/GridTransformer/reports/logs-2026-07-14/d2_shift_spread.png

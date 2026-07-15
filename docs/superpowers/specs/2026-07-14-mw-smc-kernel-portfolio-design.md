@@ -47,6 +47,17 @@ region is pinned across a run, and no per-region particle count is conserved (tw
 canonical single-blob constraint). Validity: a cycle/mixture of π_λ-invariant kernels is
 π_λ-invariant; irreducibility is a property of the composition, not any single member.
 
+**P↔S conveyor (suffix-coupled two-blob):** the suffix is a fixed *spatial region* (tail cells of
+the curve — `canonical_order` sorts by cell rank), so bias the two-blob move to place one blob in
+the prefix region and one in the suffix region. Material exchanged across the P/S boundary means
+each subsequent suffix resample re-thermalizes new content — over cycles, prefix material rotates
+through the near-Gibbs suffix sampler. Requirement: blob-pair selection drawn from *fixed* spatial
+distributions (one per region) so forward/reverse selection probabilities cancel; the regen and
+ratio are the standard two-blob machinery. Optional aggressive variant: rigid content *swap*
+(exchange blob contents by rigid translation, symmetric proposal, MH'd) — transports structure,
+not just count; low-to-mid λ only. The conveyor needs no q0 shift-invariance, making it the
+fallback if D2 kills re-rooting.
+
 **Re-rooted suffix (option, gated by D2):** redraw the ordering origin (torus shift) per move and
 resample the suffix of the shifted ordering — the suffix subset then varies spatially per move.
 This is exact only with the full q0 ratio (proposal is the conditional of q0_shifted, not q0);
@@ -74,7 +85,7 @@ Nothing in the repo does this yet.
 - **Fine-tune if D1 demands it:** free-run capped-energy REINFORCE on the block model per the
   2026-07-14 handoff (reuse `train_capacity_rl.py` pattern, mW energy swapped in, no species).
 - **Main experiment — bridge ablations at D0's T\*:** SMC with mutation portfolios
-  {single-site only} vs {+suffix} vs {+two-blob} vs {+both}, alien/data-seed bracket style,
+  {single-site only} vs {+suffix} vs {+two-blob} vs {+both} vs {+both, conveyor placement}, alien/data-seed bracket style,
   scored in total SW evals vs the plain-MC baseline to matched depth. Save all configs,
   per-walker observables, and eval counters (record-simulation-data directive); checkpoint each
   rung to disk as it completes (checkpoint-incrementally directive).

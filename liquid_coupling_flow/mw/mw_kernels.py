@@ -37,6 +37,7 @@ def is_canonical(x, L):
 
 def suffix_move(x, U, q0_model, m_lo, m_hi, lam, beta, L, gen):
     """One suffix-resample MH move on every walker. x MUST be canonical storage."""
+    assert bool(is_canonical(x, L).all()), "suffix_move requires canonical storage"
     B, N, _ = x.shape
     m = int(torch.randint(m_lo, m_hi + 1, (1,), device=x.device, generator=gen).item())
     with torch.no_grad():

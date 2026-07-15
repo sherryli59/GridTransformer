@@ -1,0 +1,2 @@
+mosaic: 4 replicas of 2x2x2 x distinct configs; N=4096 L=15.0566 rho=1.2000
+phase HEAL T=0.8 sw   100: U/N = -5.1193 -5.1626 -5.2349 -5.1454  disp-acc 0.13  (476s)

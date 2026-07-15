@@ -1,0 +1,8 @@
+=== cav 0 (n=45, R=2.0) FRENKEL-LADD: 1 raw clusters -> keeping 1 families sizes [65] ===
+  fam0 REF U_IS/n -53.250 members  65 | bF -4449.7 (teth -295.2) q_b +0.823+-0.069 | G1 equi 0.30 G3 tail 0.03
+  q(R=2.0) FRENKEL-LADD = +0.823  (w = [1.0], w_ref 1.000; dbF vs best: [0.0]) (256s)
+=== cav 1 (n=35, R=2.0) FRENKEL-LADD: 1 raw clusters -> keeping 1 families sizes [63] ===
+  fam0 REF U_IS/n -67.643 members  63 | bF -4482.0 (teth -243.2) q_b +0.515+-0.092 | G1 equi 0.30 G3 tail 0.02
+  q(R=2.0) FRENKEL-LADD = +0.515  (w = [1.0], w_ref 1.000; dbF vs best: [0.0]) (201s)
+saved -> reports/logs-2026-07-14/frenkel_ladd_R2.0.pt
+Referee: cav1 dual-init bracket [0.45,0.53]; fixed-ladder PT in flight for cav0.

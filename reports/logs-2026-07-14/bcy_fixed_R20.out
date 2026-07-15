@@ -1,0 +1,28 @@
+=== cav 0 (n=45, R=2.0) BCY shrinkage-PT: NR=21 (T 0.5-1.0 x lam 1.0-0.6), SW=200000, B randomized 10000sw@top ===
+  sw  10000: inst A +0.92 B +0.65 | run-mean A +0.805 B +0.646 | gap 0.160  | exch min/med 0.26/0.30 trips 2
+  sw  20000: inst A +0.92 B +0.77 | run-mean A +0.762 B +0.606 | gap 0.157  | exch min/med 0.27/0.29 trips 4
+  sw  30000: inst A +0.71 B +0.62 | run-mean A +0.773 B +0.646 | gap 0.127  | exch min/med 0.25/0.30 trips 8
+  sw  40000: inst A +0.77 B +0.71 | run-mean A +0.785 B +0.650 | gap 0.135  | exch min/med 0.25/0.30 trips 9
+  sw  50000: inst A +0.86 B +0.58 | run-mean A +0.788 B +0.656 | gap 0.133  | exch min/med 0.25/0.30 trips 10
+  sw  60000: inst A +0.80 B +0.58 | run-mean A +0.786 B +0.656 | gap 0.130  | exch min/med 0.26/0.30 trips 11
+  sw  70000: inst A +0.83 B +0.86 | run-mean A +0.781 B +0.691 | gap 0.090 CONVERGED | exch min/med 0.26/0.30 trips 13
+  sw  80000: inst A +0.74 B +0.83 | run-mean A +0.771 B +0.696 | gap 0.075 CONVERGED | exch min/med 0.26/0.29 trips 15
+  sw  90000: inst A +0.74 B +0.92 | run-mean A +0.770 B +0.713 | gap 0.057 CONVERGED | exch min/med 0.26/0.29 trips 16
+  sw 100000: inst A +0.74 B +0.77 | run-mean A +0.781 B +0.718 | gap 0.063 CONVERGED | exch min/med 0.26/0.29 trips 17
+  sw 110000: inst A +0.83 B +0.74 | run-mean A +0.776 B +0.718 | gap 0.059 CONVERGED | exch min/med 0.26/0.29 trips 19
+  sw 120000: inst A +0.86 B +0.83 | run-mean A +0.782 B +0.743 | gap 0.040 CONVERGED | exch min/med 0.26/0.29 trips 21
+  sw 130000: inst A +0.68 B +0.86 | run-mean A +0.779 B +0.754 | gap 0.025 CONVERGED | exch min/med 0.26/0.29 trips 22
+  sw 140000: inst A +0.83 B +0.89 | run-mean A +0.787 B +0.742 | gap 0.044 CONVERGED | exch min/med 0.26/0.29 trips 24
+  sw 150000: inst A +0.74 B +0.95 | run-mean A +0.794 B +0.747 | gap 0.047 CONVERGED | exch min/med 0.26/0.29 trips 25
+  sw 160000: inst A +0.83 B +0.65 | run-mean A +0.796 B +0.746 | gap 0.049 CONVERGED | exch min/med 0.26/0.29 trips 25
+  sw 170000: inst A +0.86 B +0.71 | run-mean A +0.790 B +0.747 | gap 0.042 CONVERGED | exch min/med 0.26/0.29 trips 26
+  sw 180000: inst A +0.74 B +0.80 | run-mean A +0.795 B +0.748 | gap 0.046 CONVERGED | exch min/med 0.26/0.29 trips 27
+  sw 190000: inst A +0.74 B +0.68 | run-mean A +0.790 B +0.747 | gap 0.043 CONVERGED | exch min/med 0.26/0.29 trips 27
+  sw 200000: inst A +0.80 B +0.83 | run-mean A +0.788 B +0.752 | gap 0.036 CONVERGED | exch min/med 0.25/0.29 trips 28
+  FINAL: run-mean A +0.788 B +0.752 gap 0.036 CONVERGED (q_tol 0.1) (19373s)
+=== cav 1 (n=35, R=2.0) BCY shrinkage-PT: NR=21 (T 0.5-1.0 x lam 1.0-0.6), SW=200000, B randomized 10000sw@top ===
+  sw  10000: inst A +0.52 B +0.52 | run-mean A +0.462 B +0.511 | gap 0.049 CONVERGED | exch min/med 0.33/0.37 trips 0
+  sw  20000: inst A +0.58 B +0.49 | run-mean A +0.569 B +0.505 | gap 0.064 CONVERGED | exch min/med 0.35/0.37 trips 3
+  sw  30000: inst A +0.58 B +0.58 | run-mean A +0.572 B +0.513 | gap 0.059 CONVERGED | exch min/med 0.35/0.37 trips 6
+  sw  40000: inst A +0.40 B +0.58 | run-mean A +0.555 B +0.529 | gap 0.026 CONVERGED | exch min/med 0.35/0.37 trips 8
+  sw  50000: inst A +0.49 B +0.46 | run-mean A +0.534 B +0.545 | gap 0.011 CONVERGED | exch min/med 0.36/0.37 trips 13

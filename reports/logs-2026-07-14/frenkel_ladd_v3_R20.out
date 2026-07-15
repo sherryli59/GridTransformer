@@ -1,0 +1,18 @@
+=== cav 0 (n=45, R=2.0) FRENKEL-LADD: 8 raw clusters -> keeping 3 families sizes [57, 1, 1] ===
+  fam0 REF U_IS/n -53.250 members  57 | bF -4463.1 (teth -572.7) q_b +0.791+-0.047 | G1 equi 0.94 G3 tail 0.03
+  fam1     U_IS/n -52.201 members   1 | bF -4327.5 (teth -531.5) q_b +0.380+-0.070 | G1 equi 0.86 G3 tail 0.08
+  fam2     U_IS/n -52.505 members   1 | bF -4327.4 (teth -504.0) q_b +0.341+-0.066 | G1 equi 0.86 G3 tail 0.05
+  G2 cross-overlap fam0-fam1: +0.380 (LOW => distinct families)
+  G2 cross-overlap fam0-fam2: +0.346 (LOW => distinct families)
+  G2 cross-overlap fam1-fam2: +0.233 (LOW => distinct families)
+  q(R=2.0) FRENKEL-LADD = +0.791  (w = [1.0, 0.0, 0.0], w_ref 1.000; dbF vs best: [0.0, 135.6, 135.7]) (857s)
+=== cav 1 (n=35, R=2.0) FRENKEL-LADD: 5 raw clusters -> keeping 3 families sizes [61, 1, 1] ===
+  fam0 REF U_IS/n -67.643 members  61 | bF -4498.0 (teth -464.6) q_b +0.535+-0.068 | G1 equi 0.95 G3 tail 0.02
+  fam1     U_IS/n -66.370 members   1 | bF -4389.7 (teth -445.4) q_b +0.467+-0.079 | G1 equi 0.93 G3 tail 0.05
+  fam2     U_IS/n -66.149 members   1 | bF -4374.7 (teth -445.8) q_b +0.400+-0.052 | G1 equi 0.96 G3 tail 0.04
+  G2 cross-overlap fam0-fam1: +0.349 (LOW => distinct families)
+  G2 cross-overlap fam0-fam2: +0.359 (LOW => distinct families)
+  G2 cross-overlap fam1-fam2: +0.295 (LOW => distinct families)
+  q(R=2.0) FRENKEL-LADD = +0.535  (w = [1.0, 0.0, 0.0], w_ref 1.000; dbF vs best: [0.0, 108.3, 123.3]) (680s)
+saved -> reports/logs-2026-07-14/frenkel_ladd_R2.0.pt
+Referee: cav1 dual-init bracket [0.45,0.53]; fixed-ladder PT in flight for cav0.

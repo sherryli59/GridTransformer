@@ -1,0 +1,19 @@
+ref IS: U/n = -53.250
+ cfg   U_IS/n  z_depth IS-ovl vs refIS thermal q~
+   0  -53.220   +0.030           0.983      0.799
+   1  -53.237   +0.013           1.137      0.830
+
+same family (dU~0, ovl>0.45) => H1; different deep minima (dU~0, ovl<0.3) => H2 (missing anchors)
+Traceback (most recent call last):
+  File "<stdin>", line 48, in <module>
+TypeError: 'float' object is not iterable
+
+LOW-phase snapshots (q<0.45): 5 of 400
+  sweep stk inst q~ |   U_IS/n  d_depth  IS-ovl
+   1000   B    0.25 |  -52.575   +0.675   0.186
+   2000   B    0.43 |  -52.808   +0.442   0.431
+   3000   B    0.40 |  -52.884   +0.367   0.400
+  13000   B    0.40 |  -53.052   +0.198   0.646
+  57000   B    0.40 |  -53.169   +0.081   0.707
+
+dU~0 & ovl>0.45 => H1 (same family, thermally broad); dU small & ovl<0.3 => H2 (missing families)

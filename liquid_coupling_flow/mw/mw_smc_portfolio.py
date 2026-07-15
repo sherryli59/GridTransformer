@@ -19,7 +19,7 @@ no manual counter calls are needed here or in mw_kernels.py.
 Per-rung persistence: the running result dict is saved after EVERY rung (CLAUDE.md durability).
 """
 from __future__ import annotations
-import math, os, time, torch
+import math, os, time, warnings, torch
 
 from liquid_coupling_flow.mw.mw_energy import mw_energy, count_energy_evals
 from liquid_coupling_flow.mw.mw_smc import (ess, next_lambda, _resample, mutation_sweeps,
@@ -111,6 +111,8 @@ def smc_run_portfolio(q0_model, block_model, N, L, beta, B=64, ess_target=0.6,
             stats = {"rung": rung, "lam": lam, "ess": cur_ess, "dlam": dlam}
 
             # (3) lambda-scheduled portfolio mutations (each pi_lambda-invariant) ------------
+            # Disable a kernel via lam_max=0.0 (lam >= LAM_FLOOR from rung 1 so the branch never
+            # runs); moves_per_rung=0 with lam_max>0 would pay a wasted full-batch lq0 refresh.
             if lam < lam_sfx:
                 x = recanonicalize(x, L)          # suffix_move ASSERTS canonical storage on entry
                 accs = []
@@ -134,6 +136,28 @@ def smc_run_portfolio(q0_model, block_model, N, L, beta, B=64, ess_target=0.6,
             x, U, lq0, mstats = mutation_sweeps(x, base, lam, beta, L, n_site_sweeps, step, gen)
             x = recanonicalize(x, L)             # canonical storage; lift-invariant so lq0 stands
             stats["site_acc"] = mstats["acc"]
+
+            # (5) rung-end exactness guards: carried U (du_move-accumulated) and lq0 must match a
+            # full-population fresh re-eval. Both are matched-batch here: mutation_sweeps resynced
+            # lq0 with full-batch-B base.log_q evals (mw_smc.py:47/62), and mw_energy is
+            # batch-independent — so a trip signals a real threading bug, not float noise.
+            # Soft guard (warn + refresh, smc_run philosophy): the weight path stays untouched.
+            # The fresh mw_energy goes through the ledger (B*N units, noted as guard_evals so
+            # Task 8 can subtract it); model forwards for lq0 are free in the metric.
+            U_fresh = mw_energy(x, L)
+            u_drift = float((U - U_fresh).abs().max())
+            if u_drift > 1e-3 * max(1.0, float(U_fresh.abs().max())):
+                warnings.warn(f"portfolio rung {rung}: carried U drifted {u_drift:.3e} from fresh "
+                              f"re-eval (lam={lam:.4f}); refreshing carried U")
+                U = U_fresh
+            lq_fresh = base.log_q(x)
+            lq_drift = float((lq0 - lq_fresh).abs().max())
+            if lq_drift > 1e-3:
+                warnings.warn(f"portfolio rung {rung}: carried lq0 drifted {lq_drift:.3e} from "
+                              f"fresh re-eval (lam={lam:.4f}); refreshing carried lq0")
+                lq0 = lq_fresh
+            stats["u_drift"], stats["lq0_drift"] = u_drift, lq_drift
+            stats["guard_evals"] = B * N
             stats["cost_units"] = counter.as_dict()["cost_units"]
 
             history.append(stats)

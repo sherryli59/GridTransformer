@@ -29,12 +29,13 @@ from liquid_coupling_flow.ka_energy import ka_energy
 torch.set_grad_enabled(False)
 
 dev = "cuda"; RCTX = 2.5; L_BOX = 0.368; RHO = 1.149; BULK = RHO * L_BOX ** 3; BIGL = 100.0  # L_BOX = legacy config-anchored metric, kept for comparison
-K = 8; R = 2.0; POOL = 4096; BATCH = 512; ART = "liquid_coupling_flow/artifacts"
+import sys as _sys
+K = 8; R = float(_sys.argv[1]) if len(_sys.argv) > 1 else 2.0; POOL = 4096; BATCH = 512; ART = "liquid_coupling_flow/artifacts"
 NCH = 2; SW = 250; REPORT = 25; BURN_FRAC = 0.4; DISP = 0.10; QSTEPS = 400
 BETAS = torch.cat([torch.linspace(0.4, 1.4, 5), torch.linspace(1.5, 2.0, 11)]).to(dev)   # F2
 NR = len(BETAS)
 L_HOCKY = (0.06 / RHO) ** (1.0 / 3.0); BULK_HOCKY = 0.06
-OUT = "reports/logs-2026-07-14/pt_dualseed_v3_hocky.pt"
+OUT = f"reports/logs-2026-07-14/pt_dualseed_v3_hocky_R{R}.pt"
 m = KA3DScaffoldEBMBatched(cat_bins=128, cat_range=2.5, knn_pot=24, use_demand=True).to(dev)
 m.load_state_dict(torch.load(f"{ART}/ka3d_cavity_ebm3ax_rho115_rl_Rext_knn24_lam05_best.pt",
                              map_location=dev, weights_only=False)["state_dict"], strict=False)
@@ -121,7 +122,7 @@ for ci in range(24):
         nb = min(BATCH, POOL - b0)
         Xa, Sa, _ = m.sample_block_b(xo[None].expand(nb, n, 3).clone(), so[None].expand(nb, n).clone(),
                                      allm, bnd, sb, R, gen=g)
-        Xc = Xa.cpu(); allq += [qtil_one(Xc[k], xin.cpu(), R) for k in range(nb)]
+        Xc = Xa.cpu(); allq += [q_hocky(Xc[k], xin.cpu(), R) - BULK_HOCKY for k in range(nb)]
         allX.append(Xc); allS.append(Sa.cpu())
     allX = torch.cat(allX); allS = torch.cat(allS); allq = torch.tensor(allq)
     top = allq.topk(16).indices
@@ -132,7 +133,7 @@ for ci in range(24):
     memb = []
     for k in range(16):
         z = (float(utop[k]) - uref) / sig
-        qis = qtil_one(Xtop_is[k].cpu(), Xref_is[0].cpu(), R)
+        qis = q_hocky(Xtop_is[k].cpu(), Xref_is[0].cpu(), R) - BULK_HOCKY
         if z < 3.0 and qis > 0.4:
             memb.append(int(top[k]))
     seed_idx = (memb + [int(t) for t in top])[:NCH]                        # members first, fill with best

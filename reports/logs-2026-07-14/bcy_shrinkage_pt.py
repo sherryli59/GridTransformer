@@ -21,14 +21,17 @@ torch.set_grad_enabled(False)
 
 dev = "cuda"; RCTX = 2.5; RHO = 1.149
 R = float(sys.argv[1]) if len(sys.argv) > 1 else 2.0
-T_BOT, T_TOP, LAM_TOP = 0.5, 1.0, 0.6; NR = 10; NCH = 2
-SW = 20000; EXCH = 10; REC = 100; RAND_SW = 3000; Q_TOL = 0.1; STEP_MAX = 0.3
+LAM_LADDER = [1.0, 0.9825, 0.9640, 0.9450, 0.9250, 0.9050, 0.8975, 0.8900, 0.8825, 0.8750, 0.8700, 0.8650, 0.8600]
+T_BOT, T_TOP = 0.5, 0.8; NR = len(LAM_LADDER); NCH = 2; LAM_TOP = LAM_LADDER[-1]
+SW = int(__import__('sys').argv[2]) if len(__import__('sys').argv) > 2 else 60000
+EXCH = 10; REC = 100; RAND_SW = 3000; Q_TOL = 0.1; STEP_MAX = 0.3
 L_HOCKY = (0.06 / RHO) ** (1.0 / 3.0); BULK_HOCKY = 0.06; RCUT_F = 2.5
 OUT = f"reports/logs-2026-07-14/bcy_shrinkage_R{R}.pt"
 ART = "liquid_coupling_flow/artifacts"
 D = torch.load(f"{ART}/ka3d_dataset_N4096_T0.5_rho1.15.pt", map_location=dev, weights_only=False)
 X, S, L = D["x"].to(dev).float(), D["s"].to(dev).long(), float(D["L"])
-Ts = torch.linspace(T_BOT, T_TOP, NR, device=dev); LAMs = torch.linspace(1.0, LAM_TOP, NR, device=dev)
+LAMs = torch.tensor(LAM_LADDER, device=dev)
+Ts = T_BOT + (T_TOP - T_BOT) * (1.0 - LAMs) / (1.0 - LAM_TOP)          # their coupled (T,lam) relation
 BETAs = 1.0 / Ts
 
 
@@ -144,6 +147,10 @@ for ci in range(24):
     print(f"=== cav {ci} (n={n}, R={R}) BCY shrinkage-PT: NR={NR} (T 0.5-1.0 x lam 1.0-0.6), SW={SW}, "
           f"B randomized {RAND_SW}sw@top ===", flush=True)
     qA_run, qB_run, traj = [], [], []
+    ex_acc = torch.zeros(NR - 1); ex_try = torch.zeros(NR - 1)
+    tag = torch.arange(NR, device=dev)[None, :, None].expand(2, NR, NCH).clone()  # replica-flow labels
+    seen_top = torch.zeros(2, NR, NCH, dtype=torch.bool, device=dev)
+    trips = 0
     for sw in range(1, SW + 1):
         for i in torch.randperm(n, generator=g, device=dev).tolist():
             l = STEP_MAX * torch.rand(B, 1, device=dev, generator=g)
@@ -164,10 +171,17 @@ for ci in range(24):
                 dlog = -BETAs[r] * (Uab - Uaa) - BETAs[r + 1] * (Uba - Ubb)
                 swp = torch.rand(xa.shape[0], device=dev, generator=g).log() < dlog
                 swp2 = swp.view(2, NCH)
+                ex_acc[r] += float(swp2.float().sum()); ex_try[r] += swp2.numel()
                 for stk in range(2):
                     for ch in range(NCH):
                         if swp2[stk, ch]:
                             tmp = Xr[stk, r, ch].clone(); Xr[stk, r, ch] = Xr[stk, r + 1, ch]; Xr[stk, r + 1, ch] = tmp
+                            t1 = int(tag[stk, r, ch]); tag[stk, r, ch] = tag[stk, r + 1, ch]; tag[stk, r + 1, ch] = t1
+                            s1 = bool(seen_top[stk, r, ch]); seen_top[stk, r, ch] = seen_top[stk, r + 1, ch]; seen_top[stk, r + 1, ch] = s1
+                # round-trip bookkeeping: a walker identity at the TOP marks seen_top; reaching BOTTOM with it counts
+                seen_top[:, NR - 1, :] = True
+                done = seen_top[:, 0, :].clone()
+                trips += int(done.sum()); seen_top[:, 0, :] = False
             Xm = Xr.reshape(B, n, 3); U = cav.full_U(Xm)
         if sw % REC == 0:
             Xr = Xm.view(2, NR, NCH, n, 3)
@@ -179,8 +193,10 @@ for ci in range(24):
             traj.append({"sweep": sw, "qA": qA, "qB": qB, "runA": rA, "runB": rB,
                          "X_bot": Xr[:, 0].cpu().clone()})
             if sw % (REC * 10) == 0:
+                ea = (ex_acc / ex_try.clamp(min=1))
                 print(f"  sw {sw:>6}: inst A {qA:+.2f} B {qB:+.2f} | run-mean A {rA:+.3f} B {rB:+.3f} "
-                      f"| gap {abs(rA-rB):.3f} {'CONVERGED' if abs(rA-rB) < Q_TOL else ''}", flush=True)
+                      f"| gap {abs(rA-rB):.3f} {'CONVERGED' if abs(rA-rB) < Q_TOL else ''} "
+                      f"| exch min/med {float(ea.min()):.2f}/{float(ea.median()):.2f} trips {trips}", flush=True)
                 results[(ci, "traj")] = traj; torch.save(results, OUT)
     half = len(qA_run) // 2
     rA, rB = st.mean(qA_run[half:]), st.mean(qB_run[half:])

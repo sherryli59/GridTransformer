@@ -1,0 +1,11 @@
+=== RELAX-BEFORE-SELECT SMC (M=192, N_relax=12@lam=0.08, R=2.0) ===
+basin mass p per cavity: 0.089/0.050/0.0004/0.030 -> seeds contain ~17/10/0/6 hits
+ cav         mode | hits_seed hits_relax corr_draw corr_relax q_deep32 |   q_end   q_max
+   0     baseline |        17          -     -0.07        nan      nan |  -0.002   0.032  (51s)
+   0  relax_first |        17         14     -0.07      -0.07    0.063 |   0.092   0.122  (67s)
+   1     baseline |        10          -     -0.04        nan      nan |  -0.013   0.361  (41s)
+   1  relax_first |        10         14     -0.04      -0.08    0.100 |  -0.027   0.002  (54s)
+   2     baseline |         0          -      0.07        nan      nan |   0.002   0.002  (44s)
+   2  relax_first |         0          0      0.07       0.07   -0.003 |  -0.010   0.062  (58s)
+   3     baseline |         9          -     -0.07        nan      nan |   0.325   0.450  (43s)
+   3  relax_first |         9          8     -0.07       0.05    0.052 |  -0.032  -0.027  (56s)

@@ -21,12 +21,18 @@ torch.set_grad_enabled(False)
 
 dev = "cuda"; RCTX = 2.5; RHO = 1.149
 R = float(sys.argv[1]) if len(sys.argv) > 1 else 2.0
-# VERBATIM BCY Table IV (T=0.51, R=2.0): 11 replicas, (T_dec, lam_dec) = (1.0, 0.8)
-LAM_LADDER = [1.0000, 0.9825, 0.9640, 0.9450, 0.9250, 0.9050, 0.8850, 0.8640, 0.8423, 0.8200, 0.7960]
+# BCY Table IV (T=0.51, R=2.0) MIDPOINT-DENSIFIED (probe: their spacing gives dlog ~ -9 at OUR state
+# point -> marginal; halving dlam -> ~-4.5 -> 5-15% acc; their caveat endorses local retuning)
+_BASE = [1.0000, 0.9825, 0.9640, 0.9450, 0.9250, 0.9050, 0.8850, 0.8640, 0.8423, 0.8200, 0.7960]
+LAM_LADDER = []
+for _i, _v in enumerate(_BASE):
+    LAM_LADDER.append(_v)
+    if _i + 1 < len(_BASE):
+        LAM_LADDER.append(0.5 * (_v + _BASE[_i + 1]))
 T_BOT = 0.5; T_DEC = 1.0; LAM_DEC = 0.8
 NR = len(LAM_LADDER); NCH = 1; LAM_TOP = LAM_LADDER[-1]
 SW = int(__import__('sys').argv[2]) if len(__import__('sys').argv) > 2 else 60000
-EXCH_MEAN = 1000; REC = 1000; RAND_SW = 10000; Q_TOL = 0.1; STEP_MAX = 0.3  # per-PAIR Poisson exchange @1/1000 sw (their 'every 1000 sweeps on average'; per-pair reading)
+EXCH_MEAN = 10;  # dense exchange (efficiency-only deviation, same invariant) REC = 1000; RAND_SW = 10000; Q_TOL = 0.1; STEP_MAX = 0.3  # per-PAIR Poisson exchange @1/1000 sw (their 'every 1000 sweeps on average'; per-pair reading)
 L_HOCKY = (0.06 / RHO) ** (1.0 / 3.0); BULK_HOCKY = 0.06; RCUT_F = 2.5
 OUT = f"reports/logs-2026-07-14/bcy_shrinkage_R{R}.pt"
 ART = "liquid_coupling_flow/artifacts"
@@ -86,6 +92,9 @@ class Cavity:
         B = Xm.shape[0]
         xa = torch.cat([Xm, self.bnd[None].expand(B, self.m, 3)], 1)         # [B,Nt,3]
         d2 = torch.cdist(xa, xa) ** 2
+        eye = torch.eye(self.Nt, dtype=torch.bool, device=Xm.device)
+        d2 = d2.masked_fill(eye[None], 1e12)                       # mask self-pairs BEFORE the LJ (float32
+        # overflow at r2~0 made diag inf -> inf-inf = NaN -> every exchange silently rejected)
         lam_pair = self.lam_pair if lam_vec is None else self._pair(lam_vec)
         sig = self.sig0[None] * lam_pair[:, None, :]              # column-factor lam~ of partner j; only
         # mobile-row blocks are summed below, so (i mobile, j mobile)->lam, (i mobile, j pinned)->(1+lam)/2

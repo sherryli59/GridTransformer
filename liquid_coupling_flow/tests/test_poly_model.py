@@ -1,8 +1,28 @@
 import numpy as np
-import pytest
 from liquid_coupling_flow.poly.model import (XC, C0, C2, C4, draw_sigmas, pair_v, sigma_ij,
                                              row_e, total_U, disp_sweep, swap_sweep, seed_numba)
 from liquid_coupling_flow.poly.torch_ref import total_U_torch
+
+
+def _safe_positions(rng, n, L, min_d=0.3):
+    """Uniform positions with a minimum-pairwise-distance regeneration guard: r^-12 energies at
+    near-touching pairs (~1e14 at contact) hit float64 catastrophic cancellation, making absolute
+    exactness tolerances meaningless (see poly-task-1-report.md). Regenerate until min image
+    distance >= min_d. min_d is picked per call site: the worst-case pair energy at a given min_d
+    is N-independent, but the expected number of rejections before an all-clear draw grows like
+    exp(C(n,2) * (4/3 pi min_d^3) / V) -- combinatorial in n. min_d=0.35 (n=64, this file's
+    test_row_e_consistent_with_total_U) needs ~82 tries; the same 0.35 at n=128 needs 90k+ tries
+    (measured, >90s) because C(128,2) is ~4x C(64,2), so test_total_U_matches_torch_reference uses
+    min_d=0.3 instead (measured ~1000 tries, <1s, still 31x under its 1e-8 tolerance)."""
+    for _ in range(10_000):
+        x = rng.random((n, 3)) * L
+        d = x[:, None, :] - x[None, :, :]
+        d -= L * np.round(d / L)
+        r = np.sqrt((d ** 2).sum(-1)) + np.eye(n) * 1e9
+        if r.min() >= min_d:
+            return x
+    else:
+        raise RuntimeError("could not draw safe positions")
 
 
 def test_cutoff_smoothness_analytic():
@@ -32,10 +52,10 @@ def test_nonadditivity():
 
 def test_total_U_matches_torch_reference():
     seed_numba(0)
-    rng = np.random.default_rng(134)
+    rng = np.random.default_rng(0)
     n = 128
     L = n ** (1.0 / 3.0) / 1.0                       # rho = 1
-    x = rng.random((n, 3)) * L
+    x = _safe_positions(rng, n, L, min_d=0.3)
     sig = draw_sigmas(n, seed=2)
     u_nb = total_U(x, sig, L)
     u_th = total_U_torch(x, sig, L)
@@ -44,10 +64,10 @@ def test_total_U_matches_torch_reference():
 
 def test_row_e_consistent_with_total_U():
     seed_numba(0)
-    rng = np.random.default_rng(216)
+    rng = np.random.default_rng(3)
     n = 64
     L = n ** (1.0 / 3.0)
-    x = rng.random((n, 3)) * L
+    x = _safe_positions(rng, n, L, min_d=0.35)
     sig = draw_sigmas(n, seed=4)
     i = 7
     u0 = total_U(x, sig, L)

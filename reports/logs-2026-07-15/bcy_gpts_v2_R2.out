@@ -1,0 +1,3 @@
+BCY G_PTS v2 (BCY-only, no Hocky): rho=1.2 T_BOT=0.5 boundary=N512-T0.5 equilibrated | R=[2.0] SW=40000 NR=21 | q_c: b=0.2 rc=0.5
+    [conv] sw   3000: qc(A,ref)=0.628 qc(B,ref)=0.179 gap=0.449 | q_c(A,B)=0.180
+    [conv] sw   6000: qc(A,ref)=0.646 qc(B,ref)=0.271 gap=0.375 | q_c(A,B)=0.354

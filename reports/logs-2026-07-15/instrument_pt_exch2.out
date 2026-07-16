@@ -1,0 +1,12 @@
+INSTRUMENT PT: R=2.0 NR=21 EXCH_MEAN=2 SW=30000 | ladder lam 1.00->0.796 T 0.50->1.01
+  sw   1500: TRIPS=   2 | exch min/med 0.31/0.34 | cold-E/n A -9.490 B -9.011 (ref -9.409) | qc(A,ref) 0.515 qc(B,ref) 0.144 (214s)
+  sw   3000: TRIPS=   2 | exch min/med 0.32/0.33 | cold-E/n A -9.448 B -9.150 (ref -9.409) | qc(A,ref) 0.635 qc(B,ref) 0.068 (420s)
+  sw   4500: TRIPS=   5 | exch min/med 0.31/0.33 | cold-E/n A -9.561 B -9.326 (ref -9.409) | qc(A,ref) 0.670 qc(B,ref) 0.408 (612s)
+  sw   6000: TRIPS=   5 | exch min/med 0.31/0.33 | cold-E/n A -9.411 B -9.096 (ref -9.409) | qc(A,ref) 0.586 qc(B,ref) 0.422 (804s)
+  sw   7500: TRIPS=   6 | exch min/med 0.31/0.33 | cold-E/n A -9.389 B -9.350 (ref -9.409) | qc(A,ref) 0.520 qc(B,ref) 0.285 (1007s)
+  sw   9000: TRIPS=   9 | exch min/med 0.31/0.33 | cold-E/n A -9.475 B -9.251 (ref -9.409) | qc(A,ref) 0.711 qc(B,ref) 0.341 (1201s)
+  sw  10500: TRIPS=   9 | exch min/med 0.30/0.33 | cold-E/n A -9.595 B -9.306 (ref -9.409) | qc(A,ref) 0.689 qc(B,ref) 0.268 (1396s)
+  sw  12000: TRIPS=  11 | exch min/med 0.30/0.33 | cold-E/n A -9.552 B -9.328 (ref -9.409) | qc(A,ref) 0.582 qc(B,ref) 0.384 (1590s)
+  sw  13500: TRIPS=  12 | exch min/med 0.30/0.33 | cold-E/n A -9.533 B -9.400 (ref -9.409) | qc(A,ref) 0.656 qc(B,ref) 0.573 (1784s)
+  sw  15000: TRIPS=  12 | exch min/med 0.29/0.33 | cold-E/n A -9.515 B -9.498 (ref -9.409) | qc(A,ref) 0.672 qc(B,ref) 0.373 (1964s)
+  sw  16500: TRIPS=  13 | exch min/med 0.30/0.33 | cold-E/n A -9.652 B -9.285 (ref -9.409) | qc(A,ref) 0.598 qc(B,ref) 0.511 (2134s)

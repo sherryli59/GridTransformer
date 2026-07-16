@@ -1,0 +1,5 @@
+PT CONTROL (plain T=0.5 MC, no shrinkage): R=2.0 cav 675 n=40 boundary=366 | SW=20000
+    plain sw   3000: q_c(evolved, ref) = 0.643
+    plain sw   6000: q_c(evolved, ref) = 0.650
+    plain sw   9000: q_c(evolved, ref) = 0.579
+    plain sw  12000: q_c(evolved, ref) = 0.598

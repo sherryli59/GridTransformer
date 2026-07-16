@@ -1,0 +1,8 @@
+PT DECORRELATION METRICS: R=2.0 cav 675 n=40 | SW=6000 EXCH_MEAN=2 | strides [1, 2, 4]
+  NR=21 (stride 1): TRIPS=  0 tau_RT=12000000000000 sw N_indep=0.0 | ROUND-TRIPS/SEC=0.0000 | exch min/med 0.27/0.33 | flow-dev-from-linear 0.34 (661s)
+      flow f(r) [bottom->top, ideal linear 1->0]: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.98, 0.89, 0.71, 0.5, 0.26, 0.14, 0.06, 0.02, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+  NR=11 (stride 2): TRIPS=  0 tau_RT=12000000000000 sw N_indep=0.0 | ROUND-TRIPS/SEC=0.0000 | exch min/med 0.03/0.05 | flow-dev-from-linear 0.40 (519s)
+      flow f(r) [bottom->top, ideal linear 1->0]: [1.0, 1.0, 1.0, 1.0, 0.96, 0.15, 0.0, 0.0, 0.0, 0.0, 0.0]
+  NR= 6 (stride 4): TRIPS=  0 tau_RT=12000000000000 sw N_indep=0.0 | ROUND-TRIPS/SEC=0.0000 | exch min/med 0.00/0.00 | flow-dev-from-linear 0.80 (376s)
+      flow f(r) [bottom->top, ideal linear 1->0]: [1.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+DONE

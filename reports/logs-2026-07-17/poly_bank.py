@@ -2,7 +2,10 @@
 """Descending-T swap-equilibrated banks for the NBC polydisperse model + tau_alpha(T) for
 local-only vs local+swap dynamics. Locates the OPERATIONAL SWAP ARREST T* = lowest rung where
 tau_swap exceeds BUDGET sweeps. Each rung hands its final configs to the next (swap-equilibrated
-cooling). Incremental save per rung. Usage: poly_bank.py [N] [BUDGET]"""
+cooling). Incremental save per rung. Usage: poly_bank.py [N] [BUDGET] [RUN]
+If RUN is given, only that run index executes (for parallel per-run launches at large N) and
+output goes to poly_tau_curves_run{RUN}.pt; otherwise all N_RUNS runs execute serially into the
+shared poly_tau_curves.pt (unchanged default behavior)."""
 import sys, time
 import numpy as np
 import torch
@@ -12,8 +15,12 @@ from liquid_coupling_flow.poly.model import (draw_sigmas, disp_sweep, swap_sweep
 
 N = int(sys.argv[1]) if len(sys.argv) > 1 else 300
 BUDGET = int(sys.argv[2]) if len(sys.argv) > 2 else 10_000_000
+ONLY_RUN = int(sys.argv[3]) if len(sys.argv) > 3 else None
 LADDER = [0.30, 0.20, 0.15, 0.12, 0.10, 0.085, 0.075, 0.065, 0.058, 0.052, 0.047]
 N_RUNS = 4                       # independent runs (90/10 held-out split is BY RUN)
+OUT_PATH = (f"reports/logs-2026-07-17/poly_tau_curves_run{ONLY_RUN}.pt" if ONLY_RUN is not None
+            else "reports/logs-2026-07-17/poly_tau_curves.pt")
+RUNS = [ONLY_RUN] if ONLY_RUN is not None else range(N_RUNS)
 EQ_SW = 200_000                  # per-rung equilibration before tau measurement (adaptive: 20*tau_prev)
 STEP = 0.12
 A_OV = 0.3
@@ -49,7 +56,7 @@ def tau_alpha(x, sig, L, beta, use_swap, budget):
 
 out = {"LADDER": LADDER, "N": N, "BUDGET": BUDGET}
 first_rung = True
-for run in range(N_RUNS):
+for run in RUNS:
     rng = np.random.default_rng(run)
     x = rng.random((N, 3)) * L
     sig = draw_sigmas(N, seed=100 + run)
@@ -82,7 +89,7 @@ for run in range(N_RUNS):
                          "tau_swap": tau_s, "tau_local": tau_l,
                          "Q_swap": (ts_s, qs_s), "Q_local": (ts_l, qs_l),
                          "U_N": total_U(x, sig, L) / N}
-        torch.save(out, "reports/logs-2026-07-17/poly_tau_curves.pt")
+        torch.save(out, OUT_PATH)
         print(f"run {run} T={T}: tau_swap={tau_s} tau_local={tau_l} U/N={out[(run,T)]['U_N']:+.4f} "
               f"({time.time()-t0:.0f}s)", flush=True)
         if tau_s < 0:

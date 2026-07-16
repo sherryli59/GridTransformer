@@ -47,7 +47,9 @@ def evaluate(model, banks, batch_per_size, device, cpu_gen, dev_gen):
         G = _grid_for_N(bank.N)
         result[bank.N] = float((-model.log_prob(state, bank.L, G) / bank.N).mean())
         _, terms = model.position_terms_by_occupancy(state, bank.L, G)
+        count_nll = (-model.count_log_probs(state, bank.L, G) / (G ** 3 - 1)).mean()
         diagnostics[bank.N] = {
+            "count_nll_per_factor": float(count_nll),
             "position_nll_by_K": {
                 int(K): float((-values / K).mean()) for K, values in terms.items()
             },
@@ -70,7 +72,7 @@ def train(*, sources, cache, out="mw_cell_q0.pt", steps=20_000,
           cache_train_per_size=4096, cache_validation_per_size=256,
           eval_every=100, seed=20260715, device=None, amp=True,
           warm=DEFAULT_SELECTED_SCAFFOLD, resume=None, balanced_k=True,
-          count_weight=1.0):
+          count_weight=1.0, count_lr=5e-4):
     device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
     cache_payload = load_or_build_raw_cache(
         sources, cache, train_per_size=cache_train_per_size,
@@ -82,7 +84,18 @@ def train(*, sources, cache, out="mw_cell_q0.pt", steps=20_000,
         raise ValueError("at most one source per particle count in v1")
     model = MWCellQ0().to(device)
     warm_meta = warm_start_cell_from_scaffold(model, warm)
-    opt = torch.optim.AdamW(model.parameters(), lr=float(lr), weight_decay=1e-4)
+    # Coordinate likelihood needs the conservative scaffold fine-tune rate.
+    # The count residual starts at zero around a sound multinomial base, so a
+    # separate faster rate is needed to learn liquid count correlations on a
+    # visible timescale (and to wake its hidden layers after the first update).
+    position_params = [
+        parameter for name, parameter in model.named_parameters()
+        if not name.startswith("count_model.")
+    ]
+    opt = torch.optim.AdamW([
+        {"params": position_params, "lr": float(lr)},
+        {"params": model.count_model.parameters(), "lr": float(count_lr)},
+    ], weight_decay=1e-4)
     start = 0
     if resume:
         payload = torch.load(resume, map_location=device, weights_only=False)
@@ -102,6 +115,7 @@ def train(*, sources, cache, out="mw_cell_q0.pt", steps=20_000,
         "mw_three_tilt": model.mw_three_tilt,
         "balanced_K_position_loss": bool(balanced_k),
         "count_tree_weight": float(count_weight),
+        "count_tree_lr": float(count_lr),
     }
     out_path = Path(out) if Path(out).is_absolute() else ART / out
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -110,7 +124,7 @@ def train(*, sources, cache, out="mw_cell_q0.pt", steps=20_000,
     print(f"cell q0 MLE sizes={sizes} batch_per_size={batch_per_size} "
           f"effective_batch={metadata['effective_batch']} cache={cache} "
           f"warm={warm_meta['checkpoint']} source_step={warm_meta['source_step']} "
-          f"balanced_K={bool(balanced_k)}", flush=True)
+          f"balanced_K={bool(balanced_k)} count_lr={float(count_lr):g}", flush=True)
     for step in range(start, start + int(steps) + 1):
         if step == start or step % int(eval_every) == 0 or step == start + int(steps):
             vals, k_diag = evaluate(model, banks, validation_batch, device, cpu_gen, dev_gen)
@@ -119,6 +133,8 @@ def train(*, sources, cache, out="mw_cell_q0.pt", steps=20_000,
                 step, ",".join(f"{n}:{v:+.4f}" for n, v in vals.items()), mean), flush=True)
             for N, diag in k_diag.items():
                 text = ",".join(f"{K}:{v:+.3f}" for K, v in sorted(diag["position_nll_by_K"].items()))
+                print(f"step {step:6d} val_count_nll/factor N={N} "
+                      f"{diag['count_nll_per_factor']:+.5f}", flush=True)
                 print(f"step {step:6d} val_position_nll/K N={N} {{{text}}}", flush=True)
             state = _checkpoint(model, opt, step, vals, metadata)
             state["val_position_nll_by_K"] = k_diag
@@ -186,6 +202,8 @@ def main():
                    help="disable balanced occupied-K position reweighting")
     p.add_argument("--count-weight", type=float, default=1.0,
                    help="weight for count NLL normalized per categorical factor")
+    p.add_argument("--count-lr", type=float, default=5e-4,
+                   help="optimizer LR for the count-tree residual (independent of coordinate LR)")
     a = p.parse_args()
     train(sources=a.sources, cache=a.cache, out=a.out, steps=a.steps,
           batch_per_size=a.batch_per_size, validation_batch=a.validation_batch, lr=a.lr,
@@ -193,7 +211,8 @@ def main():
           cache_validation_per_size=a.cache_validation_per_size,
           eval_every=a.eval_every, seed=a.seed, device=a.device,
           amp=not a.no_amp, warm=a.warm, resume=a.resume,
-          balanced_k=not a.physical_k_weighting, count_weight=a.count_weight)
+          balanced_k=not a.physical_k_weighting, count_weight=a.count_weight,
+          count_lr=a.count_lr)
 
 
 if __name__ == "__main__":

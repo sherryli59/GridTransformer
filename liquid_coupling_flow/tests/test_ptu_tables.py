@@ -13,16 +13,21 @@ def test_u1_is_physical_ka():
 
 
 def test_u0_is_species_blind():
-    sig_mm, eps_mm, _, _ = build_tables_u(0.0, sig_bar=0.95, eps_bar=1.0)
+    sig_mm, eps_mm, _, _ = build_tables_u(0.0, sig_bar=0.85, eps_bar=1.0)
     # all entries identical -> species labels carry zero energy information
-    assert np.allclose(sig_mm, 0.95) and np.allclose(eps_mm, 1.0)
+    assert np.allclose(sig_mm, 0.85) and np.allclose(eps_mm, 1.0)
 
 
-def test_u0_mp_is_halfway():
-    # pinned partner keeps physical character: interpolation strength (1+u)/2 -> 0.5 at u=0
-    _, _, sig_mp, eps_mp = build_tables_u(0.0, sig_bar=0.95, eps_bar=1.0)
-    assert np.allclose(sig_mp, 0.5 * KA_SIG + 0.5 * 0.95)
-    assert np.allclose(eps_mp, 0.5 * KA_EPS + 0.5 * 1.0)
+def test_u0_mp_is_blind_too():
+    # mp uses the SAME weight u: at u=0 the boundary is fully species-blind
+    # (measured 2026-07-16: (1+u)/2 left identity-acc ~0 at all u)
+    _, _, sig_mp, eps_mp = build_tables_u(0.0, sig_bar=0.85, eps_bar=1.0)
+    assert np.allclose(sig_mp, 0.85) and np.allclose(eps_mp, 1.0)
+
+
+def test_u1_mp_is_physical():
+    _, _, sig_mp, eps_mp = build_tables_u(1.0)
+    assert np.allclose(sig_mp, KA_SIG) and np.allclose(eps_mp, KA_EPS)
 
 
 def test_lam_arm_matches_bcy_convention():

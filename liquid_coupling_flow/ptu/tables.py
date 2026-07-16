@@ -2,8 +2,11 @@
 
 u-arm: entrywise interpolation of the KA sigma/eps matrices toward common values (sig_bar, eps_bar).
 At u=0 mobile-mobile pairs are species-blind (identity swaps are FREE); at u=1 physical KA.
-Mobile-pinned uses interpolation strength (1+u)/2 (pinned particles keep physical character),
-mirroring BCY's lam~=(1+lam)/2 convention for mobile-pinned pairs.
+Mobile-pinned now uses the SAME interpolation weight u (measured 2026-07-16: the (1+u)/2
+convention left identity-acc ~0 at all u because the ~357 pinned boundary partners still
+half-see species at u=0, dominating every swap's ΔU; fully-blind mp at u=0 is required for
+the identity channel). sig_bar dropped 0.8 -> 0.85 so the blind wall doesn't harden physical
+sigma_AB=0.8 pairs.
 lam-arm: BCY Eq.2 verbatim (sig scaled, eps untouched) — verified correct 2026-07-15."""
 import numpy as np
 from liquid_coupling_flow.ka_energy import SIGMA, EPS
@@ -12,10 +15,10 @@ KA_SIG = np.array(SIGMA, dtype=np.float64)
 KA_EPS = np.array(EPS, dtype=np.float64)
 
 
-def build_tables_u(u, sig_bar=0.95, eps_bar=1.0):
+def build_tables_u(u, sig_bar=0.85, eps_bar=1.0):
     u = float(u)
     w_mm = u
-    w_mp = 0.5 * (1.0 + u)
+    w_mp = u
     sig_mm = w_mm * KA_SIG + (1 - w_mm) * sig_bar
     eps_mm = w_mm * KA_EPS + (1 - w_mm) * eps_bar
     sig_mp = w_mp * KA_SIG + (1 - w_mp) * sig_bar

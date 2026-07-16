@@ -5,7 +5,8 @@ stack B = randomized init) replica ladders per held-out cavity to a q_c closure 
 then pools the post-closure window into a per-cavity q_c distribution. Reports G_PTS(R) (mean
 core overlap across converged cavities) and chi_T(R) (BCY's susceptibility = mean per-cavity
 q_c variance). Modeled closely on reports/logs-2026-07-16/ptu_ab_R20.py (data load, cavity
-carve, Ladder construction, closure rule, incremental saves) -- u-mode only, CLI-selectable R.
+carve, Ladder construction, closure rule, incremental saves) -- u-mode by default (see --mode
+below for the paired lam/BCY comparison arm), CLI-selectable R.
 
 BCY-paper-budget runs (--sw up to 1e7, ~28h/cavity) are executed in CHUNKS of --chunk sweeps:
 Ladder state (replica configs, trips, flow, exchange counters) is instance state on `lad` and
@@ -17,6 +18,13 @@ together with a running sweep offset. After EVERY chunk the full per-cavity reco
 --cav_offset lets independent parallel processes (same RNG seeds) work disjoint held-out
 cavities: each process skips the first `cav_offset` cavities that pass the n_in>=14 filter,
 so process k picks up where process k-1 would have started its (k+1)-th cavity.
+
+--mode {u,lam}: u (default, UNCHANGED behavior/output-filename from prior versions) is the
+identity-bridge arm (12 rungs linear in u, t_of temps); lam is the BCY Table-IV shrinkage arm
+(verbatim from ptu_ab_R20.py: the 11-value _BASE list midpoint-densified to 21 rungs, T_LAM
+linear in (1-lam)). The cavity-selection RNG stream is identical and mode-independent, so a
+lam run at --cav_offset k and a u run at --cav_offset k sample the SAME held-out cavity --
+that pairing is what makes G_PTS(u) vs G_PTS(lam) a matched comparison.
 Usage: ptu_production.py --r 2.0 --sw 10000000 --chunk 200000 --ncav 1 --max_attempt 1 --cav_offset 0"""
 import sys, time, argparse
 import numpy as np
@@ -40,9 +48,11 @@ p.add_argument("--rand_sw", type=int, default=4000, help="stack-B randomization 
 p.add_argument("--out", type=str, default=None)
 p.add_argument("--max_attempt", type=int, default=None, help="stop after this many cavities attempted")
 p.add_argument("--cav_offset", type=int, default=0, help="skip this many valid cavities from the selection stream (parallel disjointness)")
+p.add_argument("--mode", choices=("u", "lam"), default="u", help="u = identity-bridge (default, unchanged); lam = BCY Table-IV shrinkage arm")
 a = p.parse_args()
 if a.out is None:
-    a.out = f"reports/logs-2026-07-16/ptu_production_R{a.r}_off{a.cav_offset}.pt"
+    suffix = "_lam" if a.mode == "lam" else ""
+    a.out = f"reports/logs-2026-07-16/ptu_production_R{a.r}_off{a.cav_offset}{suffix}.pt"
 if a.max_attempt is None:
     a.max_attempt = a.ncav + 4
 from liquid_coupling_flow.ptu.kernels import seed_numba
@@ -54,6 +64,15 @@ REC = 1000
 N_RUNGS = 12
 US = list(np.linspace(1.0, a.u_min, N_RUNGS))
 T_US = [t_of(u, 1.0, a.u_min, T_BOT, a.t_top) for u in US]
+# lam-arm: verbatim Table-IV ladder from ptu_ab_R20.py, midpoint-densified 11 -> 21 rungs
+_BASE = [1.0000, 0.9825, 0.9640, 0.9450, 0.9250, 0.9050, 0.8850, 0.8640, 0.8423, 0.8200, 0.7960]
+LAM = []
+for _i, _v in enumerate(_BASE):
+    LAM.append(_v)
+    if _i + 1 < len(_BASE):
+        LAM.append(0.5 * (_v + _BASE[_i + 1]))
+T_LAM = [T_BOT + (1.0 - T_BOT) * (1.0 - l) / (1.0 - 0.8) for l in LAM]
+COORDS, TEMPS = (US, T_US) if a.mode == "u" else (LAM, T_LAM)
 
 D = torch.load("liquid_coupling_flow/artifacts/ka3d_dataset_N512_T0.5.pt", map_location="cpu", weights_only=False)
 X, S, L = D["x"].float(), D["s"].long(), float(D["L"])
@@ -62,8 +81,10 @@ assert 2 * a.r + 2.5 < L, f"cavity R={a.r} + context shell too large for box L={
 gsel = torch.Generator().manual_seed(1620)
 gq = torch.Generator().manual_seed(7)
 results = {"args": vars(a)}
-print(f"PRODUCTION u-arm R={a.r}: {N_RUNGS} rungs x {a.sw} sw (chunk {a.chunk}) | "
-      f"u in [{a.u_min},1.0], T_top {a.t_top} | target {a.ncav} converged cavities, "
+_ladder_desc = (f"u in [{a.u_min},1.0], T_top {a.t_top}" if a.mode == "u"
+                else "lam Table-IV x21 (BCY, verbatim ptu_ab_R20.py)")
+print(f"PRODUCTION {a.mode}-arm R={a.r}: {len(COORDS)} rungs x {a.sw} sw (chunk {a.chunk}) | "
+      f"{_ladder_desc} | target {a.ncav} converged cavities, "
       f"max_attempt {a.max_attempt}, cav_offset {a.cav_offset}", flush=True)
 
 
@@ -102,7 +123,7 @@ for _try in range(MAX_TRIES):
     alls0 = np.concatenate([pr["s_in"].numpy(), pr["s_out"][bm].numpy()]).astype(np.int64)
     n = xin.shape[0]; n_tot = allx0.shape[0]
     t0 = time.time()
-    lad = Ladder(allx0, alls0, n, n_tot, "u", US, T_US,
+    lad = Ladder(allx0, alls0, n, n_tot, a.mode, COORDS, TEMPS,
                  nch=2, exch_mean=10, R=a.r, seed=100 + ci)
     lad.randomize_stack_B(a.rand_sw)
 
@@ -128,7 +149,7 @@ for _try in range(MAX_TRIES):
         res_full = {"qcA": qcA, "qcB": qcB, "labA": labA, "labB": labB, "rec_sw": rec_sw,
                     "trips": last_res["trips"], "flow": last_res["flow"],
                     "exch_acc": last_res["exch_acc"], "exch_att": last_res["exch_att"],
-                    "closure": closure, "mode": "u", "n": n, "end_gap": end_gap,
+                    "closure": closure, "mode": a.mode, "n": n, "end_gap": end_gap,
                     "converged": converged, "qc_prod": qc_prod, "in_progress": in_progress}
         results[ci] = res_full
         torch.save(results, a.out)  # incremental save after EVERY chunk -- never end-only
@@ -152,7 +173,8 @@ if converged_qc_means:
 else:
     g_pts = float("nan"); sem = float("nan"); chi_t = float("nan")
 summary = {"G_PTS": g_pts, "G_PTS_sem": sem, "chi_T": chi_t,
-           "n_converged": ncav, "n_attempted": attempt, "r": a.r, "cav_offset": a.cav_offset}
+           "n_converged": ncav, "n_attempted": attempt, "r": a.r, "cav_offset": a.cav_offset,
+           "mode": a.mode}
 results["summary"] = summary
 torch.save(results, a.out)
 print(f"G_PTS(R={a.r}) = {g_pts:+.3f} +- {sem:.3f} | chi_T = {chi_t:.4f} "

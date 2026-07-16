@@ -1,0 +1,17 @@
+FLOW vs RANDOM relax: ka3d_cavity_ersi_rho12 step 35000 FM 0.4084 | R=2.0 NSAMP=16 SW=50000 budgets [1000, 2000, 5000, 10000, 20000, 50000]
+  cav 1005 (n=39): band -9.838 | flow raw U/n med +4.6 | relax 43s
+  cav 985 (n=39): band -9.550 | flow raw U/n med +8.9 | relax 37s
+  cav 1000 (n=38): band -9.525 | flow raw U/n med +1.0 | relax 36s
+  cav 935 (n=38): band -9.446 | flow raw U/n med +12.5 | relax 37s
+
+=== p_success vs relaxation budget (R=2.0, 4 cavities x 16 samples) ===
+  budget |   FLOW |  RANDOM
+    1000 |   0.00 |    0.00
+    2000 |   0.03 |    0.02
+    5000 |   0.00 |    0.00
+   10000 |   0.02 |    0.02
+   20000 |   0.00 |    0.02
+   50000 |   0.08 |    0.06
+  flow: reached band 21/64 | median tau 23500 | q_c vs ref (survivors) +0.502
+  rand: reached band 21/64 | median tau 17000 | q_c vs ref (survivors) +0.387
+  flow raw U/n (pre-relax) median +5.6

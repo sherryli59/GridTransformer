@@ -1,0 +1,8 @@
+A/B R=2.0: lam-arm 21 rungs x 60000 sw | u-arm 12 rungs x 105000 sw (matched compute) | u in [0.2,1.0], T_top 0.7
+=== cav 925 (n=41) ===
+  lam-arm: TRIPS=  20 | closure sweep -1 | final qcA +0.722 qcB +0.476 gap 0.246 | labB(end) 1.00 | exch min/med 0.29/0.32 | flow-dev 0.25 (1010s)
+    u-arm: TRIPS=  31 | closure sweep 6000 | final qcA +0.784 qcB +0.592 gap 0.192 | labB(end) 0.68 | exch min/med 0.19/0.22 | flow-dev 0.26 (1073s)
+=== cav 958 (n=38) ===
+  lam-arm: TRIPS=  37 | closure sweep 21500 | final qcA +0.422 qcB +0.342 gap 0.080 | labB(end) 1.00 | exch min/med 0.33/0.35 | flow-dev 0.29 (951s)
+    u-arm: TRIPS=  47 | closure sweep 3500 | final qcA +0.415 qcB +0.504 gap 0.089 | labB(end) 0.71 | exch min/med 0.21/0.23 | flow-dev 0.25 (1012s)
+A/B DONE

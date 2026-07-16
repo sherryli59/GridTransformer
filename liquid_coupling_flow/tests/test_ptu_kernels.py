@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import pytest
 from liquid_coupling_flow.ptu.tables import build_tables_u, build_tables_lam
-from liquid_coupling_flow.ptu.kernels import row_e, mobile_U, disp_sweep
+from liquid_coupling_flow.ptu.kernels import row_e, mobile_U, disp_sweep, seed_numba
 from liquid_coupling_flow.ka_energy import ka_energy
 from liquid_coupling_flow.ka3d_cavity_carve import carve
 from liquid_coupling_flow.ka3d_cavity_ar import _mic
@@ -89,7 +89,7 @@ def test_disp_sweep_runs_and_accepts(cavity):
     allx, alls, n, n_tot, *_ = cavity
     tabs = build_tables_u(1.0)
     a = allx.copy()
-    np.random.seed(0)
+    seed_numba(0)
     acc = disp_sweep(a, alls, n, n_tot, 2.0, 2.0, 0.3, *tabs)
     assert 0 < acc < n                     # some but not all moves accepted at T=0.5
     assert np.all(np.abs(a[n:] - allx[n:]) == 0.0)   # pinned particles never move

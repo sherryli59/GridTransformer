@@ -73,3 +73,9 @@ def disp_sweep(allx, alls, n, n_tot, beta, R, step, sig_mm, eps_mm, sig_mp, eps_
             allx[i, 0] = xn0; allx[i, 1] = xn1; allx[i, 2] = xn2
             acc += 1
     return acc
+
+
+@njit(cache=True)
+def seed_numba(seed):
+    """Seed numba's internal RNG (np.random.seed from plain Python does NOT reach jitted code)."""
+    np.random.seed(seed)

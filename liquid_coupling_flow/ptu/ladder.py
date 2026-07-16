@@ -68,6 +68,8 @@ class Ladder:
                             tmp = arr[st, r, ch].copy()
                             arr[st, r, ch] = arr[st, r + 1, ch]
                             arr[st, r + 1, ch] = tmp
+        # flow/trips accumulate every sweep (dwell-time weighting) -- intentional divergence
+        # from pt_decorrelation_metrics.py's attempt-gated version
         self.seen_top[:, self.NR - 1, :] = True
         self.flow[:, self.NR - 1, :] = 0.0
         self.trips += int(self.seen_top[:, 0, :].sum())

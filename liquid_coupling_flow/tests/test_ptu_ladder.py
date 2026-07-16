@@ -19,20 +19,19 @@ def test_qc_calibration(cavity):
 
 def test_ladder_smoke_and_trips_counter(cavity):
     allx, alls, n, n_tot, xin, *_ = cavity
-    coords = [1.0, 0.6, 0.2]                            # 3-rung toy, u-mode
-    temps = [0.5, 0.7, 0.9]
-    # seed=4 (not 0): with the corrected seed_numba fix (numba RNG now properly
-    # reproducible, see Ladder.__init__), exchange acceptance on this coarse 3-rung
-    # toy ladder is genuinely low (~1/1200 attempts, real physics for n=44 mobile
-    # particles across u=1.0/0.6/0.2 tables) -- trips>=1 within 300 sweeps is a
-    # ~8% per-seed event (verified over seeds 0-49: only 4,12,13,21 pass; seed=0
-    # deterministically gives trips=0, reproduced over 10x more sweeps). seed=4
-    # is the smallest verified-passing, fully deterministic choice.
-    lad = Ladder(allx, alls, n, n_tot, "u", coords, temps, nch=2, exch_mean=1, seed=4)
+    # IDENTICAL rungs (coords/temps all equal): this toy verifies TRIPS/exchange
+    # BOOKKEEPING, not ladder physics (physics is Task 5's job). With identical
+    # tables and betas, every exchange dlog=0 -> acceptance is exactly 1 ->
+    # walkers deterministically shuttle end-to-end and trips accumulate
+    # regardless of seed (a real coarse ladder makes trips a seed lottery --
+    # measured ~8% per-seed at 300 sweeps on a genuine [1.0,0.6,0.2] toy).
+    coords = [1.0, 1.0, 1.0]                            # 3-rung toy, u-mode, identical
+    temps = [0.5, 0.5, 0.5]
+    lad = Ladder(allx, alls, n, n_tot, "u", coords, temps, nch=2, exch_mean=1, seed=0)
     lad.randomize_stack_B(50)
     g = torch.Generator().manual_seed(7)
     res = lad.run(300, rec_every=100, qc_fn=lambda a, b: bcy_qc(a, b, g))
-    # with exch_mean=1 on a soft 3-rung toy ladder, exchanges fire and trips accumulate
+    # identical-rung tables -> dlog=0 always -> deterministic shuttling, trips >> 1
     assert res["trips"] >= 1
     assert len(res["qcA"]) == 3 and len(res["qcB"]) == 3
     assert res["exch_att"].min() > 0

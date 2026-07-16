@@ -69,17 +69,18 @@ only exact transport that survives the evidence is **Metropolis exchange**.
 
 ## 3. Tailored designs (ranked)
 
-### T1 — Generator as the ladder's top-rung regenerator ("J-walking-style PT") ← primary
-Plain PT's cost is round-trip diffusion: N_indep ~ T·D/NR² (measured TRIPS=0 at 4e4 sweeps). Replace the top
-rung's *dynamics* with **independence-MH from the AR model against the soft deformed target π_{λ_top}**:
-- Exact: AR has 1-pass exact logq (its one unambiguous asset); acceptance = standard independence-MH.
-- Evidence it will fire: suffix acc 0.948@λ=0 and 0.58 at all λ; blob rescued at low λ; soft cores forgive
-  the model's 0.05σ-scale placement errors (the r⁻¹² objection vanishes off λ=1).
-- Effect: the top rung decorrelates in O(1/acc) sweeps instead of never; the ladder becomes a one-way
-  pipeline (fresh configs flow down), N_indep ~ T·D/NR — an **~NR× (≈20×) structural win** over round trips,
-  on top of numba throughput. PT's exactness untouched (per-rung invariance is all that's needed).
-- Risk: independence-MH acceptance may decay exponentially with n at fixed λ (extensive KL). This is THE gate
-  (G1) — if acc collapses for n≳100 at every λ connected to 1 by a short ladder, T1 dies for the R≳ξ regime.
+### T1 — Generator as the ladder's top-rung regenerator ("J-walking-style PT")
+**[CORRECTED 2026-07-16 after user challenge — original claim retracted.]** The first draft claimed a top
+regenerator turns PT into a one-way pipeline with an ~NR× win. That was WRONG: exchange is symmetric, so
+identities random-walk the ladder and the bottom slot is fresh only on a lineage first-passage to the top —
+**~NR²/rate regardless of how the top decorrelates**. Our own flow metric f(r) already showed the top rungs
+DO decorrelate under plain MC (labels pinned at 0.0); the measured starvation is MIDDLE-ladder diffusion,
+which a top regenerator does not touch. Honest expected win: **~2× (removes the return leg + τ_top)**.
+The directed-transport variant (per-rung reservoirs / J-walking proper: each rung takes independence
+proposals from the rung above's stored reservoir) removes the random walk but the reservoir's density is
+unknown → the acceptance is approximate → a reservoir-bias caveat, cousin of the weight problem the user
+rejects. Rigorous directed transport = SMC-with-resampling (the measured extensive-weight wall) or per-rung
+flows (T4). **T1 demoted from primary to a ~2× adjuvant.**
 
 ### T2 — Discovery-seeded multi-init PT ← combine with T1
 Basin *finding* by dynamics is what PT pays 5e7 sweeps for; the classical pipeline already solves it: pool →
@@ -124,6 +125,7 @@ shortening the ladder at R≳ξ where BCY themselves need ~ξ^{3/2} replicas. Bu
 
 | Gate | Experiment | Cost | Pass | Kill |
 |---|---|---|---|---|
+| **G0** | **basin-discovery control (user challenge 2026-07-16)**: p(ref basin) and cost-per-discovered-basin for q₀(AR) vs eRSI-flow vs UNIFORM draws under the IDENTICAL quench+membership pipeline (strict attraction-basin AND loose metabasin criteria — the recorded p spans 1e-3..~1 depending on granularity and had NO random control) | hours | p_q0 ≥ ~5× p_uniform at some useful granularity | p_q0 ≈ p_uniform → learned discovery worthless; T2 goes fully classical; premise shrinks to T4-only |
 | **G1** | acc(λ) of full-regen + suffix independence-MH (AR exact logq; flow secondary) on deformed targets, R=2.0 & 2.6, n up to ~100 | hours | some λ* with acc ≥ 5–10% AND short ladder λ*→1 | acc collapses with n at every usable λ |
 | **G2** | numba PT vs numba PT + T1 regenerator: round-trips/N_indep + dual-init closure time, R=2.0 | ~1 day | ≥5× closure speedup at matched compute | <2× |
 | **G3** | + T2 multi-init at R=2.6–3.0 (multi-basin regime, new bank): k-init agreement | ~1–2 days | certified G_PTS points where plain PT (matched compute) fails to close | no advantage over plain PT |

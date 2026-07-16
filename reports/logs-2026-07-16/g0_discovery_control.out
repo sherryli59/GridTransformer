@@ -1,0 +1,14 @@
+G0 discovery control: R=2.0 NCAV=3 | pools AR/FLOW/UNIFORM x 2048 draws | quench 48 prescreened + 64 random each | strict dU<0.15 ov>0.4, meta dU<0.5 ov>0.3
+=== cav 995 (n=44) U_IS(ref)/n = -49.692 | pools drawn (800s) ===
+        AR: U_IS/n [-48.49 -48.10 -47.66] | STRICT pre 0/48 rnd 0/64 | META pre 0/48 rnd 0/64 | prescreen-top ov 0.36
+      FLOW: U_IS/n [-48.69 -48.31 -47.94] | STRICT pre 0/48 rnd 0/64 | META pre 0/48 rnd 0/64 | prescreen-top ov 0.31
+   UNIFORM: U_IS/n [-48.45 -48.03 -47.29] | STRICT pre 0/48 rnd 0/64 | META pre 0/48 rnd 0/64 | prescreen-top ov 0.16
+=== cav 1004 (n=41) U_IS(ref)/n = -54.469 | pools drawn (768s) ===
+        AR: U_IS/n [-53.83 -53.60 -53.25] | STRICT pre 0/48 rnd 0/64 | META pre 1/48 rnd 2/64 | prescreen-top ov 0.39
+      FLOW: U_IS/n [-53.92 -53.65 -53.22] | STRICT pre 0/48 rnd 0/64 | META pre 3/48 rnd 3/64 | prescreen-top ov 0.35
+   UNIFORM: U_IS/n [-53.83 -53.49 -53.01] | STRICT pre 0/48 rnd 0/64 | META pre 0/48 rnd 2/64 | prescreen-top ov 0.16
+=== cav 1006 (n=40) U_IS(ref)/n = -55.547 | pools drawn (763s) ===
+        AR: U_IS/n [-54.44 -54.14 -53.71] | STRICT pre 0/48 rnd 0/64 | META pre 0/48 rnd 0/64 | prescreen-top ov 0.42
+      FLOW: U_IS/n [-54.69 -54.31 -53.89] | STRICT pre 0/48 rnd 0/64 | META pre 0/48 rnd 1/64 | prescreen-top ov 0.34
+   UNIFORM: U_IS/n [-54.54 -54.05 -52.63] | STRICT pre 0/48 rnd 0/64 | META pre 0/48 rnd 0/64 | prescreen-top ov 0.15
+saved -> /mnt/ssd/GridTransformer/reports/logs-2026-07-16/g0_discovery_control_R2.0.pt

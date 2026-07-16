@@ -13,9 +13,12 @@ from liquid_coupling_flow.ptu.identity import identity_sweep
 
 class Ladder:
     def __init__(self, allx0, alls0, n, n_tot, mode, coords, temps, nch=2,
-                 exch_mean=10, step=0.3, R=2.0, seed=0):
+                 exch_mean=10, step=0.3, R=2.0, seed=0, id_try=None):
         assert mode in ("u", "lam")
         self.n, self.n_tot, self.mode = n, n_tot, mode
+        # identity-swap attempts per rung-sweep. Fixed 4 diluted per-particle churn ~1/n (measured
+        # 2026-07-16: churn 3.2e-5 at n=38-47 -> 2.0e-5 at n=60-62); default now scales with n.
+        self.id_try = max(4, n // 8) if id_try is None else int(id_try)
         self.coords = list(coords); self.temps = list(temps)
         self.NR = len(coords); self.nch = nch
         self.exch_mean = exch_mean; self.step = step; self.R = R
@@ -44,7 +47,7 @@ class Ladder:
                                beta, self.R, self.step, *tabs)
                     if self.mode == "u":
                         identity_sweep(self.X[st][r][ch], self.S[st][r][ch], self.n,
-                                       self.n_tot, beta, 4, *tabs)
+                                       self.n_tot, beta, self.id_try, *tabs)
 
     def _exchange(self):
         for r in range(self.NR - 1):
@@ -88,7 +91,7 @@ class Ladder:
                            beta, self.R, self.step, *tabs)
                 if self.mode == "u":
                     identity_sweep(self.X[st][r][ch], self.S[st][r][ch], self.n,
-                                   self.n_tot, beta, 4, *tabs)
+                                   self.n_tot, beta, self.id_try, *tabs)
 
     def run(self, n_sweeps, rec_every, qc_fn):
         qcA, qcB, labA, labB, rec_sw = [], [], [], [], []

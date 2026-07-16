@@ -19,6 +19,13 @@ def _tree_depth(G: int) -> int:
     return int(math.log2(G))
 
 
+def count_factor_count(G: int) -> int:
+    """Number of categorical choices in a complete ``G^3`` octree."""
+    _tree_depth(G)  # validate before returning the closed form
+    # Seven choices per internal node and (G**3 - 1) / 7 internal nodes.
+    return int(G) ** 3 - 1
+
+
 def integer_compositions(total: int, parts: int = 8):
     """Yield all ordered nonnegative ``parts``-compositions of ``total``."""
     total, parts = int(total), int(parts)
@@ -53,6 +60,10 @@ class OctreeCountModel(nn.Module):
             nn.SiLU(),
             nn.Linear(self.hidden, 1),
         )
+        # The residual starts at zero, so the initial model is the symmetric
+        # multinomial base below rather than a random, lopsided composition.
+        nn.init.zeros_(self.score[-1].weight)
+        nn.init.zeros_(self.score[-1].bias)
 
     def _candidate_logits(self, *, parent: int, remaining: int, allocated: int,
                           level: int, depth: int, coord: tuple[int, int, int],
@@ -87,7 +98,22 @@ class OctreeCountModel(nn.Module):
             ),
             -1,
         )
-        return self.score(torch.cat((common, candidate), -1)).squeeze(-1)
+        residual = self.score(torch.cat((common, candidate), -1)).squeeze(-1)
+        # Conditional of an exchangeable multinomial split.  After the first
+        # ``child`` allocations, the next allocation is Binomial(remaining,
+        # 1 / number_of_unassigned_children).  It has full support, so q0
+        # remains exact while avoiding a uniform-composition prior that gives
+        # pathological 20+ particle cells before MLE has trained.
+        m = 8 - int(child)
+        p = 1.0 / m
+        log_binomial = (
+            torch.lgamma(values.new_tensor(float(remaining + 1)))
+            - torch.lgamma(values + 1.0)
+            - torch.lgamma(values.new_tensor(float(remaining)) - values + 1.0)
+            + values * math.log(p)
+            + (float(remaining) - values) * math.log1p(-p)
+        )
+        return log_binomial + residual
 
     def split_log_prob(self, children: torch.Tensor, *, N: int | None = None,
                        level: int = 0, depth: int = 1,

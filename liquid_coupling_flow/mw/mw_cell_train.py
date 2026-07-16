@@ -69,7 +69,8 @@ def train(*, sources, cache, out="mw_cell_q0.pt", steps=20_000,
           batch_per_size=2, validation_batch=4, lr=2e-5,
           cache_train_per_size=4096, cache_validation_per_size=256,
           eval_every=100, seed=20260715, device=None, amp=True,
-          warm=DEFAULT_SELECTED_SCAFFOLD, resume=None, balanced_k=True):
+          warm=DEFAULT_SELECTED_SCAFFOLD, resume=None, balanced_k=True,
+          count_weight=1.0):
     device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
     cache_payload = load_or_build_raw_cache(
         sources, cache, train_per_size=cache_train_per_size,
@@ -100,6 +101,7 @@ def train(*, sources, cache, out="mw_cell_q0.pt", steps=20_000,
         "pos_temp": model.pos_temp, "mw_pair_tilt": model.mw_pair_tilt,
         "mw_three_tilt": model.mw_three_tilt,
         "balanced_K_position_loss": bool(balanced_k),
+        "count_tree_weight": float(count_weight),
     }
     out_path = Path(out) if Path(out).is_absolute() else ART / out
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -128,7 +130,7 @@ def train(*, sources, cache, out="mw_cell_q0.pt", steps=20_000,
                 break
 
         opt.zero_grad(set_to_none=True)
-        losses = {}
+        losses, count_losses, position_losses = {}, {}, {}
         t0 = time.perf_counter()
         for bank in banks:
             x = _draw(bank.train, batch_per_size, device, cpu_gen)
@@ -136,7 +138,9 @@ def train(*, sources, cache, out="mw_cell_q0.pt", steps=20_000,
             with torch.autocast(device_type=device.type, dtype=torch.bfloat16,
                                 enabled=bool(amp and device.type == "cuda")):
                 if balanced_k:
-                    nll, balance_diag = model.balanced_nll(state, bank.L, _grid_for_N(bank.N))
+                    nll, balance_diag = model.balanced_nll(
+                        state, bank.L, _grid_for_N(bank.N), count_weight=count_weight
+                    )
                 else:
                     nll = (-model.log_prob(state, bank.L, _grid_for_N(bank.N)) / bank.N).mean()
                     balance_diag = None
@@ -144,11 +148,16 @@ def train(*, sources, cache, out="mw_cell_q0.pt", steps=20_000,
                 raise FloatingPointError(f"non-finite NLL at step={step+1} N={bank.N}")
             (nll / len(banks)).backward()
             losses[bank.N] = float(nll.detach())
+            if balance_diag is not None:
+                count_losses[bank.N] = float(balance_diag["count_nll"])
+                position_losses[bank.N] = float(balance_diag["position_nll"])
         grad = torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
         opt.step()
         if (step + 1) % 5 == 0:
-            print("train %6d nll/N={%s} grad=%.3f sec=%.3f" % (
+            print("train %6d objective/N={%s} count/factor={%s} position={%s} grad=%.3f sec=%.3f" % (
                 step + 1, ",".join(f"{n}:{v:+.4f}" for n, v in losses.items()),
+                ",".join(f"{n}:{v:+.4f}" for n, v in count_losses.items()),
+                ",".join(f"{n}:{v:+.4f}" for n, v in position_losses.items()),
                 float(grad), time.perf_counter() - t0), flush=True)
     return model
 
@@ -175,6 +184,8 @@ def main():
     p.add_argument("--resume", default=None)
     p.add_argument("--physical-k-weighting", action="store_true",
                    help="disable balanced occupied-K position reweighting")
+    p.add_argument("--count-weight", type=float, default=1.0,
+                   help="weight for count NLL normalized per categorical factor")
     a = p.parse_args()
     train(sources=a.sources, cache=a.cache, out=a.out, steps=a.steps,
           batch_per_size=a.batch_per_size, validation_batch=a.validation_batch, lr=a.lr,
@@ -182,7 +193,7 @@ def main():
           cache_validation_per_size=a.cache_validation_per_size,
           eval_every=a.eval_every, seed=a.seed, device=a.device,
           amp=not a.no_amp, warm=a.warm, resume=a.resume,
-          balanced_k=not a.physical_k_weighting)
+          balanced_k=not a.physical_k_weighting, count_weight=a.count_weight)
 
 
 if __name__ == "__main__":

@@ -14,7 +14,7 @@ from liquid_coupling_flow.mw.mw_cell_chart import (
     anchored_cube_inverse,
     clip_anchor,
 )
-from liquid_coupling_flow.mw.mw_cell_count import OctreeCountModel
+from liquid_coupling_flow.mw.mw_cell_count import OctreeCountModel, count_factor_count
 from liquid_coupling_flow.mw.mw_cell_geom import (
     LOG_COLOR_ORDERS,
     causal_cell_order,
@@ -396,20 +396,36 @@ class MWCellQ0(nn.Module):
             K: torch.stack(values) for K, values in by_k.items()
         }
 
-    def balanced_nll(self, state: AugmentedCellState, L: float, G: int):
+    def count_log_probs(self, state: AugmentedCellState, L: float, G: int) -> torch.Tensor:
+        """Learned count-tree term alone, excluding density constants."""
+        N = int(state.x.shape[1])
+        values = []
+        for b in range(state.x.shape[0]):
+            x = state.x[b]
+            orientation = cubic_orientations(x.device, x.dtype)[int(state.orientation_index[b])]
+            grouping = group_by_cell_priority(
+                x, state.priorities[b], L, G, state.shift[b], orientation
+            )
+            values.append(self.count_model.count_log_prob(grouping.counts, N, G))
+        return torch.stack(values)
+
+    def balanced_nll(self, state: AugmentedCellState, L: float, G: int,
+                     count_weight: float = 1.0):
         """Count NLL plus equal-weight occupied-cell-K position NLL.
 
         This is a training reweighting only.  The normalized model remains
         :meth:`log_prob`; validation always reports both the physical mean and
         the reweighted objective separately.
         """
-        N = int(state.x.shape[1])
-        base, by_k = self.position_terms_by_occupancy(state, L, G)
-        count_nll = (-base / N).mean()
+        _, by_k = self.position_terms_by_occupancy(state, L, G)
+        # Per-particle normalization diluted the seven G=2 count decisions by
+        # 64.  Normalize by actual categorical factors instead.
+        count_nll = (-self.count_log_probs(state, L, G) / count_factor_count(G)).mean()
         per_k = {K: (-values / K).mean() for K, values in by_k.items()}
         position_nll = torch.stack(list(per_k.values())).mean()
-        return count_nll + position_nll, {
+        return float(count_weight) * count_nll + position_nll, {
             "count_nll": count_nll.detach(), "position_nll": position_nll.detach(),
+            "count_factor_count": count_factor_count(G),
             "position_nll_by_K": {K: v.detach() for K, v in per_k.items()},
         }
 

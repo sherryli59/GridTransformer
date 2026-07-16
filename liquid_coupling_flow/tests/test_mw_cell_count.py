@@ -1,6 +1,8 @@
 import torch
 
-from liquid_coupling_flow.mw.mw_cell_count import OctreeCountModel, integer_compositions
+from liquid_coupling_flow.mw.mw_cell_count import (
+    OctreeCountModel, count_factor_count, integer_compositions,
+)
 
 
 def _model(seed=30):
@@ -68,3 +70,12 @@ def test_count_log_prob_is_differentiable():
     loss.backward()
     assert all(parameter.grad is not None for parameter in model.parameters())
     assert all(torch.isfinite(parameter.grad).all() for parameter in model.parameters())
+
+
+def test_fresh_count_tree_starts_near_equal_cell_means():
+    model = OctreeCountModel()
+    gen = torch.Generator().manual_seed(38)
+    draws = torch.stack([model.sample_counts(64, 2, gen=gen)[0] for _ in range(512)])
+    assert torch.allclose(draws.float().mean(0), torch.full((8,), 8.0), atol=0.55)
+    assert count_factor_count(2) == 7
+    assert count_factor_count(4) == 63

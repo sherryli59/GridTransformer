@@ -88,3 +88,23 @@ PHASE 1 (NOW) -- swap-endpoint kernel, canonical fixed-composition ensemble:
   esp. >=1% in the 0.2+ bins where classical = 0.
 PHASE 2 (LATER, gated on phase-1 success): true semi-grand with calibrated mu(sigma); J2's
 joint (x,u) flow module is the phase-2 asset (commit it; do not delete).
+
+## PHASE 2 KICKOFF 2026-07-17 (user GO after phase-1 verdict)
+
+Phase-1 verdict (poly_gate_verdict_phase1.md): one-shot swap-endpoint ORACLE-LIMITED — frozen-env
+dissimilar swap costs 25-50 kT locally, flat in k. Phase 2 = pay in installments: gradual-sigma
+semi-grand kernel with calibrated mu(sigma).
+
+Design:
+- Target: pi(x,u) prop exp(-beta(U - sum_i mu(sigma(u_i)))) prod phi(u_i); mu calibrated per T so the
+  stationary composition matches P(sigma) (sup-norm bin error < 3%).
+- mu representation: NBINS_MU=32 lookup over sigma in [SIG_MIN,SIG_MAX], linear interp; enters the
+  u-move accept as +beta*(mu(sig_new)-mu(sig_old)). Iterative update (Boltzmann inversion style):
+  mu_bin += eta * kT * log(P_target_bin / P_measured_bin), eta~0.5, iterate to convergence.
+  Calibrate warm (T=0.2) then descend a ladder re-calibrating (composition equilibrates on
+  tau_swap scales; swaps stay enabled during calibration -- they are mu-neutral).
+- ORDERING (naive-first): P2a = mu kernels + calibration; P2b = THE GATE: sigma-mobility and
+  tau_alpha with kernel mixes {disp+swap} vs {disp+u(mu)} vs {disp+swap+u(mu)} at bracket temps
+  incl. below arrest -- does gradual-sigma extend relaxation where discrete swap arrests?
+  Learned J2 flow enters ONLY as an accelerator after the naive verdict (its deferred review
+  now queued).

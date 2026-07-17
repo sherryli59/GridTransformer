@@ -68,3 +68,23 @@ The permutation *creates* the hard overlap that positions must then undo. Co-evo
 ### Unchanged
 - Banks (4×N=300 + held-out N=600) remain the data/eval substrate; N-scaling and m_env
   controls carry over verbatim (gate is N-agnostic; m_env read from ckpt).
+
+## DECISION 2026-07-17 (user): swap-endpoint now, semi-grand later
+
+Measured (clean frames, frozen x unless noted, T=0.085):
+- Unconstrained semi-grand (prior only): mean sigma 0.998->0.82, U/N +0.32->+0.02 (deflates; wrong state point).
+- Volume-conserving pair exchange (sum sigma^3 exact): shape still drifts (median 0.917->0.846, p95 1.495->1.602), U/N ->+0.20. Also wrong state point.
+- Classical direct swap acc vs |dsig|: 0.44 (<0.1), 0.026 (0.1-0.2), 0.0000 beyond 0.2 (0/524).
+- Single-pair swap + 400sw block relax transport: rms|dx| 0.12->0.39 smoothly in |dsig|, p90max <=1.05 -- SHORT and near-unimodal (vs random 8-perm RMS 1.02 multimodal). Clean-frame thermal RMS ~0.12 (old 0.35 was bank-bug-inflated).
+
+PHASE 1 (NOW) -- swap-endpoint kernel, canonical fixed-composition ensemble:
+- Kernel: pick pair (i,j) in the k-NN block; sigma(t) = (1-t)sigma_old + t sigma_swapped as
+  TIME-DEPENDENT CONDITIONING of a position-only flow (labels sigma_to_bin(sigma(t)) recomputed
+  per RK4 step); endpoint = exact permutation + accommodated x. logq = position divergence only
+  (block_flow.py's validated machinery). A = min(1, exp(-beta dU) q_rev/q_fwd); q_rev conditioned
+  on the reverse path sigma_new -> sigma_old. No mu, no ensemble change; swap-MC baseline at the
+  IDENTICAL state point.
+- Gate axis: acceptance vs |dsig| (bins above) x T; flow must beat classical acc(|dsig|),
+  esp. >=1% in the 0.2+ bins where classical = 0.
+PHASE 2 (LATER, gated on phase-1 success): true semi-grand with calibrated mu(sigma); J2's
+joint (x,u) flow module is the phase-2 asset (commit it; do not delete).

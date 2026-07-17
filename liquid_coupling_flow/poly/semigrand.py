@@ -37,6 +37,7 @@ PHI_CLIP = 1e-12
 STEP_X_DEFAULT = 0.1      # matches reports/logs-2026-07-17/poly_block_data.py _block_relax
 DELTA_U_DEFAULT = 0.5     # single-site u proposal std (u-space is O(1) std-normal scale)
 RELAX_SW_DEFAULT = 400    # matches poly_block_data.RELAX_SW
+NBINS_MU = 32              # poly Task P2a: mu(sigma) lookup resolution
 
 
 def u_of_sigma(sig):
@@ -88,6 +89,89 @@ def u_sweep(x, sig, u, L, beta, delta, n_try):
         e1 = row_e(x, sig, i, x[i, 0], x[i, 1], x[i, 2], L)
         dU = e1 - e0
         log_a = -beta * dU + 0.5 * (u_old * u_old - u_new * u_new)   # log[phi(u')/phi(u)] term
+        if log_a >= 0.0 or np.random.random() < np.exp(log_a):
+            u[i] = u_new
+            acc += 1
+        else:
+            sig[i] = sig_old
+    return acc, n_try
+
+
+# ---------------------------------------------------------------- (P2a) mu(sigma) calibration --
+# poly Task P2a (docs/superpowers/specs/2026-07-17-joint-sigma-x-continuous-flow-amendment.md,
+# PHASE 2 KICKOFF): mu(sigma) is a per-sigma chemical-potential-like bias added to the semi-grand
+# u-move accept ratio to CANCEL the energetic tilt that otherwise deflates the composition away
+# from the canonical prior P(sigma) ~ sigma^-3 (measured: mean sigma 0.998->0.82 at mu=0). mu is
+# represented as a NBINS_MU-bin lookup over sigma in [SIG_MIN, SIG_MAX] with linear interpolation
+# between BIN CENTERS (not edges) -- edges/centers/target-mass helpers below are plain numpy
+# (setup/calibration-time only, never called from a numba hot loop); mu_of_sigma and u_sweep_mu
+# are the numba hot-loop pieces.
+
+def mu_bin_edges(nbins=NBINS_MU):
+    """NBINS_MU+1 bin edges spanning [SIG_MIN, SIG_MAX] (uniform width in sigma)."""
+    return np.linspace(SIG_MIN, SIG_MAX, nbins + 1)
+
+
+def mu_bin_centers(nbins=NBINS_MU):
+    """Bin-center sigma values -- the abscissas mu_of_sigma's njit lookup interpolates between."""
+    edges = mu_bin_edges(nbins)
+    return 0.5 * (edges[:-1] + edges[1:])
+
+
+def sigma_cdf(sig):
+    """F(sigma) = (a - sigma^-2)/(a-b): the CDF of the canonical prior P(sigma) ~ sigma^-3 on
+    [SIG_MIN, SIG_MAX] (same F as u_of_sigma's, exposed standalone -- no Phi^-1 -- so calibration
+    code can integrate P(sigma) ANALYTICALLY over a bin via F(hi) - F(lo), not by quadrature)."""
+    sig = np.asarray(sig, dtype=np.float64)
+    return (A_CONST - sig ** -2) / (A_CONST - B_CONST)
+
+
+def mu_bin_target_mass(nbins=NBINS_MU):
+    """Exact P(sigma)~sigma^-3 probability mass falling in each of the NBINS_MU bins, via the CDF
+    (F(hi) - F(lo) per bin) -- the calibration target composition."""
+    F = sigma_cdf(mu_bin_edges(nbins))
+    return F[1:] - F[:-1]
+
+
+@njit(cache=True, fastmath=True)
+def mu_of_sigma(sig, mu):
+    """Linear interpolation of the mu(sigma) lookup `mu` (length-NBINS_MU array of values AT the
+    mu_bin_centers() abscissas) evaluated at an arbitrary sigma. sigma at or beyond the first/last
+    bin CENTER is clamped to that end value (constant extrapolation, no linear blow-up outside the
+    lookup's support)."""
+    nb = mu.shape[0]
+    width = (SIG_MAX - SIG_MIN) / nb
+    pos = (sig - SIG_MIN) / width - 0.5   # fractional bin-center index
+    if pos <= 0.0:
+        return mu[0]
+    if pos >= nb - 1:
+        return mu[nb - 1]
+    i0 = int(pos)
+    frac = pos - i0
+    return mu[i0] * (1.0 - frac) + mu[i0 + 1] * frac
+
+
+@njit(cache=True, fastmath=True)
+def u_sweep_mu(x, sig, u, L, beta, delta, n_try, mu):
+    """Same single-site semi-grand MH move as u_sweep, but the accept log-ratio also gains
+    beta*(mu(sig_new) - mu(sig_old)) -- the calibrated chemical-potential tilt that (once mu is
+    correctly calibrated) cancels the energetic pull away from the canonical composition P(sigma).
+    mu=zeros(NBINS_MU) reduces exactly to u_sweep (regression-tested). sig/u are kept byte-
+    consistent exactly as u_sweep does (speculative write, rollback on reject)."""
+    n = x.shape[0]
+    acc = 0
+    for _ in range(n_try):
+        i = np.random.randint(n)
+        u_old = u[i]
+        sig_old = sig[i]
+        u_new = u_old + delta * np.random.randn()
+        sig_new = sigma_of_u(u_new)
+        e0 = row_e(x, sig, i, x[i, 0], x[i, 1], x[i, 2], L)
+        sig[i] = sig_new
+        e1 = row_e(x, sig, i, x[i, 0], x[i, 1], x[i, 2], L)
+        dU = e1 - e0
+        dmu = mu_of_sigma(sig_new, mu) - mu_of_sigma(sig_old, mu)
+        log_a = -beta * dU + 0.5 * (u_old * u_old - u_new * u_new) + beta * dmu
         if log_a >= 0.0 or np.random.random() < np.exp(log_a):
             u[i] = u_new
             acc += 1

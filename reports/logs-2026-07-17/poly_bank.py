@@ -76,6 +76,7 @@ for run in RUNS:
                   flush=True)
             first_rung = False
         frames = []
+        frame_sigs = []
         # tau_alpha operates on copies of x/sig -- these are side probes off the main ladder
         # trajectory; the ladder's real x/sig keep evolving below through frame collection.
         tau_s, ts_s, qs_s = tau_alpha(x.copy(), sig.copy(), L, beta, True, BUDGET)
@@ -85,7 +86,12 @@ for run in RUNS:
                 disp_sweep(x, sig, L, beta, STEP)
                 swap_sweep(x, sig, L, beta, N)
             frames.append(x.copy())
-        out[(run, T)] = {"x": np.stack(frames), "sig": sig.copy(), "L": L, "T": T,
+            # CRITICAL: swap_sweep permutes sig between frames -- each frame MUST bank its own
+            # sig or (x, sig) pairings are stale (caught 2026-07-16: U/N +13 vs +0.32 equil on
+            # frames 0-14; only the final frame matched the single end-of-rung sig save).
+            frame_sigs.append(sig.copy())
+        out[(run, T)] = {"x": np.stack(frames), "sigs": np.stack(frame_sigs),
+                         "sig": sig.copy(), "L": L, "T": T,
                          "tau_swap": tau_s, "tau_local": tau_l,
                          "Q_swap": (ts_s, qs_s), "Q_local": (ts_l, qs_l),
                          "U_N": total_U(x, sig, L) / N}

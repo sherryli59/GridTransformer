@@ -104,9 +104,11 @@ class PolyBlockFlow(nn.Module):
         return torch.as_tensor(np.asarray(a), dtype=dtype, device=device)
 
     def _pad(self, x, labels, target_n, offset, truncate_nearest):
-        """x[n,3] float, labels[n] long -> (x[target_n,3], labels[target_n]). truncate_nearest=True keeps
-        the target_n rows nearest the origin (block-centered coords) when n > target_n (env case); movers
-        are never truncated (n > k_max is a caller error)."""
+        """x[n,3] float, labels[n] long -> (x[target_n,3], labels[target_n], n_real). truncate_nearest=True
+        keeps the target_n rows nearest the origin (block-centered coords) when n > target_n (env case);
+        movers are never truncated (n > k_max is a caller error). n_real = min(n, target_n) is the count of
+        genuine (non-dummy) rows occupying the FIRST n_real slots -- callers use it to keep padded rows
+        inert (see _vel_div_masked)."""
         n = x.shape[0]
         if n > target_n:
             if not truncate_nearest:
@@ -115,24 +117,57 @@ class PolyBlockFlow(nn.Module):
             idx = torch.argsort(d2)[:target_n]
             x, labels = x[idx], labels[idx]
             n = target_n
+        n_real = n
         if n < target_n:
             pad_x = _dummies(target_n - n, x.device, offset=offset)
             pad_l = torch.zeros(target_n - n, dtype=torch.long, device=x.device)
             x = torch.cat([x, pad_x], dim=0)
             labels = torch.cat([labels, pad_l], dim=0)
-        return x, labels
+        return x, labels, n_real
 
     def _prep_movers(self, x, labels):
         return self._pad(x, labels, self.k_max, offset=0, truncate_nearest=False)
 
     def _prep_env(self, env_x, env_labels):
-        return self._pad(env_x, env_labels, self.m_env, offset=self.k_max, truncate_nearest=True)
+        x, labels, _ = self._pad(env_x, env_labels, self.m_env, offset=self.k_max, truncate_nearest=True)
+        return x, labels
 
-    def _integrate(self, x0, cage_x, sp, reverse):
+    def _vel_div_masked(self, cloud, t, sp, n_real):
+        """Same computation as CavityCondEGNN.vel_div (liquid_coupling_flow/ka3d_cavity_egnn.py, NOT
+        modified here) -- forward_and_perparticle_divergence over the full cloud, mover rows = cloud[:,:k_max]
+        -- but with padded mover rows (slots n_real..k_max-1; real movers occupy the FIRST n_real slots per
+        _pad's convention) EXCLUDED from the returned velocity and divergence.
+
+        WHY: CavityCondEGNN's neighbour selection (_compute_common_terms) is an UNFILTERED top-k by distance
+        with no radius cutoff. A padded dummy mover row (far from every real particle by construction, see
+        _dummies) still gets `max_neighbors` neighbours assigned -- the farthest real/dummy rows available --
+        so once the net has nonzero weights it can emit a large spurious velocity AND self-divergence on that
+        row. `vel_div` sums divpp[:, :k_max] over ALL k_max mover slots before returning, so that spurious
+        self-divergence poisons the scalar logq the instant a block has fewer real movers than k_max (the
+        NaN bug fixed here). Masking here -- not in the shared CavityCondEGNN/EGNN_dynamics module -- keeps
+        the fix local to the polydisperse wrapper without touching code shared by other campaigns.
+
+        Zeroing padded-row velocity also makes the RK4 integration leave those rows exactly at their dummy
+        coordinates for the whole path (they never move), so this one mask serves both requirements: inert
+        padded movers AND a logq unpolluted by their spurious self-divergence."""
+        diff = torch.is_grad_enabled()
+        vel_full, divpp = self.ce.egnn.forward_and_perparticle_divergence(cloud, t, sp, differentiable=diff)
+        vel = vel_full[:, :self.k_max]
+        if n_real < self.k_max:
+            vel = vel.clone()
+            vel[:, n_real:, :] = 0.0
+        div = divpp[:, :n_real].sum(-1) if n_real > 0 else torch.zeros(
+            cloud.shape[0], device=cloud.device, dtype=cloud.dtype)
+        return (vel, div) if diff else (vel.detach(), div.detach())
+
+    def _integrate(self, x0, cage_x, sp, reverse, n_real):
         """Fixed-grid RK4 (RK4_STEPS steps) of dx/dt = v(x,t | cage,sp), dl/dt = div(x,t | cage,sp) (RAW,
         not negated -- see module docstring). forward (reverse=False): t 0->1, dt=+1/RK4_STEPS; the
         returned l is unused by `propose` (it re-evaluates via `logq_of` instead -- one density definition,
-        never two). reverse=True: t 1->0, dt=-1/RK4_STEPS; l is exactly `logq_of`'s path integral term."""
+        never two). reverse=True: t 1->0, dt=-1/RK4_STEPS; l is exactly `logq_of`'s path integral term.
+        n_real = number of genuine (non-dummy) mover rows (the first n_real of k_max) -- passed through to
+        _vel_div_masked so padded rows stay inert (zero velocity, excluded from the divergence sum) on
+        BOTH legs identically, preserving forward/reverse self-consistency."""
         dt = (-1.0 if reverse else 1.0) / RK4_STEPS
         x = x0.unsqueeze(0)                                  # [1,k_max,3]
         cage = cage_x.unsqueeze(0)                            # [1,m_env,3]
@@ -142,7 +177,7 @@ class PolyBlockFlow(nn.Module):
 
         def f(xx, tt):
             cloud = torch.cat([xx, cage], dim=1)
-            v, div = self.ce.vel_div(cloud, tt, sp_b, self.k_max)
+            v, div = self._vel_div_masked(cloud, tt, sp_b, n_real)
             return v, div
 
         for _ in range(RK4_STEPS):
@@ -172,11 +207,11 @@ class PolyBlockFlow(nn.Module):
         env_x_t = self._to_tensor(env_x, torch.float32, device)
         env_labels_t = self._to_tensor(env_labels, torch.long, device)
 
-        movers_full, sp_movers = self._prep_movers(z_real, sig_t)
+        movers_full, sp_movers, n_real = self._prep_movers(z_real, sig_t)
         cage_full, sp_cage = self._prep_env(env_x_t, env_labels_t)
         sp = torch.cat([sp_movers, sp_cage], dim=0)
 
-        x1_full, _ = self._integrate(movers_full, cage_full, sp, reverse=False)
+        x1_full, _ = self._integrate(movers_full, cage_full, sp, reverse=False, n_real=n_real)
         x_new = x1_full[:k].cpu().numpy().astype(np.float32)
 
         logq = self.logq_of(x_new, x_old, sig_labels, env_x, env_labels)
@@ -195,11 +230,11 @@ class PolyBlockFlow(nn.Module):
         env_x_t = self._to_tensor(env_x, torch.float32, device)
         env_labels_t = self._to_tensor(env_labels, torch.long, device)
 
-        movers_full, sp_movers = self._prep_movers(x_target_t, sig_t)
+        movers_full, sp_movers, n_real = self._prep_movers(x_target_t, sig_t)
         cage_full, sp_cage = self._prep_env(env_x_t, env_labels_t)
         sp = torch.cat([sp_movers, sp_cage], dim=0)
 
-        z_full, path_sum = self._integrate(movers_full, cage_full, sp, reverse=True)
+        z_full, path_sum = self._integrate(movers_full, cage_full, sp, reverse=True, n_real=n_real)
         z_real = z_full[:k]
 
         d = z_real - x_center_t

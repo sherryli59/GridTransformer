@@ -66,9 +66,13 @@ def load_pairs(path):
 
 def build_batch(pairs, idxs, flow, gen):
     """One FM minibatch: x_t (interpolant), target_v, species, cage -- all fixed-size padded/truncated by
-    PolyBlockFlow's own helpers so a single batched flow.ce.vel_div call covers the whole batch."""
+    PolyBlockFlow's own helpers so a single batched flow.ce.vel_div call covers the whole batch. Also
+    returns `real_b[B,k_max]` bool: True on the first n_real mover slots of each row (n_real == x_old's
+    block size, <= k_max; make_block_pair currently always emits exactly k_max rows so this is all-True
+    in practice, but the mask is required by spec point 3 (train_cavity_ersi.py's masked-MSE convention)
+    and costs nothing -- it also makes the trainer correct the moment a variable-k pairs file shows up."""
     k = flow.k_max
-    xt_rows, sp_rows, cage_rows, spc_rows, tv_rows, t_rows = [], [], [], [], [], []
+    xt_rows, sp_rows, cage_rows, spc_rows, tv_rows, t_rows, real_rows = [], [], [], [], [], [], []
     for i in idxs:
         pr = pairs[i]
         x_old = torch.as_tensor(pr["x_old"], dtype=torch.float32)
@@ -77,26 +81,30 @@ def build_batch(pairs, idxs, flow, gen):
         env_x = torch.as_tensor(pr["env_x"], dtype=torch.float32)
         env_bin = torch.as_tensor(sigma_to_bin(pr["env_sig"]), dtype=torch.long)
 
-        noise = torch.randn(k, 3, generator=gen)
+        n = x_old.shape[0]
+        noise = torch.randn(n, 3, generator=gen)
         x0 = x_old + BASE_W * noise
         x1 = x_new
         t = torch.rand((), generator=gen).item()
         x_t = (1.0 - t) * x0 + t * x1
         target_v = x1 - x0
 
-        movers_full, sp_movers = flow._prep_movers(x_t, sig_new_bin)
+        movers_full, sp_movers, n_real = flow._prep_movers(x_t, sig_new_bin)
         cage_full, sp_cage = flow._prep_env(env_x, env_bin)
+        real = torch.zeros(k, dtype=torch.bool); real[:n_real] = True
+        tv_full = torch.zeros(k, 3); tv_full[:n_real] = target_v[:n_real]
 
         xt_rows.append(movers_full); sp_rows.append(sp_movers)
         cage_rows.append(cage_full); spc_rows.append(sp_cage)
-        tv_rows.append(target_v); t_rows.append(t)
+        tv_rows.append(tv_full); t_rows.append(t); real_rows.append(real)
 
     x_t_b = torch.stack(xt_rows).to(dev)
     cage_b = torch.stack(cage_rows).to(dev)
     sp_b = torch.cat([torch.stack(sp_rows), torch.stack(spc_rows)], dim=1).to(dev)
     tv_b = torch.stack(tv_rows).to(dev)
     t_b = torch.tensor(t_rows, dtype=torch.float32, device=dev)
-    return x_t_b, cage_b, sp_b, tv_b, t_b
+    real_b = torch.stack(real_rows).to(dev)
+    return x_t_b, cage_b, sp_b, tv_b, t_b, real_b
 
 
 def train():
@@ -115,12 +123,17 @@ def train():
     t0 = time.time()
     for step in range(1, a.steps + 1):
         idxs = np_rng.integers(0, len(pairs), size=a.batch)
-        x_t_b, cage_b, sp_b, tv_b, t_b = build_batch(pairs, idxs, flow, gen)
+        x_t_b, cage_b, sp_b, tv_b, t_b, real_b = build_batch(pairs, idxs, flow, gen)
         cloud = torch.cat([x_t_b, cage_b], dim=1)
         vel, _ = flow.ce.vel_div(cloud, t_b, sp_b, flow.k_max)          # the EXACT field the RK4 integrates
         sqerr = ((vel - tv_b) ** 2).sum(-1)                             # [B,k] per-particle squared error
-        loss = sqerr.mean()
-        floor = (tv_b ** 2).sum(-1).mean()                              # v=0 baseline, same normalization
+        # masked-MSE over REAL (non-dummy) mover rows only, matching train_cavity_ersi.py's convention --
+        # denominator is the real-mover count, not B*k, so dummy rows (target_v==0 by construction, see
+        # _prep_movers) never dilute the loss/floor. All-real in the current fixed-k pairs files (real_b
+        # all True) so this is a no-op today, but required the moment k < k_max pairs appear.
+        real_f = real_b.float()
+        loss = (sqerr * real_f).sum() / real_f.sum().clamp(min=1)
+        floor = ((tv_b ** 2).sum(-1) * real_f).sum() / real_f.sum().clamp(min=1)   # v=0 baseline, same mask
 
         opt.zero_grad(); loss.backward()
         torch.nn.utils.clip_grad_norm_(flow.parameters(), 5.0)

@@ -141,7 +141,8 @@ def load_flow(ckpt_path, device):
     ck = torch.load(ckpt_path, map_location=device, weights_only=False)
     ar = ck["args"]
     flow = SwapBlockFlow(k_max=ar["k_max"], m_env=ar["m_env"], hidden_nf=ar["hidden_nf"],
-                          n_layers=ar["n_layers"], n_sig_bins=ar.get("n_sig_bins", 8)).to(device)
+                          n_layers=ar["n_layers"], n_sig_bins=ar.get("n_sig_bins", 8),
+                          base_w=ar.get("base_w", 0.35)).to(device)
     flow.load_state_dict(ck["state_dict"])
     flow.eval()
     return flow, ck

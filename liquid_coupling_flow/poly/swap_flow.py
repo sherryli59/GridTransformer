@@ -124,11 +124,12 @@ class SwapBlockFlow(nn.Module):
     same _vel_div_masked pattern with padded rows kept inert). See module docstring for the density
     definition and the sigma(t) conditioning contract."""
 
-    def __init__(self, k_max, m_env, hidden_nf=128, n_layers=4, n_sig_bins=8):
+    def __init__(self, k_max, m_env, hidden_nf=128, n_layers=4, n_sig_bins=8, base_w=BASE_W):
         super().__init__()
         self.k_max = int(k_max)
         self.m_env = int(m_env)
         self.n_sig_bins = int(n_sig_bins)
+        self.base_w = float(base_w)   # base-noise width; 0.35 legacy, ~cage-scale for glass blocks
         self._cbf = CavityBlockFlow(n_cage=self.m_env, k=self.k_max, r_c=2.5,
                                      hidden_nf=hidden_nf, n_layers=n_layers,
                                      n_species=self.n_sig_bins, max_neighbors=16)
@@ -244,7 +245,7 @@ class SwapBlockFlow(nn.Module):
         B, k, _ = x_old_t.shape
 
         noise = torch.randn(B, k, 3, generator=gen, dtype=torch.float32).to(device)
-        z_real = x_old_t + BASE_W * noise
+        z_real = x_old_t + self.base_w * noise
 
         movers_x, movers_s0, movers_s1, n_real = self._prep_movers(z_real, sig_start_t, sig_end_t)
         env_xp, env_sp, n_env_real = self._prep_env(env_x_t, env_sig_t)
@@ -280,8 +281,8 @@ class SwapBlockFlow(nn.Module):
         z_real = z_full[:, :k]
 
         d = z_real - x_center_t
-        logN = (-0.5 * (d * d).sum(dim=(1, 2)) / (BASE_W ** 2)
-                - k * 3 * 0.5 * (_LOG_2PI + 2.0 * np.log(BASE_W)))
+        logN = (-0.5 * (d * d).sum(dim=(1, 2)) / (self.base_w ** 2)
+                - k * 3 * 0.5 * (_LOG_2PI + 2.0 * np.log(self.base_w)))
         logq = logN + path_sum
         return logq.detach().cpu().numpy().astype(np.float64)
 

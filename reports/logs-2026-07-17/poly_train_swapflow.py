@@ -46,6 +46,7 @@ from liquid_coupling_flow.poly.swap_flow import SwapBlockFlow, labels_at_t, BASE
 p = argparse.ArgumentParser()
 p.add_argument("--T", type=float, required=True)
 p.add_argument("--k", type=int, required=True)
+p.add_argument("--base_w", type=float, default=0.35, help="base-noise width (must match deployment; ~cage scale 0.05-0.12 for glass)")
 p.add_argument("--steps", type=int, default=20000)
 p.add_argument("--pairs_file", type=str, required=True)
 p.add_argument("--out", type=str, default=None)
@@ -95,7 +96,7 @@ def build_batch(pairs, idxs, flow, gen):
 
         n = x_old.shape[0]
         noise = torch.randn(n, 3, generator=gen)
-        x0 = x_old + BASE_W * noise
+        x0 = x_old + a.base_w * noise
         x1 = x_new
         t = torch.rand((), generator=gen).item()
         x_t = (1.0 - t) * x0 + t * x1
@@ -133,7 +134,7 @@ def train():
           f"batch={a.batch} | device={dev}", flush=True)
 
     flow = SwapBlockFlow(k_max=a.k, m_env=a.m_env, hidden_nf=a.hidden, n_layers=a.layers,
-                          n_sig_bins=a.n_sig_bins).to(dev)
+                          n_sig_bins=a.n_sig_bins, base_w=a.base_w).to(dev)
     opt = torch.optim.Adam(flow.parameters(), lr=a.lr)
     gen = torch.Generator().manual_seed(a.seed)             # CPU generator (cuda generator crashes randn)
     np_rng = np.random.default_rng(a.seed)
@@ -163,7 +164,7 @@ def train():
                 best = m_loss
                 OUT.parent.mkdir(parents=True, exist_ok=True)
                 torch.save({"state_dict": flow.state_dict(),
-                            "args": {"k_max": a.k, "m_env": a.m_env, "hidden_nf": a.hidden,
+                            "args": {"k_max": a.k, "m_env": a.m_env, "hidden_nf": a.hidden, "base_w": a.base_w,
                                      "n_layers": a.layers, "n_sig_bins": a.n_sig_bins, "T": a.T},
                             "step": step, "fm_loss": m_loss, "v0_floor": m_floor}, OUT)
             print(f"  step {step:>6}: FM loss {m_loss:.4f} (best {best:.4f}) | v=0 floor {m_floor:.4f} "

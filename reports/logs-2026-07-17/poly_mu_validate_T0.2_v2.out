@@ -1,0 +1,6 @@
+T=0.2 fixed-mu validation: 120000 sweeps, 1500000 sigma-samples (615s)
+  frac_sup = 0.0636  (bin 29, target mass 0.0100)
+  L1 = 0.0224   mean_sigma = 0.9965 (target ~0.998)
+  U/N = +0.4990
+  VERDICT: NOT converged
+saved -> reports/logs-2026-07-17/poly_mu_validate_T0.2_v2.pt

@@ -75,7 +75,9 @@ def make_swap_pair(x, sig, L, beta, k, seed, target_bin, relax_sw=RELAX_SW, step
         ds = abs(float(sig_old[a] - sig_old[b]))
         if ds > best_d:
             best_d, best_pair = ds, (a, b)
-        if lo <= ds < hi or (target_bin == len(DS_BINS) - 1 and ds <= hi):
+        # last bin is inclusive-upper; the lower bound ALWAYS applies (review 96263ab caught the
+        # original OR-clause dropping `lo` for the top bin -> filter was a no-op, 23.8% in-bin)
+        if lo <= ds and (ds < hi or (target_bin == len(DS_BINS) - 1 and ds <= hi)):
             hit = True
             break
     if not hit:

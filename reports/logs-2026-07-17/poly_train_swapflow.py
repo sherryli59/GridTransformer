@@ -88,7 +88,14 @@ def build_batch(pairs, idxs, flow, gen):
     for i in idxs:
         pr = pairs[i]
         x_old = torch.as_tensor(pr["x_old"], dtype=torch.float32)
-        x_new = torch.as_tensor(pr["x_new"], dtype=torch.float32)
+        # WRAP FIX (2026-07-18): pair generators min-image POSITIONS, so a particle drifting
+        # across the periodic boundary between snapshots shows a spurious ~L raw jump in
+        # x_new - x_old (measured: 1.2% of movers, inflating the v=0 floor ~20x and poisoning
+        # FM targets in ALL earlier trainings). Min-image the DIFFERENCE, then rebuild x_new.
+        _L = float(pr["L"])
+        _d = torch.as_tensor(pr["x_new"], dtype=torch.float32) - x_old
+        _d = _d - _L * torch.round(_d / _L)
+        x_new = x_old + _d
         sig_start = torch.as_tensor(pr["sig_start"], dtype=torch.float64)
         sig_end = torch.as_tensor(pr["sig_end"], dtype=torch.float64)
         env_x = torch.as_tensor(pr["env_x"], dtype=torch.float32)

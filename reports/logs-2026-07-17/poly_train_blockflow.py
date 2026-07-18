@@ -76,7 +76,11 @@ def build_batch(pairs, idxs, flow, gen):
     for i in idxs:
         pr = pairs[i]
         x_old = torch.as_tensor(pr["x_old"], dtype=torch.float32)
-        x_new = torch.as_tensor(pr["x_new"], dtype=torch.float32)
+        # WRAP FIX (2026-07-18): min-image the DIFFERENCE (see poly_train_swapflow.py note)
+        _L = float(pr["L"])
+        _d = torch.as_tensor(pr["x_new"], dtype=torch.float32) - x_old
+        _d = _d - _L * torch.round(_d / _L)
+        x_new = x_old + _d
         sig_new_bin = torch.as_tensor(sigma_to_bin(pr["sig_new"]), dtype=torch.long)
         env_x = torch.as_tensor(pr["env_x"], dtype=torch.float32)
         env_bin = torch.as_tensor(sigma_to_bin(pr["env_sig"]), dtype=torch.long)

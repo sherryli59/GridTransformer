@@ -1,0 +1,53 @@
+[14:34:57] === mu ladder driver start ===
+[14:34:57] T=0.1: Newton step, max|dmu|=0.0202
+[14:34:57] RUN nice -19 python /mnt/ssd/GridTransformer/reports/logs-2026-07-17/poly_mu_validate.py --T 0.1 --sweeps 150000 --out /mnt/ssd/GridTransformer/reports/logs-2026-07-17/poly_mu_validate_T0.1_r1.pt
+[14:45:41] T=0.1 fixed-mu validation: 150000 sweeps, 1875000 sigma-samples (642s) |   frac_sup = 0.1679  (bin 22, target mass 0.0149) |   L1 = 0.0526   mean_sigma = 1.0095 (target ~0.998) |   U/N = +0.4170 |   VERDICT: NOT converged | saved -> /mnt/ssd/GridTransformer/reports/logs-2026-07-17/poly_mu_validate_T0.1_r1.pt
+[14:45:41] T=0.1 round 1: frac_sup=0.1679 L1=0.0526
+[14:45:41] T=0.1: Newton step, max|dmu|=0.0155
+[14:45:41] RUN nice -19 python /mnt/ssd/GridTransformer/reports/logs-2026-07-17/poly_mu_validate.py --T 0.1 --sweeps 150000 --out /mnt/ssd/GridTransformer/reports/logs-2026-07-17/poly_mu_validate_T0.1_r2.pt
+[14:56:20] T=0.1 fixed-mu validation: 150000 sweeps, 1875000 sigma-samples (636s) |   frac_sup = 0.1444  (bin 30, target mass 0.0095) |   L1 = 0.0493   mean_sigma = 1.0128 (target ~0.998) |   U/N = +0.4168 |   VERDICT: NOT converged | saved -> /mnt/ssd/GridTransformer/reports/logs-2026-07-17/poly_mu_validate_T0.1_r2.pt
+[14:56:20] T=0.1 round 2: frac_sup=0.1444 L1=0.0493
+[14:56:20] T=0.1: Newton step, max|dmu|=0.0135
+[14:56:20] RUN nice -19 python /mnt/ssd/GridTransformer/reports/logs-2026-07-17/poly_mu_validate.py --T 0.1 --sweeps 150000 --out /mnt/ssd/GridTransformer/reports/logs-2026-07-17/poly_mu_validate_T0.1_final.pt
+[15:06:55] T=0.1 fixed-mu validation: 150000 sweeps, 1875000 sigma-samples (633s) |   frac_sup = 0.1788  (bin 29, target mass 0.0100) |   L1 = 0.0431   mean_sigma = 1.0132 (target ~0.998) |   U/N = +0.4083 |   VERDICT: NOT converged | saved -> /mnt/ssd/GridTransformer/reports/logs-2026-07-17/poly_mu_validate_T0.1_final.pt
+[15:06:55] T=0.1 FINAL: frac_sup=0.1788 L1=0.0431 (ok)
+[15:06:55] RUN nice -19 python /mnt/ssd/GridTransformer/reports/logs-2026-07-17/poly_mu_calibrate.py --T 0.085 --iters 20 --sweeps_per_iter 6000 --mu_init /mnt/ssd/GridTransformer/liquid_coupling_flow/artifacts/poly_mu_T0.1.pt --out /mnt/ssd/GridTransformer/liquid_coupling_flow/artifacts/poly_mu_T0.085.pt
+[15:15:25] T=0.085: warm-start loop (20 iters) done
+[15:15:25] RUN nice -19 python /mnt/ssd/GridTransformer/reports/logs-2026-07-17/poly_mu_validate.py --T 0.085 --sweeps 150000 --out /mnt/ssd/GridTransformer/reports/logs-2026-07-17/poly_mu_validate_T0.085_r1.pt
+[15:26:13] T=0.085 fixed-mu validation: 150000 sweeps, 1875000 sigma-samples (646s) |   frac_sup = 0.1685  (bin 21, target mass 0.0159) |   L1 = 0.0580   mean_sigma = 1.0142 (target ~0.998) |   U/N = +0.3924 |   VERDICT: NOT converged | saved -> /mnt/ssd/GridTransformer/reports/logs-2026-07-17/poly_mu_validate_T0.085_r1.pt
+[15:26:13] T=0.085 round 1: frac_sup=0.1685 L1=0.0580
+[15:26:13] T=0.085: Newton step, max|dmu|=0.0144
+[15:26:13] RUN nice -19 python /mnt/ssd/GridTransformer/reports/logs-2026-07-17/poly_mu_validate.py --T 0.085 --sweeps 150000 --out /mnt/ssd/GridTransformer/reports/logs-2026-07-17/poly_mu_validate_T0.085_r2.pt
+[15:36:53] T=0.085 fixed-mu validation: 150000 sweeps, 1875000 sigma-samples (637s) |   frac_sup = 0.2322  (bin 23, target mass 0.0140) |   L1 = 0.0581   mean_sigma = 1.0160 (target ~0.998) |   U/N = +0.3771 |   VERDICT: NOT converged | saved -> /mnt/ssd/GridTransformer/reports/logs-2026-07-17/poly_mu_validate_T0.085_r2.pt
+[15:36:53] T=0.085 round 2: frac_sup=0.2322 L1=0.0581
+[15:36:53] T=0.085: Newton step, max|dmu|=0.0177
+[15:36:53] RUN nice -19 python /mnt/ssd/GridTransformer/reports/logs-2026-07-17/poly_mu_validate.py --T 0.085 --sweeps 150000 --out /mnt/ssd/GridTransformer/reports/logs-2026-07-17/poly_mu_validate_T0.085_final.pt
+[15:47:42] T=0.085 fixed-mu validation: 150000 sweeps, 1875000 sigma-samples (647s) |   frac_sup = 0.3387  (bin 31, target mass 0.0090) |   L1 = 0.0591   mean_sigma = 1.0131 (target ~0.998) |   U/N = +0.3802 |   VERDICT: NOT converged | saved -> /mnt/ssd/GridTransformer/reports/logs-2026-07-17/poly_mu_validate_T0.085_final.pt
+[15:47:42] T=0.085 FINAL: frac_sup=0.3387 L1=0.0591 (REVIEW NEEDED)
+[15:47:42] RUN nice -19 python /mnt/ssd/GridTransformer/reports/logs-2026-07-17/poly_mu_calibrate.py --T 0.075 --iters 20 --sweeps_per_iter 6000 --mu_init /mnt/ssd/GridTransformer/liquid_coupling_flow/artifacts/poly_mu_T0.085.pt --out /mnt/ssd/GridTransformer/liquid_coupling_flow/artifacts/poly_mu_T0.075.pt
+[15:56:18] T=0.075: warm-start loop (20 iters) done
+[15:56:18] RUN nice -19 python /mnt/ssd/GridTransformer/reports/logs-2026-07-17/poly_mu_validate.py --T 0.075 --sweeps 150000 --out /mnt/ssd/GridTransformer/reports/logs-2026-07-17/poly_mu_validate_T0.075_r1.pt
+[16:06:59] T=0.075 fixed-mu validation: 150000 sweeps, 1875000 sigma-samples (639s) |   frac_sup = 0.2560  (bin 20, target mass 0.0169) |   L1 = 0.0681   mean_sigma = 1.0131 (target ~0.998) |   U/N = +0.3808 |   VERDICT: NOT converged | saved -> /mnt/ssd/GridTransformer/reports/logs-2026-07-17/poly_mu_validate_T0.075_r1.pt
+[16:06:59] T=0.075 round 1: frac_sup=0.2560 L1=0.0681
+[16:06:59] T=0.075: Newton step, max|dmu|=0.0171
+[16:06:59] RUN nice -19 python /mnt/ssd/GridTransformer/reports/logs-2026-07-17/poly_mu_validate.py --T 0.075 --sweeps 150000 --out /mnt/ssd/GridTransformer/reports/logs-2026-07-17/poly_mu_validate_T0.075_r2.pt
+[16:17:40] T=0.075 fixed-mu validation: 150000 sweeps, 1875000 sigma-samples (639s) |   frac_sup = 0.2297  (bin 26, target mass 0.0118) |   L1 = 0.0806   mean_sigma = 1.0159 (target ~0.998) |   U/N = +0.3876 |   VERDICT: NOT converged | saved -> /mnt/ssd/GridTransformer/reports/logs-2026-07-17/poly_mu_validate_T0.075_r2.pt
+[16:17:40] T=0.075 round 2: frac_sup=0.2297 L1=0.0806
+[16:17:40] T=0.075: Newton step, max|dmu|=0.0155
+[16:17:40] RUN nice -19 python /mnt/ssd/GridTransformer/reports/logs-2026-07-17/poly_mu_validate.py --T 0.075 --sweeps 150000 --out /mnt/ssd/GridTransformer/reports/logs-2026-07-17/poly_mu_validate_T0.075_final.pt
+[16:28:22] T=0.075 fixed-mu validation: 150000 sweeps, 1875000 sigma-samples (640s) |   frac_sup = 0.2679  (bin 20, target mass 0.0169) |   L1 = 0.0570   mean_sigma = 1.0150 (target ~0.998) |   U/N = +0.3798 |   VERDICT: NOT converged | saved -> /mnt/ssd/GridTransformer/reports/logs-2026-07-17/poly_mu_validate_T0.075_final.pt
+[16:28:22] T=0.075 FINAL: frac_sup=0.2679 L1=0.0570 (REVIEW NEEDED)
+[16:28:22] RUN nice -19 python /mnt/ssd/GridTransformer/reports/logs-2026-07-17/poly_mu_calibrate.py --T 0.065 --iters 20 --sweeps_per_iter 6000 --mu_init /mnt/ssd/GridTransformer/liquid_coupling_flow/artifacts/poly_mu_T0.075.pt --out /mnt/ssd/GridTransformer/liquid_coupling_flow/artifacts/poly_mu_T0.065.pt
+[16:36:58] T=0.065: warm-start loop (20 iters) done
+[16:36:58] RUN nice -19 python /mnt/ssd/GridTransformer/reports/logs-2026-07-17/poly_mu_validate.py --T 0.065 --sweeps 150000 --out /mnt/ssd/GridTransformer/reports/logs-2026-07-17/poly_mu_validate_T0.065_r1.pt
+[16:47:37] T=0.065 fixed-mu validation: 150000 sweeps, 1875000 sigma-samples (636s) |   frac_sup = 0.2495  (bin 25, target mass 0.0125) |   L1 = 0.0757   mean_sigma = 1.0168 (target ~0.998) |   U/N = +0.3713 |   VERDICT: NOT converged | saved -> /mnt/ssd/GridTransformer/reports/logs-2026-07-17/poly_mu_validate_T0.065_r1.pt
+[16:47:37] T=0.065 round 1: frac_sup=0.2495 L1=0.0757
+[16:47:37] T=0.065: Newton step, max|dmu|=0.0145
+[16:47:37] RUN nice -19 python /mnt/ssd/GridTransformer/reports/logs-2026-07-17/poly_mu_validate.py --T 0.065 --sweeps 150000 --out /mnt/ssd/GridTransformer/reports/logs-2026-07-17/poly_mu_validate_T0.065_r2.pt
+[16:58:04] T=0.065 fixed-mu validation: 150000 sweeps, 1875000 sigma-samples (625s) |   frac_sup = 0.2479  (bin 30, target mass 0.0095) |   L1 = 0.0887   mean_sigma = 1.0151 (target ~0.998) |   U/N = +0.3551 |   VERDICT: NOT converged | saved -> /mnt/ssd/GridTransformer/reports/logs-2026-07-17/poly_mu_validate_T0.065_r2.pt
+[16:58:04] T=0.065 round 2: frac_sup=0.2479 L1=0.0887
+[16:58:04] T=0.065: Newton step, max|dmu|=0.0144
+[16:58:04] RUN nice -19 python /mnt/ssd/GridTransformer/reports/logs-2026-07-17/poly_mu_validate.py --T 0.065 --sweeps 150000 --out /mnt/ssd/GridTransformer/reports/logs-2026-07-17/poly_mu_validate_T0.065_final.pt
+[17:08:28] T=0.065 fixed-mu validation: 150000 sweeps, 1875000 sigma-samples (622s) |   frac_sup = 0.3048  (bin 31, target mass 0.0090) |   L1 = 0.0657   mean_sigma = 1.0148 (target ~0.998) |   U/N = +0.3658 |   VERDICT: NOT converged | saved -> /mnt/ssd/GridTransformer/reports/logs-2026-07-17/poly_mu_validate_T0.065_final.pt
+[17:08:28] T=0.065 FINAL: frac_sup=0.3048 L1=0.0657 (REVIEW NEEDED)
+[17:08:28] === mu ladder driver DONE ===

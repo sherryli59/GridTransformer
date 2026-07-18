@@ -1,0 +1,16 @@
+200/3000 (66s) rms|dx|=0.140 p95max|dx|=0.360 mean|ds|=0.289 retry_miss=0
+400/3000 (134s) rms|dx|=0.140 p95max|dx|=0.358 mean|ds|=0.284 retry_miss=0
+600/3000 (216s) rms|dx|=0.140 p95max|dx|=0.352 mean|ds|=0.284 retry_miss=0
+800/3000 (288s) rms|dx|=0.139 p95max|dx|=0.360 mean|ds|=0.284 retry_miss=0
+1000/3000 (358s) rms|dx|=0.140 p95max|dx|=0.364 mean|ds|=0.283 retry_miss=0
+1200/3000 (427s) rms|dx|=0.139 p95max|dx|=0.363 mean|ds|=0.283 retry_miss=0
+1400/3000 (494s) rms|dx|=0.139 p95max|dx|=0.358 mean|ds|=0.284 retry_miss=0
+1600/3000 (562s) rms|dx|=0.140 p95max|dx|=0.358 mean|ds|=0.284 retry_miss=0
+1800/3000 (632s) rms|dx|=0.140 p95max|dx|=0.362 mean|ds|=0.284 retry_miss=0
+2000/3000 (706s) rms|dx|=0.140 p95max|dx|=0.362 mean|ds|=0.283 retry_miss=0
+2200/3000 (777s) rms|dx|=0.140 p95max|dx|=0.366 mean|ds|=0.283 retry_miss=0
+2400/3000 (853s) rms|dx|=0.140 p95max|dx|=0.366 mean|ds|=0.282 retry_miss=0
+2600/3000 (923s) rms|dx|=0.140 p95max|dx|=0.366 mean|ds|=0.282 retry_miss=0
+2800/3000 (991s) rms|dx|=0.140 p95max|dx|=0.366 mean|ds|=0.283 retry_miss=0
+3000/3000 (1062s) rms|dx|=0.140 p95max|dx|=0.368 mean|ds|=0.282 retry_miss=0
+ESCORT PAIRS DONE -> reports/logs-2026-07-17/poly_escortpairs_T0.085_k8.pt (3000; rms|dx| 0.140, p95max|dx| 0.368, mean|ds| 0.282, retry_miss 0; 1063s)

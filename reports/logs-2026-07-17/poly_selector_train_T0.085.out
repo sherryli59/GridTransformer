@@ -1,0 +1,55 @@
+[selector-train] n=12000 train=10874 val=1126 val_frames=[(1.0, 2.0), (2.0, 6.0), (2.0, 11.0)]
+  ep    0 train_huber=0.1167 val_huber=0.0371
+  ep   20 train_huber=0.0238 val_huber=0.0275
+  ep   40 train_huber=0.0198 val_huber=0.0289
+  ep   60 train_huber=0.0155 val_huber=0.0322
+  ep   80 train_huber=0.0116 val_huber=0.0353
+  ep  100 train_huber=0.0079 val_huber=0.0401
+  ep  120 train_huber=0.0052 val_huber=0.0459
+  ep  140 train_huber=0.0036 val_huber=0.0490
+  ep  160 train_huber=0.0024 val_huber=0.0518
+  ep  180 train_huber=0.0016 val_huber=0.0548
+  ep  199 train_huber=0.0014 val_huber=0.0569
+[selector-train] val MAE=0.865 Spearman=0.970 tail-recall(decile)=0.495 (n_true_cheap=208/1126)
+[THE GATE] CPU/accept screened=385528.5 unscreened=3545075.7 ratio=9.20x (need >=3x) -> PASS
+[selector] saved model -> reports/logs-2026-07-17/poly_selector_model_T0.085.pt
+{
+  "metrics": {
+    "n_train": 10874,
+    "n_val": 1126,
+    "val_frames": [
+      [
+        1.0,
+        2.0
+      ],
+      [
+        2.0,
+        6.0
+      ],
+      [
+        2.0,
+        11.0
+      ]
+    ],
+    "val_mae": 0.8651044352677235,
+    "val_spearman": 0.9696817052079987,
+    "val_huber": 0.02740638516843319,
+    "tail_recall_decile": 0.4951923076923077,
+    "n_true_cheap_val": 208,
+    "decile_size": 113
+  },
+  "gate": {
+    "n_attempts": 600,
+    "T": 0.085,
+    "s_min": 0.02,
+    "c": 0.5,
+    "cpu_per_accept_screened": 385528.52435212384,
+    "cpu_per_accept_unscreened": 3545075.737352926,
+    "gate_ratio": 9.195365617395973,
+    "gate_pass": true,
+    "expected_accepts_screened": 3.258103659544863,
+    "expected_accepts_unscreened": 6.220262311367569,
+    "transport_per_cpu_screened": 3.330192287132658e-07,
+    "transport_per_cpu_unscreened": 3.3389189742334936e-08
+  }
+}

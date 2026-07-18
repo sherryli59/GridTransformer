@@ -1,0 +1,52 @@
+poly NCMC CHAIN: T=0.052 mixes=['swap', 'swap+ncmc'] budget=2000000 run=3 frame=0 ncmc_every=200 n_steps=800 r_loc=3.0 sweeps_per_step=1 N=300 L=6.6943 window=[0.1,0.9] -> reports/logs-2026-07-17/poly_ncmc_chain_T0.052.pt
+--- MIX swap (seed=1000) ---
+  [swap] start: use_swap=True use_ncmc=False budget=2000000 n_records=22 ncmc_every=200 n_steps=800 r_loc=3.0 sweeps_per_step=1 window=[0.1,0.9]
+  [swap] t=       1 wall=    0.0s Q_self=1.0000 C_sig=+0.9989 U/N=+0.2273 disp_acc=0.040 swap_acc=0.110 ncmc(window)=0/0 ncmc(cum)=0/0 rate=nan transport_cum=0.000
+  [swap] t=       2 wall=    0.0s Q_self=1.0000 C_sig=+0.9963 U/N=+0.2272 disp_acc=0.030 swap_acc=0.133 ncmc(window)=0/0 ncmc(cum)=0/0 rate=nan transport_cum=0.000
+  [swap] t=       4 wall=    0.0s Q_self=1.0000 C_sig=+0.9930 U/N=+0.2259 disp_acc=0.053 swap_acc=0.113 ncmc(window)=0/0 ncmc(cum)=0/0 rate=nan transport_cum=0.000
+  [swap] t=       8 wall=    0.0s Q_self=1.0000 C_sig=+0.9885 U/N=+0.2271 disp_acc=0.046 swap_acc=0.109 ncmc(window)=0/0 ncmc(cum)=0/0 rate=nan transport_cum=0.000
+  [swap] t=      16 wall=    0.1s Q_self=1.0000 C_sig=+0.9837 U/N=+0.2262 disp_acc=0.040 swap_acc=0.115 ncmc(window)=0/0 ncmc(cum)=0/0 rate=nan transport_cum=0.000
+  [swap] t=      32 wall=    0.1s Q_self=1.0000 C_sig=+0.9731 U/N=+0.2250 disp_acc=0.039 swap_acc=0.108 ncmc(window)=0/0 ncmc(cum)=0/0 rate=nan transport_cum=0.000
+  [swap] t=      64 wall=    0.2s Q_self=1.0000 C_sig=+0.9693 U/N=+0.2322 disp_acc=0.044 swap_acc=0.103 ncmc(window)=0/0 ncmc(cum)=0/0 rate=nan transport_cum=0.000
+  [swap] t=     128 wall=    0.4s Q_self=1.0000 C_sig=+0.9589 U/N=+0.2284 disp_acc=0.045 swap_acc=0.100 ncmc(window)=0/0 ncmc(cum)=0/0 rate=nan transport_cum=0.000
+  [swap] t=     256 wall=    0.8s Q_self=0.9933 C_sig=+0.9608 U/N=+0.2225 disp_acc=0.044 swap_acc=0.103 ncmc(window)=0/0 ncmc(cum)=0/0 rate=nan transport_cum=0.000
+  [swap] t=     512 wall=    1.7s Q_self=0.9867 C_sig=+0.9558 U/N=+0.2259 disp_acc=0.041 swap_acc=0.106 ncmc(window)=0/0 ncmc(cum)=0/0 rate=nan transport_cum=0.000
+  [swap] t=    1024 wall=    3.2s Q_self=0.9900 C_sig=+0.9466 U/N=+0.2197 disp_acc=0.043 swap_acc=0.105 ncmc(window)=0/0 ncmc(cum)=0/0 rate=nan transport_cum=0.000
+  [swap] t=    2048 wall=    6.4s Q_self=0.9733 C_sig=+0.9397 U/N=+0.2166 disp_acc=0.043 swap_acc=0.106 ncmc(window)=0/0 ncmc(cum)=0/0 rate=nan transport_cum=0.000
+  [swap] t=    4096 wall=   12.6s Q_self=0.9500 C_sig=+0.9244 U/N=+0.2217 disp_acc=0.044 swap_acc=0.105 ncmc(window)=0/0 ncmc(cum)=0/0 rate=nan transport_cum=0.000
+  [swap] t=    8192 wall=   25.2s Q_self=0.9367 C_sig=+0.9315 U/N=+0.2165 disp_acc=0.044 swap_acc=0.105 ncmc(window)=0/0 ncmc(cum)=0/0 rate=nan transport_cum=0.000
+  [swap] t=   16384 wall=   50.2s Q_self=0.7933 C_sig=+0.9225 U/N=+0.2151 disp_acc=0.044 swap_acc=0.105 ncmc(window)=0/0 ncmc(cum)=0/0 rate=nan transport_cum=0.000
+  [swap] t=   32768 wall=  100.4s Q_self=0.5133 C_sig=+0.9192 U/N=+0.2276 disp_acc=0.044 swap_acc=0.105 ncmc(window)=0/0 ncmc(cum)=0/0 rate=nan transport_cum=0.000
+  [swap] t=   65536 wall=  201.0s Q_self=0.3067 C_sig=+0.8807 U/N=+0.2253 disp_acc=0.044 swap_acc=0.105 ncmc(window)=0/0 ncmc(cum)=0/0 rate=nan transport_cum=0.000
+  [swap] t=  131072 wall=  402.3s Q_self=0.0633 C_sig=+0.8756 U/N=+0.2212 disp_acc=0.044 swap_acc=0.105 ncmc(window)=0/0 ncmc(cum)=0/0 rate=nan transport_cum=0.000
+  [swap] t=  262144 wall=  804.3s Q_self=0.0500 C_sig=+0.7436 U/N=+0.2222 disp_acc=0.044 swap_acc=0.105 ncmc(window)=0/0 ncmc(cum)=0/0 rate=nan transport_cum=0.000
+  [swap] t=  524288 wall= 1607.1s Q_self=0.0367 C_sig=+0.6535 U/N=+0.2319 disp_acc=0.044 swap_acc=0.105 ncmc(window)=0/0 ncmc(cum)=0/0 rate=nan transport_cum=0.000
+  [swap] t= 1048576 wall= 3209.2s Q_self=0.1033 C_sig=+0.3418 U/N=+0.2304 disp_acc=0.043 swap_acc=0.104 ncmc(window)=0/0 ncmc(cum)=0/0 rate=nan transport_cum=0.000
+  [swap] t= 2000000 wall= 6116.8s Q_self=0.0233 C_sig=+0.2089 U/N=+0.2241 disp_acc=0.044 swap_acc=0.105 ncmc(window)=0/0 ncmc(cum)=0/0 rate=nan transport_cum=0.000
+[SUMMARY swap] tau_alpha=65536 sw (201.0s) tau_sig=1048576 sw (3209.2s) ncmc: 0/0 accepted (rate=0.000) transport_cum=0.000 wall_total=6116.8s
+--- MIX swap+ncmc (seed=2000) ---
+  [swap+ncmc] start: use_swap=True use_ncmc=True budget=2000000 n_records=22 ncmc_every=200 n_steps=800 r_loc=3.0 sweeps_per_step=1 window=[0.1,0.9]
+  [swap+ncmc] t=       1 wall=    0.0s Q_self=1.0000 C_sig=+0.9984 U/N=+0.2249 disp_acc=0.053 swap_acc=0.100 ncmc(window)=0/0 ncmc(cum)=0/0 rate=0.000 transport_cum=0.000
+  [swap+ncmc] t=       2 wall=    0.0s Q_self=1.0000 C_sig=+0.9976 U/N=+0.2236 disp_acc=0.047 swap_acc=0.097 ncmc(window)=0/0 ncmc(cum)=0/0 rate=0.000 transport_cum=0.000
+  [swap+ncmc] t=       4 wall=    0.0s Q_self=1.0000 C_sig=+0.9941 U/N=+0.2219 disp_acc=0.043 swap_acc=0.087 ncmc(window)=0/0 ncmc(cum)=0/0 rate=0.000 transport_cum=0.000
+  [swap+ncmc] t=       8 wall=    0.0s Q_self=1.0000 C_sig=+0.9848 U/N=+0.2248 disp_acc=0.038 swap_acc=0.106 ncmc(window)=0/0 ncmc(cum)=0/0 rate=0.000 transport_cum=0.000
+  [swap+ncmc] t=      16 wall=    0.1s Q_self=1.0000 C_sig=+0.9813 U/N=+0.2218 disp_acc=0.035 swap_acc=0.106 ncmc(window)=0/0 ncmc(cum)=0/0 rate=0.000 transport_cum=0.000
+  [swap+ncmc] t=      32 wall=    0.1s Q_self=1.0000 C_sig=+0.9813 U/N=+0.2243 disp_acc=0.044 swap_acc=0.101 ncmc(window)=0/0 ncmc(cum)=0/0 rate=0.000 transport_cum=0.000
+  [swap+ncmc] t=      64 wall=    0.2s Q_self=1.0000 C_sig=+0.9674 U/N=+0.2252 disp_acc=0.045 swap_acc=0.102 ncmc(window)=0/0 ncmc(cum)=0/0 rate=0.000 transport_cum=0.000
+  [swap+ncmc] t=     128 wall=    0.4s Q_self=1.0000 C_sig=+0.9627 U/N=+0.2186 disp_acc=0.045 swap_acc=0.105 ncmc(window)=0/0 ncmc(cum)=0/0 rate=0.000 transport_cum=0.000
+  [swap+ncmc] t=     256 wall=    1.3s Q_self=0.9967 C_sig=+0.9589 U/N=+0.2232 disp_acc=0.041 swap_acc=0.103 ncmc(window)=0/1 ncmc(cum)=0/1 rate=0.000 transport_cum=0.000
+  [swap+ncmc] t=     512 wall=    2.6s Q_self=0.9900 C_sig=+0.9512 U/N=+0.2196 disp_acc=0.043 swap_acc=0.104 ncmc(window)=0/1 ncmc(cum)=0/2 rate=0.000 transport_cum=0.000
+  [swap+ncmc] t=    1024 wall=    5.7s Q_self=0.9633 C_sig=+0.9464 U/N=+0.2213 disp_acc=0.043 swap_acc=0.106 ncmc(window)=0/3 ncmc(cum)=0/5 rate=0.000 transport_cum=0.000
+  [swap+ncmc] t=    2048 wall=   11.7s Q_self=0.9600 C_sig=+0.9358 U/N=+0.2181 disp_acc=0.044 swap_acc=0.105 ncmc(window)=0/5 ncmc(cum)=0/10 rate=0.000 transport_cum=0.000
+  [swap+ncmc] t=    4096 wall=   23.0s Q_self=0.9333 C_sig=+0.9482 U/N=+0.2210 disp_acc=0.044 swap_acc=0.106 ncmc(window)=0/10 ncmc(cum)=0/20 rate=0.000 transport_cum=0.000
+  [swap+ncmc] t=    8192 wall=   46.2s Q_self=0.8967 C_sig=+0.9388 U/N=+0.2106 disp_acc=0.043 swap_acc=0.105 ncmc(window)=0/20 ncmc(cum)=0/40 rate=0.000 transport_cum=0.000
+  [swap+ncmc] t=   16384 wall=   92.7s Q_self=0.9033 C_sig=+0.9394 U/N=+0.2216 disp_acc=0.044 swap_acc=0.105 ncmc(window)=0/41 ncmc(cum)=0/81 rate=0.000 transport_cum=0.000
+  [swap+ncmc] t=   32768 wall=  185.7s Q_self=0.8500 C_sig=+0.9156 U/N=+0.2218 disp_acc=0.044 swap_acc=0.105 ncmc(window)=1/82 ncmc(cum)=1/163 rate=0.012 transport_cum=0.113
+  [swap+ncmc] t=   65536 wall=  371.6s Q_self=0.8767 C_sig=+0.8895 U/N=+0.2121 disp_acc=0.044 swap_acc=0.104 ncmc(window)=2/164 ncmc(cum)=3/327 rate=0.012 transport_cum=0.410
+  [swap+ncmc] t=  131072 wall=  744.9s Q_self=0.2533 C_sig=+0.8661 U/N=+0.2213 disp_acc=0.044 swap_acc=0.105 ncmc(window)=1/328 ncmc(cum)=4/655 rate=0.003 transport_cum=0.536
+  [swap+ncmc] t=  262144 wall= 1486.5s Q_self=0.0000 C_sig=+0.8100 U/N=+0.2205 disp_acc=0.044 swap_acc=0.105 ncmc(window)=5/655 ncmc(cum)=9/1310 rate=0.008 transport_cum=1.206
+  [swap+ncmc] t=  524288 wall= 2974.1s Q_self=0.0067 C_sig=+0.5946 U/N=+0.2301 disp_acc=0.044 swap_acc=0.105 ncmc(window)=13/1311 ncmc(cum)=22/2621 rate=0.010 transport_cum=2.733
+  [swap+ncmc] t= 1048576 wall= 5960.2s Q_self=0.0533 C_sig=+0.4088 U/N=+0.2263 disp_acc=0.044 swap_acc=0.105 ncmc(window)=25/2621 ncmc(cum)=47/5242 rate=0.010 transport_cum=5.893
+  [swap+ncmc] t= 2000000 wall=11429.2s Q_self=0.0067 C_sig=+0.2491 U/N=+0.2261 disp_acc=0.043 swap_acc=0.104 ncmc(window)=30/4758 ncmc(cum)=77/10000 rate=0.006 transport_cum=9.606
+[SUMMARY swap+ncmc] tau_alpha=131072 sw (744.9s) tau_sig=2000000 sw (11429.2s) ncmc: 77/10000 accepted (rate=0.008) transport_cum=9.606 wall_total=11429.2s
+NCMC CHAIN DONE (17546s) -> reports/logs-2026-07-17/poly_ncmc_chain_T0.052.pt

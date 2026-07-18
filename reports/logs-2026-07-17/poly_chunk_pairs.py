@@ -30,6 +30,9 @@ while len(pairs) < NP_:
     i = int(rng.integers(300)); j = int(rng.integers(299)); j += (j >= i)
     if not (0.1 <= abs(s0[i] - s0[j]) < 0.9):
         continue
+    dv = fr[i] - fr[j]; dv = dv - L * np.round(dv / L)
+    if float((dv ** 2).sum()) ** 0.5 > 2.0:
+        continue
     x = fr.copy(); sg = s0.copy(); si, sj = sg[i], sg[j]
     seed_numba(40000 + m)
     # pick which chunk boundary this pair samples (uniform over the 4)
@@ -50,9 +53,9 @@ while len(pairs) < NP_:
     for _ in range(100):
         local_sweep(xr, sg, L, beta, i, j, 3.0, 0.12, buf, nS)
     mid = 0.5 * (x_before[i] + x_before[j]); dd = x_before - mid; dd -= L * np.round(dd / L)
-    idx = np.argsort((dd ** 2).sum(1))[:8].astype(np.int64)
-    if i not in idx or j not in idx:
-        idx[0] = i; idx[1] = j                            # ensure pair in block
+    order = np.argsort((dd ** 2).sum(1))
+    others = [m for m in order if m != i and m != j][:6]
+    idx = np.array([i, j] + others, dtype=np.int64)          # pair always in block, no dupes                            # ensure pair in block
     mask = np.zeros(300, bool); mask[idx] = True
     cen = x_before[idx].mean(0)
     def cent(a):

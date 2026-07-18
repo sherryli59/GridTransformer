@@ -18,6 +18,8 @@ from poly_ncmc_v2 import local_sweep, build_local_set
 from poly_gate_acceptance import block_dU
 from liquid_coupling_flow.poly.model import seed_numba
 from liquid_coupling_flow.poly.swap_flow import SwapBlockFlow, sigma_to_bin
+from poly_ncmc_probe import _pair_env_e
+MAX_PAIR_DIST = 2.0    # near pairs only: a single joint block is the right escort geometry
 
 T = 0.085; BETA = 1.0 / T
 BINS = [(0.1, 0.2), (0.2, 0.3), (0.3, 0.45), (0.45, 0.9)]
@@ -45,9 +47,9 @@ def flow_move(x, sg, i, j):
     """One DB flow-MH move on the pair-centered k=8 block at the current (fixed) sigmas.
     Returns (accepted, n/a). Mutates x in place on accept."""
     mid = 0.5 * (x[i] + x[j]); dd = x - mid; dd -= L * np.round(dd / L)
-    idx = np.argsort((dd ** 2).sum(1))[:8].astype(np.int64)
-    if i not in idx or j not in idx:
-        idx[0] = i; idx[1] = j
+    order = np.argsort((dd ** 2).sum(1))
+    others = [m for m in order if m != i and m != j][:6]
+    idx = np.array([i, j] + others, dtype=np.int64)          # pair always in block, no dupes
     mask = np.zeros(N, bool); mask[idx] = True
     cen = x[idx].mean(0)
     def cent(a):
@@ -69,7 +71,6 @@ def flow_move(x, sg, i, j):
         block_dU(cent(x[idx]).astype(np.float64), sb, cent(x[env_idx]).astype(np.float64), es, L)
     a_log = -BETA * dU + float(lqr[0]) - float(lqf[0])
     if np.log(np.random.random() + 1e-300) < a_log:
-        x[idx] = (xn0 + cen) - L * np.floor(((xn0 + cen) + L / 2) / L) * 0 + 0  # uncenter
         x[idx] = xn0 + cen
         return True
     return False
@@ -82,9 +83,6 @@ def run_attempt(fr, s0, i, j, escort, seed):
     W = 0.0
     fl_acc = 0; fl_att = 0
     for lam in CHUNKS:
-        e0 = block_dU(np.zeros((0, 3)), np.zeros(0), np.zeros((0, 3)), np.zeros(0), L) if False else None
-        # instantaneous chunk switch work via row-based pair-env energy
-        from poly_ncmc_probe import _pair_env_e
         eA = _pair_env_e(x, sg, i, j, L)
         sg[i] = (1 - lam) * si + lam * sj
         sg[j] = (1 - lam) * sj + lam * si
@@ -116,6 +114,11 @@ if __name__ == "__main__":
             ds = abs(float(s0[i] - s0[j]))
             bb = next((b for b in BINS if b[0] <= ds < b[1]), None)
             if bb is None or need[bb] <= 0:
+                continue
+            xf = rec["x"][fr_i]
+            dv = xf[i] - xf[j]; dv = dv - L * np.round(dv / L)
+            if float((dv ** 2).sum()) ** 0.5 > MAX_PAIR_DIST:
+                need[bb] += 1
                 continue
             need[bb] -= 1
             W, a, t_ = run_attempt(rec["x"][fr_i].astype(np.float64), s0, i, j,

@@ -1,6 +1,7 @@
 import sys
 import numpy as np
 import pytest
+import torch
 
 sys.path.insert(0, "/mnt/ssd/GridTransformer/reports/logs-2026-07-17")
 from poly_selector_data import (  # noqa: E402
@@ -8,7 +9,13 @@ from poly_selector_data import (  # noqa: E402
 )
 from poly_ncmc_v2 import ncmc_work_local  # noqa: E402
 from poly_selector import screening_prob, S_MIN_DEFAULT  # noqa: E402
-from liquid_coupling_flow.poly.model import draw_sigmas, seed_numba  # noqa: E402
+from poly_ncmc_chain import (  # noqa: E402
+    ncmc_attempt, ncmc_attempt_screened, run_mix, STEP, WINDOW_LO, WINDOW_HI,
+    total_U, q_self, c_sig,
+)
+from liquid_coupling_flow.poly.model import (  # noqa: E402
+    draw_sigmas, seed_numba, disp_sweep, swap_sweep,
+)
 
 
 def _safe_positions(rng, n, L, min_d=0.3):
@@ -170,3 +177,125 @@ def test_screening_prob_monotone_decreasing_in_what():
     whats = np.linspace(0.0, 30.0, 50)
     s = screening_prob(whats, beta)
     assert np.all(np.diff(s) <= 1e-15)  # non-increasing as W-hat grows
+
+
+# ---------------------------------------------------------------------------
+# 4. Production hook (poly_ncmc_chain.py): --selector flag-gated screening.
+# ---------------------------------------------------------------------------
+def test_selector_none_matches_unscreened_reference(tmp_path):
+    """--selector None must be EXACTLY current/original behavior: run_mix's NCMC branch
+    dispatches to the un-screened `ncmc_attempt` only, with zero extra bookkeeping cost and
+    zero extra RNG draws, whenever selector is None. Verified by replaying the identical
+    low-level call sequence run_mix uses in that branch (disp_sweep/swap_sweep/ncmc_attempt)
+    directly from the same seed and checking the final derived observables (U/N, Q_self,
+    C_sig -- deterministic functions of the final (x, sig)) plus the NCMC attempt/accept
+    counts match bit-for-bit, and that none of the new selector-only bookkeeping fields
+    were touched."""
+    x, sig, L = _toy_state(seed=41, n=60, min_d=0.3)
+    T, beta = 0.2, 1.0 / 0.2
+    budget, ncmc_every, n_steps, r_loc, seed = 500, 25, 15, 1.5, 7
+
+    out_path = tmp_path / "none.pt"
+    rec = run_mix(mix="swap+ncmc", x0=x, sig0=sig, L=L, beta=beta, T=T, budget=budget,
+                   ncmc_every=ncmc_every, n_steps=n_steps, r_loc=r_loc, sweeps_per_step=1,
+                   seed=seed, out_data={}, out_path=out_path, selector=None)
+
+    # x, sig are untouched by run_mix (it copies internally) -- safe to reuse as the
+    # reference trajectory's identical starting point.
+    x_ref = x.copy(); sig_ref = sig.copy()
+    seed_numba(seed)
+    N = x_ref.shape[0]
+    att_cum = acc_cum = 0
+    for t in range(1, budget + 1):
+        disp_sweep(x_ref, sig_ref, L, beta, STEP)
+        swap_sweep(x_ref, sig_ref, L, beta, N)
+        if t % ncmc_every == 0:
+            attempted, accepted, i, j, ds, W, cnt = ncmc_attempt(
+                x_ref, sig_ref, L, beta, r_loc, n_steps, 1, STEP, WINDOW_LO, WINDOW_HI)
+            if attempted:
+                att_cum += 1
+                if accepted:
+                    acc_cum += 1
+
+    assert rec["ncmc_attempts_cum"][-1] == att_cum
+    assert rec["ncmc_accepted_cum"][-1] == acc_cum
+    u_ref = float(total_U(x_ref, sig_ref, L) / N)
+    assert rec["U_N"][-1] == pytest.approx(u_ref, abs=1e-9)
+    assert rec["Q_self"][-1] == pytest.approx(q_self(x_ref, x, L), abs=1e-12)
+    assert rec["C_sig"][-1] == pytest.approx(c_sig(sig_ref, sig), abs=1e-12)
+    # selector bookkeeping must stay at its untouched defaults
+    assert rec["ncmc_invoked_cum"][-1] == 0
+    assert rec["ncmc_screened_out_cum"][-1] == 0
+    assert rec["ncmc_s_start_all"] == []
+    assert rec["selector"] is False
+
+
+def test_screening_ratio_one_matches_unscreened_statistics():
+    """A mock selector with s_theta == 1.0 EXACTLY everywhere (screening_prob's
+    max(what,0)==0 saturation branch, engineered via target_mean=-1000) must (a) NEVER
+    screen out an attempt -- the 1-s_start skip probability is exactly zero, not just
+    small -- and (b) leave the accept/reject decision governed by EXACTLY the same
+    acc_prob = min(1, exp(-beta*W)) formula as the un-screened kernel, since
+    s_end/s_start == 1/1 == 1 identically (the screening acceptance factor cancels).
+
+    Verified two ways per trial, reseeding seed_numba(trial) identically before each of the
+    paired calls (screening touches only a SEPARATE np.random.default_rng stream, never the
+    numba stream, so ncmc_work_local sees the exact same draws either way):
+      (1) MECHANISTIC: the selected pair (i,j) and work W are bit-identical between the two
+          kernels for every trial (screening didn't perturb anything the physics depends on).
+      (2) STATISTICAL: the final accept/reject coin-flip IS drawn from a different RNG
+          stream in each kernel by design (numba's global stream for ncmc_attempt vs the
+          dedicated np.random.default_rng for ncmc_attempt_screened -- this is exactly what
+          lets --selector None cost the un-screened path zero extra RNG draws), so the two
+          kernels' empirical accept RATES over many independent repeats from the same start
+          state must agree statistically without being bit-identical draw-for-draw."""
+    x0, sig0, L = _toy_state(seed=41, n=60, min_d=0.3)
+    T, beta = 0.2, 1.0 / 0.2
+    r_loc, n_steps = 1.5, 15
+
+    scaler = {"feat_mean": np.zeros(N_FEATURES), "feat_std": np.ones(N_FEATURES),
+              "target_mean": -1000.0, "target_std": 1.0}
+
+    class _ZeroModel:
+        def __call__(self, z):
+            return torch.zeros(z.shape[0])
+
+    model = _ZeroModel()
+    s_min, c_sharp = 0.02, 0.5
+
+    n_trials = 300
+    acc_unscreened = acc_screened = 0
+    n_counted = 0
+    for trial in range(n_trials):
+        x_a = x0.copy(); sig_a = sig0.copy()
+        seed_numba(trial)
+        attempted_a, accepted_a, i_a, j_a, ds_a, W_a, cnt_a = ncmc_attempt(
+            x_a, sig_a, L, beta, r_loc, n_steps, 1, STEP, WINDOW_LO, WINDOW_HI)
+
+        x_b = x0.copy(); sig_b = sig0.copy()
+        seed_numba(trial)                              # identical numba stream as trial a
+        screen_rng = np.random.default_rng(10_000 + trial)   # separate, independent stream
+        (attempted_b, accepted_b, i_b, j_b, ds_b, W_b, cnt_b, screened_out_b,
+         s_start_b) = ncmc_attempt_screened(
+            x_b, sig_b, L, beta, r_loc, n_steps, 1, STEP, WINDOW_LO, WINDOW_HI,
+            model, scaler, s_min, c_sharp, screen_rng)
+
+        assert cnt_a == cnt_b
+        if cnt_a == 0:
+            continue
+        assert screened_out_b is False
+        assert s_start_b == pytest.approx(1.0)
+        assert attempted_a and attempted_b
+        assert i_a == i_b and j_a == j_b            # same pair: screening never touched numba RNG
+        assert W_a == pytest.approx(W_b, abs=1e-9)  # same work: mechanistic ratio-1 cancellation
+
+        n_counted += 1
+        acc_unscreened += int(accepted_a)
+        acc_screened += int(accepted_b)
+
+    assert n_counted > n_trials * 0.5, "too many cnt==0 trials -- toy system window too sparse"
+    rate_a = acc_unscreened / n_counted
+    rate_b = acc_screened / n_counted
+    assert abs(rate_a - rate_b) < 0.12, (
+        f"chain statistics diverged: unscreened accept-rate={rate_a:.3f} "
+        f"screened(mock s=1) accept-rate={rate_b:.3f} over n={n_counted} trials")

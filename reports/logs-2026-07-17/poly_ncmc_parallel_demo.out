@@ -1,0 +1,48 @@
+Loaded N=600 L=8.4343 T=0.058 U/N=+0.2348
+======================================================================
+PART A: exactness / independence verification (25 rounds)
+======================================================================
+[partA] round   1 OK: dW1=0.00e+00 dW2=0.00e+00 posdiff=(0.00e+00,0.00e+00) bitwise=True sep=3.691 drift=(0.289,0.351) residual_margin=1.038 |SA|=26 |SB|=24
+[partA] round   2 OK: dW1=0.00e+00 dW2=0.00e+00 posdiff=(0.00e+00,0.00e+00) bitwise=True sep=4.362 drift=(0.176,0.354) residual_margin=1.819 |SA|=22 |SB|=21
+[partA] round   3 OK: dW1=0.00e+00 dW2=0.00e+00 posdiff=(0.00e+00,0.00e+00) bitwise=True sep=3.629 drift=(0.728,0.225) residual_margin=0.663 |SA|=21 |SB|=26
+[partA] round   4 OK: dW1=0.00e+00 dW2=0.00e+00 posdiff=(0.00e+00,0.00e+00) bitwise=True sep=4.047 drift=(0.274,0.263) residual_margin=1.498 |SA|=26 |SB|=18
+[partA] round   5 OK: dW1=0.00e+00 dW2=0.00e+00 posdiff=(0.00e+00,0.00e+00) bitwise=True sep=3.387 drift=(0.320,0.207) residual_margin=0.848 |SA|=18 |SB|=27
+[partA] round   6 OK: dW1=0.00e+00 dW2=0.00e+00 posdiff=(0.00e+00,0.00e+00) bitwise=True sep=3.828 drift=(0.378,0.233) residual_margin=1.204 |SA|=27 |SB|=23
+[partA] round   7 OK: dW1=0.00e+00 dW2=0.00e+00 posdiff=(0.00e+00,0.00e+00) bitwise=True sep=3.694 drift=(0.418,0.215) residual_margin=1.048 |SA|=25 |SB|=22
+[partA] round   8 OK: dW1=0.00e+00 dW2=0.00e+00 posdiff=(0.00e+00,0.00e+00) bitwise=True sep=3.767 drift=(0.261,0.229) residual_margin=1.265 |SA|=22 |SB|=24
+[partA] round   9 OK: dW1=0.00e+00 dW2=0.00e+00 posdiff=(0.00e+00,0.00e+00) bitwise=True sep=3.500 drift=(0.266,0.260) residual_margin=0.962 |SA|=24 |SB|=29
+[partA] round  10 OK: dW1=0.00e+00 dW2=0.00e+00 posdiff=(0.00e+00,0.00e+00) bitwise=True sep=3.150 drift=(0.250,0.363) residual_margin=0.525 |SA|=24 |SB|=22
+[partA] round  11 OK: dW1=0.00e+00 dW2=0.00e+00 posdiff=(0.00e+00,0.00e+00) bitwise=True sep=3.625 drift=(0.579,0.460) residual_margin=0.573 |SA|=23 |SB|=24
+[partA] round  12 OK: dW1=0.00e+00 dW2=0.00e+00 posdiff=(0.00e+00,0.00e+00) bitwise=True sep=3.188 drift=(0.542,0.160) residual_margin=0.473 |SA|=24 |SB|=21
+[partA] round  13 OK: dW1=0.00e+00 dW2=0.00e+00 posdiff=(0.00e+00,0.00e+00) bitwise=True sep=3.823 drift=(0.392,0.254) residual_margin=1.164 |SA|=21 |SB|=20
+[partA] round  14 OK: dW1=0.00e+00 dW2=0.00e+00 posdiff=(0.00e+00,0.00e+00) bitwise=True sep=3.732 drift=(0.489,0.161) residual_margin=1.068 |SA|=25 |SB|=21
+[partA] round  15 OK: dW1=0.00e+00 dW2=0.00e+00 posdiff=(0.00e+00,0.00e+00) bitwise=True sep=3.910 drift=(0.212,0.181) residual_margin=1.504 |SA|=21 |SB|=21
+[partA] round  16 OK: dW1=0.00e+00 dW2=0.00e+00 posdiff=(0.00e+00,0.00e+00) bitwise=True sep=3.560 drift=(0.404,0.223) residual_margin=0.920 |SA|=26 |SB|=24
+[partA] round  17 OK: dW1=0.00e+00 dW2=0.00e+00 posdiff=(0.00e+00,0.00e+00) bitwise=True sep=4.305 drift=(0.143,0.196) residual_margin=1.953 |SA|=19 |SB|=23
+[partA] round  18 OK: dW1=0.00e+00 dW2=0.00e+00 posdiff=(0.00e+00,0.00e+00) bitwise=True sep=3.081 drift=(0.520,0.176) residual_margin=0.372 |SA|=24 |SB|=25
+[partA] round  19 OK: dW1=0.00e+00 dW2=0.00e+00 posdiff=(0.00e+00,0.00e+00) bitwise=True sep=3.420 drift=(0.260,0.189) residual_margin=0.958 |SA|=23 |SB|=23
+[partA] round  20 OK: dW1=0.00e+00 dW2=0.00e+00 posdiff=(0.00e+00,0.00e+00) bitwise=True sep=3.025 drift=(0.312,0.227) residual_margin=0.474 |SA|=22 |SB|=29
+[partA] round  21 OK: dW1=0.00e+00 dW2=0.00e+00 posdiff=(0.00e+00,0.00e+00) bitwise=True sep=4.204 drift=(0.594,0.175) residual_margin=1.422 |SA|=23 |SB|=22
+[partA] round  22 OK: dW1=0.00e+00 dW2=0.00e+00 posdiff=(0.00e+00,0.00e+00) bitwise=True sep=3.188 drift=(0.318,0.508) residual_margin=0.349 |SA|=23 |SB|=26
+[partA] round  23 OK: dW1=0.00e+00 dW2=0.00e+00 posdiff=(0.00e+00,0.00e+00) bitwise=True sep=3.765 drift=(0.207,0.203) residual_margin=1.343 |SA|=23 |SB|=23
+[partA] round  24 OK: dW1=0.00e+00 dW2=0.00e+00 posdiff=(0.00e+00,0.00e+00) bitwise=True sep=3.872 drift=(0.211,0.239) residual_margin=1.409 |SA|=21 |SB|=26
+[partA] round  25 OK: dW1=0.00e+00 dW2=0.00e+00 posdiff=(0.00e+00,0.00e+00) bitwise=True sep=3.436 drift=(0.366,0.209) residual_margin=0.848 |SA|=25 |SB|=20
+[partA] DONE: {'n_rounds': 25, 'idle_rounds': 0, 'tried_rounds': 25, 'max_dW': 0.0, 'max_pos_diff': 0.0, 'all_bitwise': True, 'max_drift_seen': 0.7276537060295619, 'min_sep_seen': 3.025095402166923, 'min_residual_margin': 0.3489789402256074}
+======================================================================
+PART B: throughput (2-worker multiprocessing vs serial, 60 rounds)
+======================================================================
+[partB] SERIAL : wall=7.80s moves=120 accepted=0 acc_rate=0.000 wall/move=65.03ms wall/accept=nans idle=0 max_drift=0.685
+[partB] PARALLEL(2w): wall=5.15s moves=120 accepted=0 acc_rate=0.000 wall/move=42.94ms wall/accept=nans idle=0 max_drift=0.685
+[partB] wall-clock speedup (parallel vs serial, 2 workers) = 1.51x
+======================================================================
+PART C: scaling statement
+======================================================================
+[partC] measured per-move wall (single-domain, serial baseline): 64.1 ms/move (15.6 moves/s), accept_rate=0.000
+[partC] non-interacting domain spacing d = 2*(r_loc + XC*sig_max) = 2*(1.5+2.0125) = 7.025; this demo's N=600 box (L=8.434) fits only the 2 domains built via the antipodal-offset trick (simple-cubic tiling gives floor(L/d)^3 = 1)
+[partC] simple-cubic domain-packing projection: N=1e3 (L=10.00) -> floor(L/d)^3 = 1 simultaneous domains; N=1e4 (L=21.54) -> 27 simultaneous domains (ARITHMETIC EXTRAPOLATION -- only M=2 was built/tested here)
+[partC] projected accepted-exchanges/wall-hour at 1 CPU-core-per-domain: N=600: 0/hr (1 domain); N=1e3: 0/hr (1 domain); N=1e4: 0/hr (27 domains, needs 27 cores to realize in wall-time, not just CPU-time)
+[partC] TAKEAWAY: per-exchange CPU cost is flat in N (local moves only see ~|S| particles); PARALLEL WALL-CLOCK throughput scales ~ domains_fit(N) ~ O(N) once L exceeds ~2 domain-spacings (N gtrsim 2744), whereas a single glassy trajectory's tau_alpha cannot be parallelized at all -- this is the scalability lever the campaign deliverable needs.
+[final] global max measured single-particle drift across all rounds = 0.7277 (informational only, NOT gated -- see docstring CORRECTION); Part A's min residual safety margin = 0.3490 (must be > 0, WAS asserted per-round)
+Saved /mnt/ssd/GridTransformer/reports/logs-2026-07-17/poly_ncmc_parallel_demo.pt
+TOTAL ELAPSED 20.0s
+PARALLEL NCMC DEMO DONE

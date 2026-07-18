@@ -1,0 +1,59 @@
+poly ORACLE-CAP instrument: T=0.085 run=3 per_bin=300 k_list=[8, 32] relax_mode(primary)=converged frames=16 N=300 L=6.6943 out=reports/logs-2026-07-17/poly_oracle_cap_T0.085.pt
+
+=== [1/5] CLASSICAL (k_anchor=8, 300/bin) ===
+  classical target_bin=(0.0, 0.1): 300 attempts (0.3s)
+  classical target_bin=(0.1, 0.2): 300 attempts (0.1s)
+  classical target_bin=(0.2, 0.3): 300 attempts (0.1s)
+  classical target_bin=(0.3, 0.45): 300 attempts (0.1s)
+  classical target_bin=(0.45, 0.9): 300 attempts (0.1s)
+[CLASSICAL] 0.00-0.10: acc=0.4377 [0.3920,0.4843] dU_med=+0.10 n=300 | 0.10-0.20: acc=0.0272 [0.0124,0.0448] dU_med=+1.43 n=295 | 0.20-0.30: acc=0.0001 [0.0000,0.0004] dU_med=+5.11 n=280 | 0.30-0.45: acc=0.0000 [0.0000,0.0000] dU_med=+12.38 n=325 | 0.45-0.90: acc=0.0000 [0.0000,0.0000] dU_med=+37.56 n=300
+saved -> reports/logs-2026-07-17/poly_oracle_cap_T0.085.pt (1s elapsed)
+
+=== [2/5] ORACLE (k_list=[8, 32], both relax modes, 300/bin) ===
+  oracle k=8 converged target_bin=(0.0, 0.1): 300 attempts (13.8s)
+  oracle k=8 converged target_bin=(0.1, 0.2): 300 attempts (15.7s)
+  oracle k=8 converged target_bin=(0.2, 0.3): 300 attempts (15.7s)
+  oracle k=8 converged target_bin=(0.3, 0.45): 300 attempts (16.2s)
+  oracle k=8 converged target_bin=(0.45, 0.9): 300 attempts (18.6s)
+[ORACLE k=8 converged] 0.00-0.10: acc=0.5109 [0.4592,0.5639] dU_med=+0.07 n=300 sw=1595 | 0.10-0.20: acc=0.0859 [0.0583,0.1160] dU_med=+0.92 n=295 sw=1871 | 0.20-0.30: acc=0.0074 [0.0005,0.0176] dU_med=+2.24 n=295 sw=1809 | 0.30-0.45: acc=0.0065 [0.0001,0.0159] dU_med=+3.51 n=338 sw=1842 | 0.45-0.90: acc=0.0002 [0.0000,0.0004] dU_med=+3.51 n=272 sw=2184
+k=8 converged done (80s) saved -> reports/logs-2026-07-17/poly_oracle_cap_T0.085.pt (81s elapsed total)
+  oracle k=8 fixed target_bin=(0.0, 0.1): 300 attempts (3.6s)
+  oracle k=8 fixed target_bin=(0.1, 0.2): 300 attempts (3.5s)
+  oracle k=8 fixed target_bin=(0.2, 0.3): 300 attempts (4.1s)
+  oracle k=8 fixed target_bin=(0.3, 0.45): 300 attempts (3.5s)
+  oracle k=8 fixed target_bin=(0.45, 0.9): 300 attempts (3.5s)
+[ORACLE k=8 fixed] 0.00-0.10: acc=0.4146 [0.3635,0.4658] dU_med=+0.16 n=300 sw=400 | 0.10-0.20: acc=0.0956 [0.0665,0.1275] dU_med=+0.96 n=295 sw=400 | 0.20-0.30: acc=0.0106 [0.0019,0.0219] dU_med=+2.34 n=289 sw=400 | 0.30-0.45: acc=0.0005 [0.0001,0.0011] dU_med=+3.66 n=322 sw=400 | 0.45-0.90: acc=0.0061 [0.0003,0.0156] dU_med=+3.33 n=294 sw=400
+k=8 fixed done (18s) saved -> reports/logs-2026-07-17/poly_oracle_cap_T0.085.pt (99s elapsed total)
+  oracle k=32 converged target_bin=(0.0, 0.1): 300 attempts (89.2s)
+  oracle k=32 converged target_bin=(0.1, 0.2): 300 attempts (95.1s)
+  oracle k=32 converged target_bin=(0.2, 0.3): 300 attempts (104.6s)
+  oracle k=32 converged target_bin=(0.3, 0.45): 300 attempts (103.1s)
+  oracle k=32 converged target_bin=(0.45, 0.9): 300 attempts (101.2s)
+[ORACLE k=32 converged] 0.00-0.10: acc=0.5260 [0.4735,0.5783] dU_med=+0.04 n=300 sw=2521 | 0.10-0.20: acc=0.1977 [0.1566,0.2398] dU_med=+0.79 n=300 sw=2625 | 0.20-0.30: acc=0.0387 [0.0193,0.0607] dU_med=+2.01 n=300 sw=2546 | 0.30-0.45: acc=0.0103 [0.0003,0.0235] dU_med=+3.47 n=300 sw=2597 | 0.45-0.90: acc=0.0138 [0.0033,0.0276] dU_med=+4.90 n=300 sw=2649
+k=32 converged done (493s) saved -> reports/logs-2026-07-17/poly_oracle_cap_T0.085.pt (593s elapsed total)
+  oracle k=32 fixed target_bin=(0.0, 0.1): 300 attempts (14.6s)
+  oracle k=32 fixed target_bin=(0.1, 0.2): 300 attempts (13.8s)
+  oracle k=32 fixed target_bin=(0.2, 0.3): 300 attempts (13.8s)
+  oracle k=32 fixed target_bin=(0.3, 0.45): 300 attempts (14.3s)
+  oracle k=32 fixed target_bin=(0.45, 0.9): 300 attempts (14.0s)
+[ORACLE k=32 fixed] 0.00-0.10: acc=0.5265 [0.4721,0.5800] dU_med=+0.02 n=300 sw=400 | 0.10-0.20: acc=0.2199 [0.1754,0.2653] dU_med=+0.69 n=300 sw=400 | 0.20-0.30: acc=0.0604 [0.0357,0.0873] dU_med=+2.11 n=300 sw=400 | 0.30-0.45: acc=0.0051 [0.0003,0.0131] dU_med=+3.77 n=300 sw=400 | 0.45-0.90: acc=0.0050 [0.0000,0.0134] dU_med=+6.40 n=300 sw=400
+k=32 fixed done (71s) saved -> reports/logs-2026-07-17/poly_oracle_cap_T0.085.pt (663s elapsed total)
+
+=== [3/5] FLAT-IN-K TEST ===
+  0.00-0.10: converged acc=[0.5108944946096743, 0.5260273651704681] dU_med=[0.06785743607767158, 0.036908279565698976]
+  0.10-0.20: converged acc=[0.08589213245571636, 0.19773686740181157] dU_med=[0.9179787926839102, 0.7907806355588747]
+  0.20-0.30: converged acc=[0.007415893696609964, 0.03867164104309996] dU_med=[2.23887217057548, 2.013379879250513]
+  0.30-0.45: converged acc=[0.0065263672961095795, 0.010264770393201464] dU_med=[3.5071182294689196, 3.4702180759433876]
+  0.45-0.90: converged acc=[0.0001581275121571464, 0.013811768886897075] dU_med=[3.5114740351280185, 4.899362826592752]
+
+=== [4/5] NCMC CANDIDATE PLUG-IN ===
+[ncmc-load] v1 OK /mnt/ssd/GridTransformer/reports/logs-2026-07-17/poly_ncmc_probe_T0.085.pt ([0, 10, 50, 200, 800])
+[ncmc-load] v2 OK /mnt/ssd/GridTransformer/reports/logs-2026-07-17/poly_ncmc_v2_T0.085.pt ([(2.0, 200), (2.0, 800), (2.0, 2400), (2.0, 6000), (3.0, 200), (3.0, 800), (3.0, 2400)])
+fresh NCMC v2 r_loc=3.0 n_steps=800, 150/bin ...
+[ncmc-fresh] 1030 guard iters, 401s, r_loc=3.0 n_steps=800
+[NCMC-FRESH r_loc=3.0 n=800] 0.00-0.10: acc=0.5741 [0.5105,0.6390] W_med=+0.04 n=150 | 0.10-0.20: acc=0.0577 [0.0310,0.0899] W_med=+0.57 n=150 | 0.20-0.30: acc=0.0004 [0.0000,0.0009] W_med=+1.84 n=150 | 0.30-0.45: acc=0.0000 [0.0000,0.0000] W_med=+3.65 n=150 | 0.45-0.90: acc=0.0000 [0.0000,0.0000] W_med=+8.62 n=150
+
+=== [5/5] FIGURE ===
+
+DONE (1065s total) -> reports/logs-2026-07-17/poly_oracle_cap_T0.085.pt
+FIGURE -> reports/logs-2026-07-17/poly_oracle_cap_T0.085.png

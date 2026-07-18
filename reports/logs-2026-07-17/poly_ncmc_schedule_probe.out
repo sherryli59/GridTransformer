@@ -1,0 +1,4 @@
+equalized schedule: lambda at step 400/800 = 0.631 (linear: 0.500); first decile covers lambda 0..0.259
+[  177s]     linear | (0.2, 0.3): Wmed +1.77 acc 0.0013 (n=90) | (0.3, 0.45): Wmed +3.88 acc 0.0000 (n=90) | (0.45, 0.9): Wmed +7.77 acc 0.0000 (n=90)
+[  167s]  equalized | (0.2, 0.3): Wmed +1.81 acc 0.0114 (n=90) | (0.3, 0.45): Wmed +3.56 acc 0.0000 (n=90) | (0.45, 0.9): Wmed +7.35 acc 0.0000 (n=90)
+SCHEDULE PROBE DONE
